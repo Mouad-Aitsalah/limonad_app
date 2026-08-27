@@ -3,11 +3,13 @@
 import * as React from "react";
 
 import { Card, CardContent } from "@/components/ui/card";
+import { UserDialog } from "@/components/users/user-dialog";
 import { UsersToolbar } from "@/components/users/users-toolbar";
 import { UsersTable } from "@/components/users/users-table";
 import type { User } from "@/types/user";
 
 export function UsersView({ initialUsers }: { initialUsers: User[] }) {
+  const [users, setUsers] = React.useState(initialUsers);
   const [search, setSearch] = React.useState("");
   const [role, setRole] = React.useState("all");
   const [actif, setActif] = React.useState("all");
@@ -15,7 +17,7 @@ export function UsersView({ initialUsers }: { initialUsers: User[] }) {
   const filteredUsers = React.useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return initialUsers.filter((user) => {
+    return users.filter((user) => {
       const matchesSearch =
         query.length === 0 ||
         user.nom.toLowerCase().includes(query) ||
@@ -30,27 +32,46 @@ export function UsersView({ initialUsers }: { initialUsers: User[] }) {
 
       return matchesSearch && matchesRole && matchesActif;
     });
-  }, [initialUsers, search, role, actif]);
+  }, [users, search, role, actif]);
+
+  function handleUserCreated(user: User) {
+    setUsers((current) => [user, ...current]);
+  }
 
   return (
-    <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
-      <CardContent className="space-y-5">
-        <UsersToolbar
-          search={search}
-          onSearchChange={setSearch}
-          role={role}
-          onRoleChange={setRole}
-          actif={actif}
-          onActifChange={setActif}
-        />
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="font-heading text-2xl font-semibold text-foreground">
+            Utilisateurs
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Comptes et roles d&apos;acces a COMDIS.
+          </p>
+        </div>
 
-        <p className="text-sm text-muted-foreground">
-          {filteredUsers.length} utilisateur
-          {filteredUsers.length > 1 ? "s" : ""}
-        </p>
+        <UserDialog onSaved={handleUserCreated} />
+      </div>
 
-        <UsersTable users={filteredUsers} />
-      </CardContent>
-    </Card>
+      <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+        <CardContent className="space-y-5">
+          <UsersToolbar
+            search={search}
+            onSearchChange={setSearch}
+            role={role}
+            onRoleChange={setRole}
+            actif={actif}
+            onActifChange={setActif}
+          />
+
+          <p className="text-sm text-muted-foreground">
+            {filteredUsers.length} utilisateur
+            {filteredUsers.length > 1 ? "s" : ""}
+          </p>
+
+          <UsersTable users={filteredUsers} />
+        </CardContent>
+      </Card>
+    </div>
   );
 }

@@ -17,8 +17,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { roleLabels, roleOptions } from "@/lib/roles";
-import { users } from "@/lib/mock-data/users";
-import type { UserRole } from "@/types/auth";
+import type { CreatableUserRole, User, UserCreateInput } from "@/types/user";
 
 type UserFormValues = {
   nom: string;
@@ -26,7 +25,7 @@ type UserFormValues = {
   telephone: string;
   password: string;
   confirmPassword: string;
-  role: UserRole;
+  role: CreatableUserRole;
   actif: boolean;
 };
 
@@ -41,30 +40,21 @@ const defaultValues: UserFormValues = {
 };
 
 type FormErrors = Partial<
-  Record<"nom" | "email" | "password" | "confirmPassword", string>
+  Record<"nom" | "email" | "telephone" | "password" | "confirmPassword" | "role" | "form", string>
 >;
 
-function validate(values: UserFormValues): FormErrors {
+function validateClientSide(values: UserFormValues): FormErrors {
   const errors: FormErrors = {};
 
   if (values.nom.trim().length === 0) {
     errors.nom = "Le nom est obligatoire.";
   }
-
   if (values.email.trim().length === 0) {
     errors.email = "L'email est obligatoire.";
-  } else if (
-    users.some(
-      (user) => user.email.toLowerCase() === values.email.trim().toLowerCase(),
-    )
-  ) {
-    errors.email = "Cet email est déjà utilisé par un autre utilisateur.";
   }
-
   if (values.password.length < 6) {
     errors.password = "Le mot de passe doit contenir au moins 6 caractères.";
   }
-
   if (values.confirmPassword !== values.password) {
     errors.confirmPassword = "La confirmation ne correspond pas au mot de passe.";
   }
@@ -74,12 +64,17 @@ function validate(values: UserFormValues): FormErrors {
 
 type UserFormProps = {
   onCancel: () => void;
-  onSaved: () => void;
+  onSaved: (user: User) => void;
 };
 
 export function UserForm({ onCancel, onSaved }: UserFormProps) {
   const [values, setValues] = React.useState<UserFormValues>(defaultValues);
   const [errors, setErrors] = React.useState<FormErrors>({});
+  const [saving, setSaving] = React.useState(false);
+  // Synchronous guard against a double-click racing two POSTs before React's
+  // disabled state re-renders (same pattern used across COMDIS's other
+  // creation forms - Inventaire, écritures, versements).
+  const savingRef = React.useRef(false);
 
   function handleChange<K extends keyof UserFormValues>(
     field: K,
@@ -88,15 +83,51 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
     setValues((prev) => ({ ...prev, [field]: value }));
   }
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingRef.current) return;
 
-    const validationErrors = validate(values);
+    const validationErrors = validateClientSide(values);
     setErrors(validationErrors);
     if (Object.keys(validationErrors).length > 0) return;
 
-    toast.success("Utilisateur créé (simulation)");
-    onSaved();
+    const payload: UserCreateInput = {
+      nom: values.nom.trim(),
+      email: values.email.trim(),
+      telephone: values.telephone.trim() || null,
+      password: values.password,
+      role: values.role,
+      actif: values.actif,
+    };
+
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const response = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = (await response.json()) as {
+        user?: User;
+        message?: string;
+        fieldErrors?: Record<string, string>;
+      };
+
+      if (!response.ok || !result.user) {
+        setErrors((result.fieldErrors as FormErrors) ?? {});
+        toast.error(result.message ?? "Impossible de creer l'utilisateur.");
+        return;
+      }
+
+      toast.success(`Utilisateur ${result.user.nom} cree.`);
+      onSaved(result.user);
+    } catch {
+      toast.error("Impossible de creer l'utilisateur.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   }
 
   return (
@@ -144,7 +175,11 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
               value={values.telephone}
               onChange={(event) => handleChange("telephone", event.target.value)}
               placeholder="+212 6 00-000000"
+              aria-invalid={!!errors.telephone}
             />
+            {errors.telephone && (
+              <p className="text-xs text-destructive">{errors.telephone}</p>
+            )}
           </div>
         </div>
       </div>
@@ -200,7 +235,7 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
           <Select
             value={values.role}
             onValueChange={(value) =>
-              value && handleChange("role", value as UserRole)
+              value && handleChange("role", value as CreatableUserRole)
             }
           >
             <SelectTrigger className="w-full">
@@ -216,6 +251,9 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
               ))}
             </SelectContent>
           </Select>
+          {errors.role && (
+            <p className="text-xs text-destructive">{errors.role}</p>
+          )}
         </div>
 
         <div className="flex items-center justify-between rounded-xl border border-border p-3">
@@ -234,10 +272,12 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
       </div>
 
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onCancel}>
+        <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
           Annuler
         </Button>
-        <Button type="submit">Enregistrer</Button>
+        <Button type="submit" disabled={saving}>
+          {saving ? "Enregistrement..." : "Enregistrer"}
+        </Button>
       </DialogFooter>
     </form>
   );

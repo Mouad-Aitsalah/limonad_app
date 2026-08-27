@@ -13,8 +13,13 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { UserForm } from "@/components/users/user-form";
+import type { User } from "@/types/user";
 
-export function UserDialog() {
+type UserDialogProps = {
+  onSaved: (user: User) => void;
+};
+
+export function UserDialog({ onSaved }: UserDialogProps) {
   const [open, setOpen] = React.useState(false);
 
   return (
@@ -30,15 +35,18 @@ export function UserDialog() {
         <DialogHeader>
           <DialogTitle className="text-xl">Nouvel utilisateur</DialogTitle>
           <DialogDescription>
-            Renseignez les informations du compte. Aucune donnée n&apos;est
-            enregistrée pour le moment (simulation).
+            Le compte est cree immediatement dans la base COMDIS et peut se
+            connecter des sa creation.
           </DialogDescription>
         </DialogHeader>
 
         <UserForm
           key={open ? "open" : "closed"}
           onCancel={() => setOpen(false)}
-          onSaved={() => setOpen(false)}
+          onSaved={(user) => {
+            onSaved(user);
+            setOpen(false);
+          }}
         />
       </DialogContent>
     </Dialog>

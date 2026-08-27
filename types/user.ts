@@ -13,3 +13,16 @@ export type User = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+// The org-admin-only "Nouvel utilisateur" role choices - never includes
+// super_admin, which is provisioned through a separate super-admin surface.
+export type CreatableUserRole = Exclude<UserRole, "super_admin">;
+
+export type UserCreateInput = {
+  nom: string;
+  email: string;
+  telephone?: string | null;
+  password: string;
+  role: CreatableUserRole;
+  actif?: boolean;
+};

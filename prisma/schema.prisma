@@ -291,6 +291,7 @@ model User {
   fullName                  String
   email                     String                @unique
   passwordHash              String
+  phone                     String?
   role                      UserRole
   status                    UserStatus            @default(ACTIVE)
   depotId                   String?
