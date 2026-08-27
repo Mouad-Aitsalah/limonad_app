@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { TruckDto, TruckMutationInput } from "@/types/operations-dto";
 
 export const truckInclude = {
@@ -69,32 +70,46 @@ export function mapTruckToDto(truck: NonNullable<TruckRecord>): TruckDto {
 }
 
 export async function getTrucks(): Promise<TruckDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const trucks = await prisma.truck.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: truckInclude,
     orderBy: { code: "asc" },
   });
-  return hydrateTruckStockSummaries(trucks.map(mapTruckToDto));
+  return hydrateTruckStockSummaries(
+    currentUser.organizationId,
+    trucks.map(mapTruckToDto),
+  );
 }
 
 export async function getTruckById(id: string): Promise<TruckDto> {
-  const truck = await getTruckRecordById(id);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const truck = await getTruckRecordById(id, currentUser.organizationId);
   if (!truck) throw new OperationsServiceError("Camion introuvable.", 404);
-  const [hydrated] = await hydrateTruckStockSummaries([mapTruckToDto(truck)]);
+  const [hydrated] = await hydrateTruckStockSummaries(
+    currentUser.organizationId,
+    [mapTruckToDto(truck)],
+  );
   return hydrated;
 }
 
 export async function createTruck(input: TruckMutationInput): Promise<TruckDto> {
-  const data = await validateTruckInput(input);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const data = await validateTruckInput(currentUser.organizationId, input);
 
   try {
     const truck = await prisma.$transaction(async (tx) => {
       const createdTruck = await tx.truck.create({
-        data,
+        data: {
+          ...data,
+          organizationId: currentUser.organizationId,
+        },
         include: truckInclude,
       });
 
       await tx.stockLocation.create({
         data: {
+          organizationId: currentUser.organizationId,
           code: createdTruck.code,
           name: `Stock ${createdTruck.code}`,
           type: "TRUCK",
@@ -119,7 +134,12 @@ export async function updateTruck(
   id: string,
   input: TruckMutationInput,
 ): Promise<TruckDto> {
-  const data = await validateTruckInput(input, id);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const existing = await getTruckRecordById(id, currentUser.organizationId);
+  if (!existing) {
+    throw new OperationsServiceError("Camion introuvable.", 404);
+  }
+  const data = await validateTruckInput(currentUser.organizationId, input, id);
 
   try {
     const truck = await prisma.truck.update({
@@ -129,7 +149,7 @@ export async function updateTruck(
     });
 
     await prisma.stockLocation.updateMany({
-      where: { truckId: id },
+      where: { truckId: id, organizationId: currentUser.organizationId },
       data: {
         code: truck.code,
         name: `Stock ${truck.code}`,
@@ -147,6 +167,12 @@ export async function setTruckStatus(
   id: string,
   active: boolean,
 ): Promise<TruckDto> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const existing = await getTruckRecordById(id, currentUser.organizationId);
+  if (!existing) {
+    throw new OperationsServiceError("Camion introuvable.", 404);
+  }
+
   try {
     const truck = await prisma.truck.update({
       where: { id },
@@ -154,24 +180,31 @@ export async function setTruckStatus(
       include: truckInclude,
     });
     await prisma.stockLocation.updateMany({
-      where: { truckId: id },
+      where: { truckId: id, organizationId: currentUser.organizationId },
       data: { active },
     });
-    const [hydrated] = await hydrateTruckStockSummaries([mapTruckToDto(truck)]);
+    const [hydrated] = await hydrateTruckStockSummaries(
+      currentUser.organizationId,
+      [mapTruckToDto(truck)],
+    );
     return hydrated;
   } catch (error) {
     throw mapTruckError(error);
   }
 }
 
-async function getTruckRecordById(id: string) {
-  return prisma.truck.findUnique({
-    where: { id },
+async function getTruckRecordById(id: string, organizationId: string) {
+  return prisma.truck.findFirst({
+    where: { id, organizationId },
     include: truckInclude,
   });
 }
 
-async function validateTruckInput(input: TruckMutationInput, currentTruckId?: string) {
+async function validateTruckInput(
+  organizationId: string,
+  input: TruckMutationInput,
+  currentTruckId?: string,
+) {
   const parsed = truckMutationSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -194,12 +227,18 @@ async function validateTruckInput(input: TruckMutationInput, currentTruckId?: st
   };
 
   const [codeOwner, registrationOwner, depot] = await prisma.$transaction([
-    prisma.truck.findUnique({ where: { code: data.code }, select: { id: true } }),
-    prisma.truck.findUnique({
-      where: { registration: data.registration },
+    prisma.truck.findFirst({
+      where: { code: data.code, organizationId },
       select: { id: true },
     }),
-    prisma.depot.findUnique({ where: { id: data.depotId }, select: { id: true } }),
+    prisma.truck.findFirst({
+      where: { registration: data.registration, organizationId },
+      select: { id: true },
+    }),
+    prisma.depot.findFirst({
+      where: { id: data.depotId, organizationId },
+      select: { id: true },
+    }),
   ]);
 
   const fieldErrors: Record<string, string> = {};
@@ -220,7 +259,10 @@ async function validateTruckInput(input: TruckMutationInput, currentTruckId?: st
   return data;
 }
 
-async function hydrateTruckStockSummaries(trucks: TruckDto[]) {
+async function hydrateTruckStockSummaries(
+  organizationId: string,
+  trucks: TruckDto[],
+) {
   const stockLocationIds = trucks
     .map((truck) => truck.stockLocation?.id)
     .filter((id): id is string => Boolean(id));
@@ -230,7 +272,11 @@ async function hydrateTruckStockSummaries(trucks: TruckDto[]) {
   }
 
   const levels = await prisma.stockLevel.findMany({
-    where: { locationId: { in: stockLocationIds }, quantity: { gt: 0 } },
+    where: {
+      organizationId,
+      locationId: { in: stockLocationIds },
+      quantity: { gt: 0 },
+    },
     select: { locationId: true, quantity: true, productId: true },
   });
 

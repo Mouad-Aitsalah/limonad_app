@@ -10,7 +10,6 @@ import {
   resolveCustomerAuxiliaryCode,
   resolveSupplierAuxiliaryCode,
 } from "@/lib/server/accounting";
-import { requireSessionUser } from "@/lib/server/auth";
 import {
   ensureUniquePhone,
   parseCustomerInput,
@@ -18,6 +17,7 @@ import {
   updateCustomer,
 } from "@/lib/server/customers";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { AccountingAccountType } from "@/types/accounting";
 import type {
   BusinessAccountFormOptions,
@@ -46,6 +46,7 @@ type DbClient = typeof prisma | Prisma.TransactionClient;
  */
 async function resolveOrCreateAccountingLink(
   db: DbClient,
+  organizationId: string,
   input: { explicitAccountingAccountId: string | null; code: string; name: string; type: AccountingAccountType },
 ): Promise<string | null> {
   if (input.explicitAccountingAccountId) {
@@ -57,8 +58,8 @@ async function resolveOrCreateAccountingLink(
     return null;
   }
 
-  const existing = await db.accountingAccount.findUnique({
-    where: { code: normalizedCode },
+  const existing = await db.accountingAccount.findFirst({
+    where: { code: normalizedCode, organizationId },
     select: { id: true, type: true },
   });
 
@@ -76,7 +77,13 @@ async function resolveOrCreateAccountingLink(
   }
 
   const created = await db.accountingAccount.create({
-    data: { code: normalizedCode, name: input.name, type: input.type, isActive: true },
+    data: {
+      organizationId,
+      code: normalizedCode,
+      name: input.name,
+      type: input.type,
+      isActive: true,
+    },
     select: { id: true },
   });
   return created.id;
@@ -162,19 +169,23 @@ const businessAccountInputSchema = z
   });
 
 export async function getBusinessAccounts(): Promise<BusinessAccountsPayload> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const [customers, suppliers, expenses, treasuryAccounts] = await Promise.all([
     prisma.customer.findMany({
+      where: { organizationId: currentUser.organizationId },
       orderBy: [{ createdAt: "desc" }, { code: "asc" }],
     }),
     prisma.supplier.findMany({
+      where: { organizationId: currentUser.organizationId },
       orderBy: [{ createdAt: "desc" }, { code: "asc" }],
     }),
     prisma.expenseAccount.findMany({
+      where: { organizationId: currentUser.organizationId },
       orderBy: [{ createdAt: "desc" }, { code: "asc" }],
     }),
     prisma.treasuryAccount.findMany({
+      where: { organizationId: currentUser.organizationId },
       orderBy: [{ createdAt: "desc" }, { code: "asc" }],
     }),
   ]);
@@ -185,6 +196,7 @@ export async function getBusinessAccounts(): Promise<BusinessAccountsPayload> {
 
   const employeeAccounts = await prisma.accountingAccount.findMany({
     where: {
+      organizationId: currentUser.organizationId,
       ...(linkedOperationalAccountingAccountIds.length > 0
         ? { id: { notIn: linkedOperationalAccountingAccountIds } }
         : {}),
@@ -293,7 +305,7 @@ export async function getBusinessAccountFormOptions(): Promise<BusinessAccountFo
 export async function createBusinessAccount(
   input: BusinessAccountInput,
 ): Promise<BusinessAccountListItem> {
-  const user = await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const parsed = businessAccountInputSchema.safeParse(input);
   if (!parsed.success) {
@@ -311,8 +323,11 @@ export async function createBusinessAccount(
 
   const data = parsed.data;
   if (data.accountingAccountId) {
-    const accountingAccount = await prisma.accountingAccount.findUnique({
-      where: { id: data.accountingAccountId },
+    const accountingAccount = await prisma.accountingAccount.findFirst({
+      where: {
+        id: data.accountingAccountId,
+        organizationId: user.organizationId,
+      },
       select: { id: true },
     });
     if (!accountingAccount) {
@@ -337,14 +352,15 @@ export async function createBusinessAccount(
       creditLimit: data.creditLimit ?? 0,
     });
 
-    await ensureUniquePhone(customerData.phone);
+    await ensureUniquePhone(user.organizationId, customerData.phone);
 
     const customer = await withSerializableRetry(() =>
       prisma.$transaction(
         async (tx) => {
-          const code = await nextCustomerCode(tx);
+          const code = await nextCustomerCode(tx, user.organizationId);
           const created = await tx.customer.create({
             data: {
+              organizationId: user.organizationId,
               ...customerData,
               code,
               status: customerData.status ?? "ACTIVE",
@@ -357,7 +373,7 @@ export async function createBusinessAccount(
           // Pre-warm the auxiliary accounting-plan account (e.g. 34211) so
           // the client is immediately selectable in "Choisir un compte",
           // instead of waiting for its first posted sale to create it.
-          await resolveOrCreateAccountingLink(tx, {
+          await resolveOrCreateAccountingLink(tx, user.organizationId, {
             explicitAccountingAccountId: null,
             code: resolveCustomerAuxiliaryCode(created.code),
             name: created.name,
@@ -391,9 +407,10 @@ export async function createBusinessAccount(
     const supplier = await withSerializableRetry(() =>
       prisma.$transaction(
         async (tx) => {
-          const code = await nextSupplierCode(tx);
+          const code = await nextSupplierCode(tx, user.organizationId);
           const created = await tx.supplier.create({
             data: {
+              organizationId: user.organizationId,
               code,
               name: data.name,
               phone: data.phone,
@@ -408,7 +425,7 @@ export async function createBusinessAccount(
           // Pre-warm the auxiliary accounting-plan account (e.g. 44111) so
           // the supplier is immediately selectable in "Choisir un compte",
           // instead of waiting for its first posted purchase to create it.
-          await resolveOrCreateAccountingLink(tx, {
+          await resolveOrCreateAccountingLink(tx, user.organizationId, {
             explicitAccountingAccountId: null,
             code: resolveSupplierAuxiliaryCode(created.code),
             name: created.name,
@@ -437,18 +454,23 @@ export async function createBusinessAccount(
   }
 
   if (data.type === "EXPENSE") {
-    const code = data.code ?? (await nextExpenseAccountCode());
-    await ensureUniqueExpenseAccountCode(code);
+    const code = data.code ?? (await nextExpenseAccountCode(user.organizationId));
+    await ensureUniqueExpenseAccountCode(user.organizationId, code);
 
     const expense = await prisma.$transaction(async (tx) => {
-      const accountingAccountId = await resolveOrCreateAccountingLink(tx, {
-        explicitAccountingAccountId: data.accountingAccountId ?? null,
-        code,
-        name: data.name,
-        type: "EXPENSE",
-      });
+      const accountingAccountId = await resolveOrCreateAccountingLink(
+        tx,
+        user.organizationId,
+        {
+          explicitAccountingAccountId: data.accountingAccountId ?? null,
+          code,
+          name: data.name,
+          type: "EXPENSE",
+        },
+      );
       return tx.expenseAccount.create({
         data: {
+          organizationId: user.organizationId,
           code,
           name: data.name,
           description: data.description,
@@ -475,18 +497,23 @@ export async function createBusinessAccount(
     };
   }
 
-  const code = data.code ?? (await nextTreasuryAccountCode());
-  await ensureUniqueTreasuryAccountCode(code);
+  const code = data.code ?? (await nextTreasuryAccountCode(user.organizationId));
+  await ensureUniqueTreasuryAccountCode(user.organizationId, code);
 
   const treasury = await prisma.$transaction(async (tx) => {
-    const accountingAccountId = await resolveOrCreateAccountingLink(tx, {
-      explicitAccountingAccountId: data.accountingAccountId ?? null,
-      code,
-      name: data.name,
-      type: "TREASURY",
-    });
+    const accountingAccountId = await resolveOrCreateAccountingLink(
+      tx,
+      user.organizationId,
+      {
+        explicitAccountingAccountId: data.accountingAccountId ?? null,
+        code,
+        name: data.name,
+        type: "TREASURY",
+      },
+    );
     return tx.treasuryAccount.create({
       data: {
+        organizationId: user.organizationId,
         code,
         name: data.name,
         kind: data.treasuryKind ?? "CASH",
@@ -516,7 +543,7 @@ export async function updateBusinessAccount(
   accountId: string,
   input: BusinessAccountInput,
 ): Promise<BusinessAccountListItem> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const parsed = businessAccountInputSchema.safeParse(input);
   if (!parsed.success) {
@@ -577,9 +604,15 @@ export async function updateBusinessAccount(
   );
 }
 
-async function nextSupplierCode(tx: Pick<typeof prisma, "supplier">) {
+async function nextSupplierCode(
+  tx: Pick<typeof prisma, "supplier">,
+  organizationId: string,
+) {
   const codes = await tx.supplier.findMany({
-    where: { code: { startsWith: supplierAccountPrefix } },
+    where: {
+      organizationId,
+      code: { startsWith: supplierAccountPrefix },
+    },
     select: { code: true },
   });
   return buildNextAccountNumber(
@@ -588,9 +621,12 @@ async function nextSupplierCode(tx: Pick<typeof prisma, "supplier">) {
   );
 }
 
-async function nextExpenseAccountCode() {
+async function nextExpenseAccountCode(organizationId: string) {
   const last = await prisma.expenseAccount.findFirst({
-    where: { code: { startsWith: "CHG-" } },
+    where: {
+      organizationId,
+      code: { startsWith: "CHG-" },
+    },
     orderBy: { code: "desc" },
     select: { code: true },
   });
@@ -598,9 +634,12 @@ async function nextExpenseAccountCode() {
   return `CHG-${String(nextNumber).padStart(4, "0")}`;
 }
 
-async function nextTreasuryAccountCode() {
+async function nextTreasuryAccountCode(organizationId: string) {
   const last = await prisma.treasuryAccount.findFirst({
-    where: { code: { startsWith: "TRE-" } },
+    where: {
+      organizationId,
+      code: { startsWith: "TRE-" },
+    },
     orderBy: { code: "desc" },
     select: { code: true },
   });
@@ -608,9 +647,9 @@ async function nextTreasuryAccountCode() {
   return `TRE-${String(nextNumber).padStart(4, "0")}`;
 }
 
-async function ensureUniqueExpenseAccountCode(code: string) {
-  const existing = await prisma.expenseAccount.findUnique({
-    where: { code },
+async function ensureUniqueExpenseAccountCode(organizationId: string, code: string) {
+  const existing = await prisma.expenseAccount.findFirst({
+    where: { code, organizationId },
     select: { id: true },
   });
   if (existing) {
@@ -620,9 +659,9 @@ async function ensureUniqueExpenseAccountCode(code: string) {
   }
 }
 
-async function ensureUniqueTreasuryAccountCode(code: string) {
-  const existing = await prisma.treasuryAccount.findUnique({
-    where: { code },
+async function ensureUniqueTreasuryAccountCode(organizationId: string, code: string) {
+  const existing = await prisma.treasuryAccount.findFirst({
+    where: { code, organizationId },
     select: { id: true },
   });
   if (existing) {

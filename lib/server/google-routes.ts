@@ -4,8 +4,8 @@ import { z } from "zod";
 
 import { isGpsPointReliable } from "@/lib/gps/gps-utils";
 import { prisma } from "@/lib/prisma";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { requireActiveTourForDriver } from "@/lib/server/tours";
 import type { GoogleRouteDto, MapCoordinate } from "@/types/maps";
 
@@ -35,13 +35,13 @@ export async function getDrivingRouteForCurrentDriver(
   input: unknown,
 ): Promise<GoogleRouteDto> {
   const payload = routeRequestSchema.parse(input);
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
 
   if (!user.driverId) {
     throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
   }
 
-  const tour = await requireActiveTourForDriver(user.driverId);
+  const tour = await requireActiveTourForDriver(user.driverId, user.organizationId);
   const origin = await getLatestReliableTourPosition(tour.id);
 
   return computeGoogleDrivingRoute(origin, payload.destination);

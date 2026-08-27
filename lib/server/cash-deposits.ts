@@ -4,8 +4,8 @@ import { z } from "zod";
 
 import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { CurrentUser, UserRole } from "@/types/auth";
 import type {
   CashDepositContextDto,
@@ -50,9 +50,9 @@ const cashDepositCreateSchema = z.object({
 });
 
 export async function getCashDepositContext(): Promise<CashDepositContextDto> {
-  const user = await requireSessionUser(cashierRoles);
-  const { depotId, depotName } = await resolveUserDepot(user.id);
-  return buildContext(user, depotId, depotName);
+  const user = await requireOrganizationUser(cashierRoles);
+  const { depotId, depotName } = await resolveUserDepot(user.id, user.organizationId);
+  return buildContext(user, depotId, depotName, user.organizationId);
 }
 
 /**
@@ -70,7 +70,7 @@ export async function getCashDepositContext(): Promise<CashDepositContextDto> {
 export async function createCashDeposit(
   input: CashDepositCreateInput,
 ): Promise<{ deposit: CashDepositDto; context: CashDepositContextDto }> {
-  const user = await requireSessionUser(cashierRoles);
+  const user = await requireOrganizationUser(cashierRoles);
   const parsed = cashDepositCreateSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -90,12 +90,15 @@ export async function createCashDeposit(
     seenDenominations.add(line.denomination);
   }
 
-  const { depotId, depotName } = await resolveUserDepot(user.id);
+  const { depotId, depotName } = await resolveUserDepot(user.id, user.organizationId);
 
   const record = await prisma.$transaction(
     async (tx) => {
       const openSession = await tx.posSession.findFirst({
-        where: { status: "OPEN" },
+        where: {
+          organizationId: user.organizationId,
+          status: "OPEN",
+        },
         orderBy: { openedAt: "desc" },
         select: { id: true },
       });
@@ -107,10 +110,11 @@ export async function createCashDeposit(
       const total = roundMoney(cashTotal + checkTotal);
 
       const now = new Date();
-      const number = await nextDepositNumber(tx, now);
+      const number = await nextDepositNumber(tx, user.organizationId, now);
 
       return tx.cashDeposit.create({
         data: {
+          organizationId: user.organizationId,
           number,
           date: startOfDay(now),
           depotId,
@@ -135,18 +139,20 @@ export async function createCashDeposit(
     { isolationLevel: "Serializable" },
   );
 
-  const context = await buildContext(user, depotId, depotName);
+  const context = await buildContext(user, depotId, depotName, user.organizationId);
   return { deposit: mapDepositToDto(record), context };
 }
 
 export async function getCashDepositHistory(
   filters: CashDepositHistoryFilters,
 ): Promise<CashDepositSummaryDto[]> {
-  const user = await requireSessionUser(cashierRoles);
-  const { depotId } = await resolveUserDepot(user.id);
+  const user = await requireOrganizationUser(cashierRoles);
+  const { depotId } = await resolveUserDepot(user.id, user.organizationId);
   const isAdmin = user.role === "admin";
 
-  const where: Prisma.CashDepositWhereInput = {};
+  const where: Prisma.CashDepositWhereInput = {
+    organizationId: user.organizationId,
+  };
   // depot_manager and cashier only ever see their own depot's history,
   // enforced here (not just hidden in the UI) - only admin may cross depots.
   if (!isAdmin) {
@@ -180,9 +186,12 @@ export async function getCashDepositHistory(
 }
 
 export async function getCashDepositById(id: string): Promise<CashDepositDto> {
-  const user = await requireSessionUser(cashierRoles);
-  const deposit = await prisma.cashDeposit.findUnique({
-    where: { id },
+  const user = await requireOrganizationUser(cashierRoles);
+  const deposit = await prisma.cashDeposit.findFirst({
+    where: {
+      id,
+      organizationId: user.organizationId,
+    },
     include: depositInclude,
   });
   if (!deposit) {
@@ -190,7 +199,7 @@ export async function getCashDepositById(id: string): Promise<CashDepositDto> {
   }
 
   if (user.role !== "admin") {
-    const { depotId } = await resolveUserDepot(user.id);
+    const { depotId } = await resolveUserDepot(user.id, user.organizationId);
     if (deposit.depotId !== depotId) {
       throw new OperationsServiceError("Acces non autorise a ce versement.", 403);
     }
@@ -203,9 +212,10 @@ async function buildContext(
   user: CurrentUser,
   depotId: string,
   depotName: string,
+  organizationId: string,
 ): Promise<CashDepositContextDto> {
   const openSession = await prisma.posSession.findFirst({
-    where: { status: "OPEN" },
+    where: { organizationId, status: "OPEN" },
     orderBy: { openedAt: "desc" },
     select: { id: true, number: true },
   });
@@ -216,6 +226,7 @@ async function buildContext(
 
   const todayDeposits = await prisma.cashDeposit.findMany({
     where: {
+      organizationId,
       status: "VALIDATED",
       date: { gte: todayStart, lt: todayEnd },
       ...(isAdmin ? {} : { depotId }),
@@ -237,9 +248,9 @@ async function buildContext(
   };
 }
 
-async function resolveUserDepot(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
+async function resolveUserDepot(userId: string, organizationId: string) {
+  const user = await prisma.user.findFirst({
+    where: { id: userId, organizationId },
     select: { depotId: true, depot: { select: { id: true, name: true, active: true } } },
   });
   if (!user?.depotId || !user.depot || !user.depot.active) {
@@ -279,10 +290,17 @@ function mapDepositToDto(deposit: DepositRecord): CashDepositDto {
   };
 }
 
-async function nextDepositNumber(tx: Prisma.TransactionClient, date: Date) {
+async function nextDepositNumber(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  date: Date,
+) {
   const prefix = `VER-${formatSequenceDate(date)}-`;
   const last = await tx.cashDeposit.findFirst({
-    where: { number: { startsWith: prefix } },
+    where: {
+      organizationId,
+      number: { startsWith: prefix },
+    },
     orderBy: { number: "desc" },
     select: { number: true },
   });

@@ -1,7 +1,6 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import { requireSessionUser } from "@/lib/server/auth";
 import {
   ensureUniquePhone,
   mapCustomerToDto,
@@ -9,6 +8,7 @@ import {
   parseCustomerInput,
 } from "@/lib/server/customers";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { CustomerDto, CustomerMutationInput } from "@/types/operations-dto";
 
 const customerInclude = {
@@ -16,11 +16,12 @@ const customerInclude = {
 } as const;
 
 export async function getCustomersForCurrentDriver(): Promise<CustomerDto[]> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId) throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
 
   const customers = await prisma.customer.findMany({
     where: {
+      organizationId: user.organizationId,
       OR: [{ creationOrigin: "ADMIN" }, { createdByDriverId: user.driverId }],
     },
     include: customerInclude,
@@ -33,16 +34,19 @@ export async function createCustomerForCurrentDriver(
   input: CustomerMutationInput,
   customerId?: string,
 ): Promise<CustomerDto> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId) throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
   const data = await parseCustomerInput(input);
-  await ensureUniquePhone(data.phone, customerId);
+  await ensureUniquePhone(user.organizationId, data.phone, customerId);
 
   const customer = await prisma.$transaction(
     async (tx) => {
       if (customerId) {
-        const existing = await tx.customer.findUnique({
-          where: { id: customerId },
+        const existing = await tx.customer.findFirst({
+          where: {
+            id: customerId,
+            organizationId: user.organizationId,
+          },
           select: { id: true, createdByDriverId: true, status: true },
         });
         if (!existing) throw new OperationsServiceError("Client introuvable.", 404);
@@ -74,8 +78,9 @@ export async function createCustomerForCurrentDriver(
 
       return tx.customer.create({
         data: {
+          organizationId: user.organizationId,
           ...data,
-          code: await nextCustomerCode(tx),
+          code: await nextCustomerCode(tx, user.organizationId),
           status: "ACTIVE",
           creditLimit: data.creditLimit ?? 0,
           currentBalance: 0,

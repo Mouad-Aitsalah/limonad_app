@@ -8,9 +8,9 @@ import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
 } from "@/lib/server/accounting";
-import { requireSessionUser } from "@/lib/server/auth";
 import { getCustomers } from "@/lib/server/customers";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { getDepotStock } from "@/lib/server/stock-levels";
 import {
   mapSaleToDto,
@@ -48,9 +48,9 @@ const counterSaleSchema = z.object({
 });
 
 export async function getCounterPosContext(): Promise<CounterPosContextDto> {
-  const sessionUser = await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  const user = await prisma.user.findUnique({
-    where: { id: sessionUser.id },
+  const sessionUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const user = await prisma.user.findFirst({
+    where: { id: sessionUser.id, organizationId: sessionUser.organizationId },
     select: {
       id: true,
       fullName: true,
@@ -66,6 +66,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
   const productsById = await prisma.product.findMany({
     where: {
       id: { in: stock.map((level) => level.productId) },
+      organizationId: sessionUser.organizationId,
     },
     select: {
       id: true,
@@ -99,8 +100,11 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       };
     });
 
-  const stockLocation = await prisma.stockLocation.findUnique({
-    where: { depotId: user.depotId },
+  const stockLocation = await prisma.stockLocation.findFirst({
+    where: {
+      depotId: user.depotId,
+      organizationId: sessionUser.organizationId,
+    },
     select: { id: true, code: true, name: true, active: true, type: true },
   });
   if (!stockLocation || stockLocation.type !== "DEPOT" || !stockLocation.active) {
@@ -119,7 +123,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
 }
 
 export async function createCounterSale(input: CounterSaleInput): Promise<SaleDto> {
-  const sessionUser = await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const sessionUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const parsed = counterSaleSchema.safeParse(input);
   if (!parsed.success) {
@@ -129,8 +133,11 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
 
   const sale = await prisma.$transaction(
     async (tx) => {
-      const user = await tx.user.findUnique({
-        where: { id: sessionUser.id },
+      const user = await tx.user.findFirst({
+        where: {
+          id: sessionUser.id,
+          organizationId: sessionUser.organizationId,
+        },
         select: {
           id: true,
           depotId: true,
@@ -144,8 +151,11 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
         );
       }
 
-      const stockLocation = await tx.stockLocation.findUnique({
-        where: { depotId: user.depotId },
+      const stockLocation = await tx.stockLocation.findFirst({
+        where: {
+          depotId: user.depotId,
+          organizationId: sessionUser.organizationId,
+        },
         select: { id: true, type: true, active: true },
       });
       if (!stockLocation || stockLocation.type !== "DEPOT" || !stockLocation.active) {
@@ -153,8 +163,11 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       }
 
       const customer = parsed.data.customerId
-        ? await tx.customer.findUnique({
-            where: { id: parsed.data.customerId },
+        ? await tx.customer.findFirst({
+            where: {
+              id: parsed.data.customerId,
+              organizationId: sessionUser.organizationId,
+            },
             select: {
               id: true,
               status: true,
@@ -172,7 +185,11 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
 
       const productIds = lines.map((line) => line.productId);
       const products = await tx.product.findMany({
-        where: { id: { in: productIds }, status: "ACTIVE" },
+        where: {
+          id: { in: productIds },
+          organizationId: sessionUser.organizationId,
+          status: "ACTIVE",
+        },
         select: {
           id: true,
           salePrice: true,
@@ -211,6 +228,7 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       const taxAmount = roundMoney(computedLines.reduce((sum, line) => sum + line.taxAmount, 0));
       const totalTTC = roundMoney(subtotalHT + taxAmount);
       const stampAmount = await computeCashSaleStampAmount(tx, {
+        organizationId: sessionUser.organizationId,
         totalTTC,
         paymentMethod: parsed.data.paymentMethod,
       });
@@ -250,11 +268,17 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       }
 
       const saleDate = new Date();
-      const sequencing = await resolveSaleSequencing(tx, saleDate, sessionUser.id);
+      const sequencing = await resolveSaleSequencing(
+        tx,
+        saleDate,
+        sessionUser.id,
+        sessionUser.organizationId,
+      );
 
       const sale = await tx.sale.create({
         data: {
-          invoiceNumber: await nextInvoiceNumber(tx, "CTR"),
+          organizationId: sessionUser.organizationId,
+          invoiceNumber: await nextInvoiceNumber(tx, "CTR", sessionUser.organizationId),
           saleYear: sequencing.saleYear,
           saleNumber: sequencing.saleNumber,
           posSessionId: sequencing.posSessionId,
@@ -302,7 +326,8 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
         payment.paidAmount > 0
           ? await tx.payment.create({
               data: {
-                paymentNumber: await nextPaymentNumber(tx),
+                organizationId: sessionUser.organizationId,
+                paymentNumber: await nextPaymentNumber(tx, sessionUser.organizationId),
                 saleId: sale.id,
                 amount: payment.paidAmount,
                 method:
@@ -323,6 +348,7 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       }
 
       await postSaleAccountingEntry(tx, {
+        organizationId: sessionUser.organizationId,
         saleId: sale.id,
         invoiceNumber: sale.invoiceNumber,
         customerId: customer?.id ?? null,
@@ -342,7 +368,8 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       for (const line of computedLines) {
         await tx.stockMovement.create({
           data: {
-            movementNumber: await nextMovementNumber(tx),
+            organizationId: sessionUser.organizationId,
+            movementNumber: await nextMovementNumber(tx, sessionUser.organizationId),
             type: "COUNTER_SALE",
             productId: line.productId,
             quantity: line.quantity,

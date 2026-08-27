@@ -3,8 +3,8 @@ import "server-only";
 import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { ProductOptionDto } from "@/types/product-dto";
 import type {
   CategoryListItem,
@@ -26,9 +26,10 @@ const categoryMutationSchema = z.object({
 });
 
 export async function getCategories(): Promise<CategoriesPayload> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const categories = await prisma.category.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: {
       _count: {
         select: { products: true },
@@ -43,10 +44,13 @@ export async function getCategories(): Promise<CategoriesPayload> {
 }
 
 export async function getCategoryOptions(): Promise<ProductOptionDto[]> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   return prisma.category.findMany({
-    where: { active: true },
+    where: {
+      active: true,
+      organizationId: currentUser.organizationId,
+    },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
@@ -55,19 +59,20 @@ export async function getCategoryOptions(): Promise<ProductOptionDto[]> {
 export async function createCategory(
   input: CategoryMutationInput,
 ): Promise<CategoryListItem> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const data = parseCategoryInput(input);
 
   const category = await withSerializableRetry(() =>
     prisma.$transaction(
       async (tx) => {
-        const code = data.code ?? (await nextCategoryCode(tx));
-        await ensureUniqueCategoryCode(tx, code);
-        await ensureUniqueCategoryName(tx, data.name);
+        const code = data.code ?? (await nextCategoryCode(tx, currentUser.organizationId));
+        await ensureUniqueCategoryCode(tx, currentUser.organizationId, code);
+        await ensureUniqueCategoryName(tx, currentUser.organizationId, data.name);
 
         return tx.category.create({
           data: {
+            organizationId: currentUser.organizationId,
             code,
             name: data.name,
             active: data.active ?? true,
@@ -90,12 +95,12 @@ export async function updateCategory(
   id: string,
   input: CategoryMutationInput,
 ): Promise<CategoryListItem> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const data = parseCategoryInput(input);
 
-  const currentCategory = await prisma.category.findUnique({
-    where: { id },
+  const currentCategory = await prisma.category.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
     select: { id: true, code: true },
   });
 
@@ -109,10 +114,10 @@ export async function updateCategory(
         const code =
           data.code ??
           currentCategory.code ??
-          (await nextCategoryCode(tx));
+          (await nextCategoryCode(tx, currentUser.organizationId));
 
-        await ensureUniqueCategoryCode(tx, code, id);
-        await ensureUniqueCategoryName(tx, data.name, id);
+        await ensureUniqueCategoryCode(tx, currentUser.organizationId, code, id);
+        await ensureUniqueCategoryName(tx, currentUser.organizationId, data.name, id);
 
         return tx.category.update({
           where: { id },
@@ -139,7 +144,14 @@ export async function setCategoryStatus(
   id: string,
   active: boolean,
 ): Promise<CategoryListItem> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const existing = await prisma.category.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
+    select: { id: true },
+  });
+  if (!existing) {
+    throw new OperationsServiceError("Categorie introuvable.", 404);
+  }
 
   const category = await prisma.category.update({
     where: { id },
@@ -192,9 +204,13 @@ function mapCategoryToListItem(category: {
   };
 }
 
-async function nextCategoryCode(tx: Pick<typeof prisma, "category">) {
+async function nextCategoryCode(
+  tx: Pick<typeof prisma, "category">,
+  organizationId: string,
+) {
   const categories = await tx.category.findMany({
     where: {
+      organizationId,
       code: {
         startsWith: categoryCodePrefix,
       },
@@ -213,11 +229,13 @@ async function nextCategoryCode(tx: Pick<typeof prisma, "category">) {
 
 async function ensureUniqueCategoryCode(
   tx: Pick<typeof prisma, "category">,
+  organizationId: string,
   code: string,
   currentCategoryId?: string,
 ) {
   const existing = await tx.category.findFirst({
     where: {
+      organizationId,
       code,
       ...(currentCategoryId ? { id: { not: currentCategoryId } } : {}),
     },
@@ -233,11 +251,13 @@ async function ensureUniqueCategoryCode(
 
 async function ensureUniqueCategoryName(
   tx: Pick<typeof prisma, "category">,
+  organizationId: string,
   name: string,
   currentCategoryId?: string,
 ) {
   const existing = await tx.category.findFirst({
     where: {
+      organizationId,
       name,
       ...(currentCategoryId ? { id: { not: currentCategoryId } } : {}),
     },

@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { ProductDto, ProductMutationInput, ProductOptionDto } from "@/types/product-dto";
 
 type ProductRecord = Awaited<ReturnType<typeof getProductRecordById>>;
@@ -76,7 +77,9 @@ export function mapProductToDto(product: NonNullable<ProductRecord>): ProductDto
 }
 
 export async function getProducts(): Promise<ProductDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const products = await prisma.product.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: productInclude,
     orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
   });
@@ -85,7 +88,8 @@ export async function getProducts(): Promise<ProductDto[]> {
 }
 
 export async function getProductById(id: string): Promise<ProductDto> {
-  const product = await getProductRecordById(id);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const product = await getProductRecordById(id, currentUser.organizationId);
   if (!product) {
     throw new ProductServiceError("Produit introuvable.", 404);
   }
@@ -93,11 +97,13 @@ export async function getProductById(id: string): Promise<ProductDto> {
 }
 
 export async function createProduct(input: ProductMutationInput): Promise<ProductDto> {
-  const data = await parseAndValidateProductInput(input);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const data = await parseAndValidateProductInput(currentUser.organizationId, input);
 
   try {
     const product = await prisma.product.create({
       data: {
+        organizationId: currentUser.organizationId,
         reference: data.reference,
         barcode: data.barcode,
         name: data.name,
@@ -126,7 +132,12 @@ export async function updateProduct(
   id: string,
   input: ProductMutationInput,
 ): Promise<ProductDto> {
-  const data = await parseAndValidateProductInput(input, id);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const existing = await getProductRecordById(id, currentUser.organizationId);
+  if (!existing) {
+    throw new ProductServiceError("Produit introuvable.", 404);
+  }
+  const data = await parseAndValidateProductInput(currentUser.organizationId, input, id);
 
   try {
     const product = await prisma.product.update({
@@ -159,6 +170,12 @@ export async function setProductStatus(
   id: string,
   active: boolean,
 ): Promise<ProductDto> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const existing = await getProductRecordById(id, currentUser.organizationId);
+  if (!existing) {
+    throw new ProductServiceError("Produit introuvable.", 404);
+  }
+
   try {
     const product = await prisma.product.update({
       where: { id },
@@ -173,37 +190,41 @@ export async function setProductStatus(
 }
 
 export async function getCategories(): Promise<ProductOptionDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   return prisma.category.findMany({
-    where: { active: true },
+    where: { active: true, organizationId: currentUser.organizationId },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
 }
 
 export async function getBrands(): Promise<ProductOptionDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   return prisma.brand.findMany({
-    where: { active: true },
+    where: { active: true, organizationId: currentUser.organizationId },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
 }
 
 export async function getSuppliers(): Promise<ProductOptionDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   return prisma.supplier.findMany({
-    where: { active: true },
+    where: { active: true, organizationId: currentUser.organizationId },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
 }
 
-async function getProductRecordById(id: string) {
-  return prisma.product.findUnique({
-    where: { id },
+async function getProductRecordById(id: string, organizationId: string) {
+  return prisma.product.findFirst({
+    where: { id, organizationId },
     include: productInclude,
   });
 }
 
 async function parseAndValidateProductInput(
+  organizationId: string,
   input: ProductMutationInput,
   currentProductId?: string,
 ) {
@@ -224,26 +245,26 @@ async function parseAndValidateProductInput(
   const data = parsed.data;
   const [referenceOwner, barcodeOwner, category, brand, supplier] =
     await prisma.$transaction([
-      prisma.product.findUnique({
-        where: { reference: data.reference },
+      prisma.product.findFirst({
+        where: { reference: data.reference, organizationId },
         select: { id: true },
       }),
       data.barcode
-        ? prisma.product.findUnique({
-            where: { barcode: data.barcode },
+        ? prisma.product.findFirst({
+            where: { barcode: data.barcode, organizationId },
             select: { id: true },
           })
         : prisma.product.findFirst({
             where: { id: "__never__" },
             select: { id: true },
           }),
-      prisma.category.findUnique({
-        where: { id: data.categoryId },
+      prisma.category.findFirst({
+        where: { id: data.categoryId, organizationId },
         select: { id: true },
       }),
       data.brandId
-        ? prisma.brand.findUnique({
-            where: { id: data.brandId },
+        ? prisma.brand.findFirst({
+            where: { id: data.brandId, organizationId },
             select: { id: true },
           })
         : prisma.brand.findFirst({
@@ -251,8 +272,8 @@ async function parseAndValidateProductInput(
             select: { id: true },
           }),
       data.defaultSupplierId
-        ? prisma.supplier.findUnique({
-            where: { id: data.defaultSupplierId },
+        ? prisma.supplier.findFirst({
+            where: { id: data.defaultSupplierId, organizationId },
             select: { id: true },
           })
         : prisma.supplier.findFirst({

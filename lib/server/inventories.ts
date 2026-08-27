@@ -4,8 +4,8 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import type { InventoryGetPayload } from "@/lib/generated/prisma/models/Inventory";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { nextMovementNumber } from "@/lib/server/sales-shared";
 import type { UserRole } from "@/types/auth";
 import type {
@@ -98,8 +98,9 @@ function mapInventoryToDto(inventory: InventoryWithRelations): InventoryDto {
 }
 
 export async function getInventoryHistory(): Promise<InventorySummaryDto[]> {
-  await requireSessionUser(managerRoles);
+  const currentUser = await requireOrganizationUser(managerRoles);
   const inventories = await prisma.inventory.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: inventoryInclude,
     orderBy: { number: "desc" },
   });
@@ -111,7 +112,7 @@ const inventoryCreateSchema = z.object({
 });
 
 export async function createInventory(input: InventoryCreateInput): Promise<InventoryDto> {
-  const user = await requireSessionUser(managerRoles);
+  const user = await requireOrganizationUser(managerRoles);
   const parsed = inventoryCreateSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -124,15 +125,21 @@ export async function createInventory(input: InventoryCreateInput): Promise<Inve
   }
 
   const inventory = await prisma.$transaction(async (tx) => {
-    const depot = await tx.depot.findUnique({
-      where: { id: parsed.data.depotId },
+    const depot = await tx.depot.findFirst({
+      where: {
+        id: parsed.data.depotId,
+        organizationId: user.organizationId,
+      },
       select: { id: true },
     });
     if (!depot) throw new OperationsServiceError("Depot introuvable.", 404);
 
-    const count = await tx.inventory.count();
+    const count = await tx.inventory.count({
+      where: { organizationId: user.organizationId },
+    });
     const created = await tx.inventory.create({
       data: {
+        organizationId: user.organizationId,
         number: count + 1,
         depotId: depot.id,
         createdByUserId: user.id,
@@ -149,9 +156,9 @@ export async function createInventory(input: InventoryCreateInput): Promise<Inve
 }
 
 export async function getInventoryById(id: string): Promise<InventoryDto> {
-  await requireSessionUser(managerRoles);
-  const inventory = await prisma.inventory.findUnique({
-    where: { id },
+  const currentUser = await requireOrganizationUser(managerRoles);
+  const inventory = await prisma.inventory.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
     include: inventoryInclude,
   });
   if (!inventory) throw new OperationsServiceError("Inventaire introuvable.", 404);
@@ -182,7 +189,7 @@ export async function saveInventoryLine(
   inventoryId: string,
   input: InventoryLineSaveInput,
 ): Promise<{ line: InventoryLineDto; totals: InventoryTotalsDto }> {
-  await requireSessionUser(managerRoles);
+  const currentUser = await requireOrganizationUser(managerRoles);
   const parsed = lineSaveSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -195,8 +202,8 @@ export async function saveInventoryLine(
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    const inventory = await tx.inventory.findUnique({
-      where: { id: inventoryId },
+    const inventory = await tx.inventory.findFirst({
+      where: { id: inventoryId, organizationId: currentUser.organizationId },
       select: { id: true, status: true, depotId: true },
     });
     if (!inventory) throw new OperationsServiceError("Inventaire introuvable.", 404);
@@ -207,8 +214,11 @@ export async function saveInventoryLine(
       );
     }
 
-    const product = await tx.product.findUnique({
-      where: { id: parsed.data.productId },
+    const product = await tx.product.findFirst({
+      where: {
+        id: parsed.data.productId,
+        organizationId: currentUser.organizationId,
+      },
       select: { id: true, purchasePrice: true, status: true },
     });
     if (!product || product.status !== "ACTIVE") {
@@ -228,8 +238,11 @@ export async function saveInventoryLine(
       stockBefore = existingLine.stockBefore;
       unitCost = existingLine.unitCost.toNumber();
     } else {
-      const depotLocation = await tx.stockLocation.findUnique({
-        where: { depotId: inventory.depotId },
+      const depotLocation = await tx.stockLocation.findFirst({
+        where: {
+          depotId: inventory.depotId,
+          organizationId: currentUser.organizationId,
+        },
         select: { id: true },
       });
       if (!depotLocation) {
@@ -297,12 +310,12 @@ export async function saveInventoryLine(
  * double-applied if stock moved during the EN_COURS period.
  */
 export async function finalizeInventory(id: string): Promise<InventoryDto> {
-  const user = await requireSessionUser(managerRoles);
+  const user = await requireOrganizationUser(managerRoles);
 
   const inventory = await prisma.$transaction(
     async (tx) => {
-      const current = await tx.inventory.findUnique({
-        where: { id },
+      const current = await tx.inventory.findFirst({
+        where: { id, organizationId: user.organizationId },
         select: {
           id: true,
           number: true,
@@ -322,8 +335,11 @@ export async function finalizeInventory(id: string): Promise<InventoryDto> {
         );
       }
 
-      const depotLocation = await tx.stockLocation.findUnique({
-        where: { depotId: current.depotId },
+      const depotLocation = await tx.stockLocation.findFirst({
+        where: {
+          depotId: current.depotId,
+          organizationId: user.organizationId,
+        },
         select: { id: true },
       });
       if (!depotLocation) {
@@ -347,6 +363,7 @@ export async function finalizeInventory(id: string): Promise<InventoryDto> {
           },
           update: { quantity: line.physicalQuantity },
           create: {
+            organizationId: user.organizationId,
             productId: line.productId,
             locationId: depotLocation.id,
             quantity: line.physicalQuantity,
@@ -356,7 +373,8 @@ export async function finalizeInventory(id: string): Promise<InventoryDto> {
 
         await tx.stockMovement.create({
           data: {
-            movementNumber: await nextMovementNumber(tx),
+            organizationId: user.organizationId,
+            movementNumber: await nextMovementNumber(tx, user.organizationId),
             type: "INVENTORY_ADJUSTMENT",
             productId: line.productId,
             quantity: Math.abs(delta),

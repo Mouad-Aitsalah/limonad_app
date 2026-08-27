@@ -65,37 +65,56 @@ async function main() {
   let skippedCount = 0;
   const skippedCodes: string[] = [];
   const linkWarnings: string[] = [];
+  const organizations = await prisma.organization.findMany({
+    select: { id: true, code: true, name: true },
+    orderBy: { createdAt: "asc" },
+  });
 
-  for (const account of NEW_CHARGE_ACCOUNTS) {
-    const existing = await prisma.expenseAccount.findUnique({
-      where: { code: account.code },
-      select: { id: true, name: true },
-    });
-
-    if (existing) {
-      console.log(`deja existant : ignore -> ${account.code} (${existing.name})`);
-      skippedCount += 1;
-      skippedCodes.push(account.code);
-      continue;
-    }
-
-    await prisma.$transaction(async (tx) => {
-      const accountingAccountId = await resolveAccountingLink(tx, account, linkWarnings);
-      await tx.expenseAccount.create({
-        data: {
-          code: account.code,
-          name: account.name,
-          description: null,
-          category: null,
-          balance: 0,
-          accountingAccountId,
-          active: true,
+  for (const organization of organizations) {
+    for (const account of NEW_CHARGE_ACCOUNTS) {
+      const existing = await prisma.expenseAccount.findUnique({
+        where: {
+          organizationId_code: {
+            organizationId: organization.id,
+            code: account.code,
+          },
         },
+        select: { id: true, name: true },
       });
-    });
 
-    console.log(`cree : ${account.code} - ${account.name}`);
-    createdCount += 1;
+      if (existing) {
+        console.log(
+          `deja existant : ignore -> [${organization.code}] ${account.code} (${existing.name})`,
+        );
+        skippedCount += 1;
+        skippedCodes.push(`${organization.code}:${account.code}`);
+        continue;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        const accountingAccountId = await resolveAccountingLink(
+          tx,
+          organization.id,
+          account,
+          linkWarnings,
+        );
+        await tx.expenseAccount.create({
+          data: {
+            organizationId: organization.id,
+            code: account.code,
+            name: account.name,
+            description: null,
+            category: null,
+            balance: 0,
+            accountingAccountId,
+            active: true,
+          },
+        });
+      });
+
+      console.log(`cree : [${organization.code}] ${account.code} - ${account.name}`);
+      createdCount += 1;
+    }
   }
 
   console.log("");
@@ -111,12 +130,16 @@ async function main() {
     for (const warning of linkWarnings) console.log(`  - ${warning}`);
   }
 
-  const protectedAccount = await prisma.expenseAccount.findUnique({
+  const protectedAccounts = await prisma.expenseAccount.findMany({
     where: { code: PROTECTED_CODE },
-    select: { code: true, name: true, updatedAt: true },
+    select: { organizationId: true, code: true, name: true, updatedAt: true },
+    orderBy: { organizationId: "asc" },
   });
   console.log("");
-  console.log(`Verification ${PROTECTED_CODE} (doit rester inchange) :`, JSON.stringify(protectedAccount));
+  console.log(
+    `Verification ${PROTECTED_CODE} (doit rester inchange) :`,
+    JSON.stringify(protectedAccounts),
+  );
 
   const totalCharges = await prisma.expenseAccount.count();
   console.log(`Total de comptes de type Charge en base : ${totalCharges}`);
@@ -126,17 +149,29 @@ async function main() {
 
 async function resolveAccountingLink(
   tx: Prisma.TransactionClient,
+  organizationId: string,
   account: { code: string; name: string },
   warnings: string[],
 ): Promise<string | null> {
   const existing = await tx.accountingAccount.findUnique({
-    where: { code: account.code },
+    where: {
+      organizationId_code: {
+        organizationId,
+        code: account.code,
+      },
+    },
     select: { id: true, type: true, name: true },
   });
 
   if (!existing) {
     const created = await tx.accountingAccount.create({
-      data: { code: account.code, name: account.name, type: "EXPENSE", isActive: true },
+      data: {
+        organizationId,
+        code: account.code,
+        name: account.name,
+        type: "EXPENSE",
+        isActive: true,
+      },
       select: { id: true },
     });
     return created.id;
@@ -148,7 +183,7 @@ async function resolveAccountingLink(
   }
 
   warnings.push(
-    `${account.code} : compte comptable existant "${existing.name}" (type ${existing.type}) ne correspond pas a "${account.name}".`,
+    `[${organizationId}] ${account.code} : compte comptable existant "${existing.name}" (type ${existing.type}) ne correspond pas a "${account.name}".`,
   );
   return null;
 }

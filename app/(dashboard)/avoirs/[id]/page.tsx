@@ -5,7 +5,7 @@ import { CreditNoteDetailView } from "@/components/credit-notes/credit-note-deta
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getCreditNoteById } from "@/lib/server/credit-notes";
-import type { UserRole } from "@/types/auth";
+import type { CurrentUser, UserRole } from "@/types/auth";
 
 type CreditNoteDetailPageProps = {
   params: Promise<{ id: string }>;
@@ -40,7 +40,7 @@ export default async function CreditNoteDetailPage({
 
 async function loadCreditNote(
   id: string,
-  currentUser: { role: UserRole; id: string; nom: string; email: string },
+  currentUser: CurrentUser,
 ) {
   try {
     return await getCreditNoteById(id, currentUser);

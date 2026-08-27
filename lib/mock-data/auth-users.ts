@@ -17,6 +17,7 @@ export const authUsers: MockAuthUser[] = [
     email: "admin@comdis.local",
     password: "123456",
     role: "admin",
+    organizationId: "org-comdis-principal",
   },
   {
     id: "user-cashier",
@@ -24,6 +25,7 @@ export const authUsers: MockAuthUser[] = [
     email: "caissier@comdis.local",
     password: "123456",
     role: "cashier",
+    organizationId: "org-comdis-principal",
   },
   {
     id: "driver-1",
@@ -31,5 +33,6 @@ export const authUsers: MockAuthUser[] = [
     email: "chauffeur@comdis.local",
     password: "123456",
     role: "driver",
+    organizationId: "org-comdis-principal",
   },
 ];

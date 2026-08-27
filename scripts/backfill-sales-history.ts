@@ -17,22 +17,10 @@ const prisma = new PrismaClient({
  * renumbers or duplicates sessions on a second run.
  */
 async function main() {
-  const existingSessionCount = await prisma.posSession.count();
-  const alreadyLinkedCount = await prisma.sale.count({
-    where: { posSessionId: { not: null } },
-  });
-  if (existingSessionCount > 0 || alreadyLinkedCount > 0) {
-    console.log(
-      `Already backfilled (sessions=${existingSessionCount}, linked sales=${alreadyLinkedCount}). Nothing to do.`,
-    );
-    await prisma.$disconnect();
-    return;
-  }
-
   const sales = await prisma.sale.findMany({
     where: { saleYear: null },
-    select: { id: true, createdAt: true },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { id: true, organizationId: true, createdAt: true },
+    orderBy: [{ organizationId: "asc" }, { createdAt: "asc" }, { id: "asc" }],
   });
 
   if (sales.length === 0) {
@@ -43,10 +31,33 @@ async function main() {
 
   console.log(`Backfilling ${sales.length} historical sale(s)...`);
 
-  const saleNumberByYear = new Map<number, number>();
-  let sessionNumber = 0;
-  let currentSessionId: string | null = null;
-  let currentSessionDayStart: Date | null = null;
+  const existingSales = await prisma.sale.findMany({
+    where: { saleYear: { not: null }, saleNumber: { not: null } },
+    select: { organizationId: true, saleYear: true, saleNumber: true },
+  });
+  const saleNumberByOrganizationYear = new Map<string, number>();
+  for (const sale of existingSales) {
+    if (sale.saleYear === null || sale.saleNumber === null) continue;
+    const key = `${sale.organizationId}:${sale.saleYear}`;
+    const currentMax = saleNumberByOrganizationYear.get(key) ?? 0;
+    saleNumberByOrganizationYear.set(key, Math.max(currentMax, sale.saleNumber));
+  }
+
+  const existingSessions = await prisma.posSession.findMany({
+    select: { organizationId: true, year: true, number: true },
+  });
+  const sessionNumberByOrganizationYear = new Map<string, number>();
+  for (const session of existingSessions) {
+    const key = `${session.organizationId}:${session.year}`;
+    const currentMax = sessionNumberByOrganizationYear.get(key) ?? 0;
+    sessionNumberByOrganizationYear.set(key, Math.max(currentMax, session.number));
+  }
+
+  const currentSessionByOrganization = new Map<
+    string,
+    { id: string; dayStart: Date }
+  >();
+  let createdSessionCount = 0;
 
   await prisma.$transaction(
     async (tx) => {
@@ -54,33 +65,49 @@ async function main() {
         const date = sale.createdAt;
         const year = date.getFullYear();
         const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        const sessionKey = `${sale.organizationId}:${year}`;
+        const currentSession = currentSessionByOrganization.get(sale.organizationId) ?? null;
 
         if (
-          !currentSessionId ||
-          !currentSessionDayStart ||
-          dayStart.getTime() !== currentSessionDayStart.getTime()
+          !currentSession ||
+          dayStart.getTime() !== currentSession.dayStart.getTime()
         ) {
-          if (currentSessionId) {
+          if (currentSession) {
             await tx.posSession.update({
-              where: { id: currentSessionId },
+              where: { id: currentSession.id },
               data: { status: "CLOSED", closedAt: date },
             });
           }
-          sessionNumber += 1;
+
+          const nextSessionNumber =
+            (sessionNumberByOrganizationYear.get(sessionKey) ?? 0) + 1;
+          sessionNumberByOrganizationYear.set(sessionKey, nextSessionNumber);
+
           const created = await tx.posSession.create({
             data: {
-              number: sessionNumber,
+              organizationId: sale.organizationId,
+              number: nextSessionNumber,
               year,
               openedAt: date,
               status: "CLOSED",
             },
           });
-          currentSessionId = created.id;
-          currentSessionDayStart = dayStart;
+          currentSessionByOrganization.set(sale.organizationId, {
+            id: created.id,
+            dayStart,
+          });
+          createdSessionCount += 1;
         }
 
-        const nextNumber = (saleNumberByYear.get(year) ?? 0) + 1;
-        saleNumberByYear.set(year, nextNumber);
+        const currentSessionId =
+          currentSessionByOrganization.get(sale.organizationId)?.id ?? null;
+        if (!currentSessionId) {
+          throw new Error(`Missing reconstructed POS session for sale ${sale.id}.`);
+        }
+
+        const saleKey = `${sale.organizationId}:${year}`;
+        const nextNumber = (saleNumberByOrganizationYear.get(saleKey) ?? 0) + 1;
+        saleNumberByOrganizationYear.set(saleKey, nextNumber);
 
         await tx.sale.update({
           where: { id: sale.id },
@@ -94,12 +121,12 @@ async function main() {
 
       // If the last reconstructed session is today's, leave it OPEN so the
       // next real sale attaches to it instead of opening a duplicate.
-      if (currentSessionId && currentSessionDayStart) {
+      for (const session of currentSessionByOrganization.values()) {
         const now = new Date();
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        if (currentSessionDayStart.getTime() === todayStart.getTime()) {
+        if (session.dayStart.getTime() === todayStart.getTime()) {
           await tx.posSession.update({
-            where: { id: currentSessionId },
+            where: { id: session.id },
             data: { status: "OPEN", closedAt: null },
           });
         }
@@ -109,7 +136,7 @@ async function main() {
   );
 
   console.log(
-    `Done. Created ${sessionNumber} POS session(s) and numbered ${sales.length} sale(s).`,
+    `Done. Created ${createdSessionCount} POS session(s) and numbered ${sales.length} sale(s).`,
   );
   await prisma.$disconnect();
 }

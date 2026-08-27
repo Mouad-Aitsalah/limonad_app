@@ -100,14 +100,78 @@ function round(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+const rootOrganizationId = "org-comdis-principal";
+const rootOrganizationCode = "COMDIS-PRINCIPAL";
+const rootOrganizationName = "COMDIS Principal";
+const superAdminId = "user-super-admin";
+const superAdminEmail = "superadmin@comdis.local";
+
 async function main() {
   const demoPasswordHash = await bcrypt.hash("123456", 12);
+
+  await prisma.organization.upsert({
+    where: { id: rootOrganizationId },
+    update: {
+      code: rootOrganizationCode,
+      name: rootOrganizationName,
+      tradeName: "COMDIS",
+      address: depots[0]?.adresse ?? "Casablanca",
+      city: "Casablanca",
+      country: "Morocco",
+      email: "contact@comdis.local",
+      status: "ACTIVE",
+    },
+    create: {
+      id: rootOrganizationId,
+      code: rootOrganizationCode,
+      name: rootOrganizationName,
+      tradeName: "COMDIS",
+      address: depots[0]?.adresse ?? "Casablanca",
+      city: "Casablanca",
+      country: "Morocco",
+      email: "contact@comdis.local",
+      status: "ACTIVE",
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { id: superAdminId },
+    update: {
+      firstName: "Super",
+      lastName: "Admin",
+      fullName: "Super Admin COMDIS",
+      email: superAdminEmail,
+      passwordHash: demoPasswordHash,
+      role: "SUPER_ADMIN",
+      status: "ACTIVE",
+      organizationId: null,
+      depotId: null,
+    },
+    create: {
+      id: superAdminId,
+      firstName: "Super",
+      lastName: "Admin",
+      fullName: "Super Admin COMDIS",
+      email: superAdminEmail,
+      passwordHash: demoPasswordHash,
+      role: "SUPER_ADMIN",
+      status: "ACTIVE",
+    },
+  });
 
   for (const depot of depots) {
     await prisma.depot.upsert({
       where: { id: depot.id },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        code: "DEP-01",
+        name: depot.nom,
+        address: depot.adresse,
+        city: "Casablanca",
+        active: true,
+      },
       create: {
+        organizationId: rootOrganizationId,
         id: depot.id,
         code: "DEP-01",
         name: depot.nom,
@@ -123,11 +187,15 @@ async function main() {
     await prisma.user.upsert({
       where: { id: user.id },
       update: {
+        organizationId: rootOrganizationId,
         passwordHash: demoPasswordHash,
+        role: role(user.role),
         status: user.actif ? "ACTIVE" : "INACTIVE",
+        depotId: defaultDepotId,
       },
       create: {
         id: user.id,
+        organizationId: rootOrganizationId,
         firstName,
         lastName,
         fullName: user.nom,
@@ -142,12 +210,28 @@ async function main() {
     });
   }
 
+  await prisma.accountingSettings.upsert({
+    where: { organizationId: rootOrganizationId },
+    update: { updatedByUserId: "user-admin" },
+    create: {
+      organizationId: rootOrganizationId,
+      updatedByUserId: "user-admin",
+    },
+  });
+
   for (const driver of drivers) {
     const driverUser = users.find((user) => user.id === driver.id);
     await prisma.driver.upsert({
       where: { id: driver.id },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        employeeCode: `DRV-${driver.id.split("-").at(-1)?.padStart(4, "0") ?? driver.id}`,
+        userId: driver.id,
+        phone: driverUser?.telephone,
+        active: driverUser?.actif ?? true,
+      },
       create: {
+        organizationId: rootOrganizationId,
         id: driver.id,
         employeeCode: `DRV-${driver.id.split("-").at(-1)?.padStart(4, "0") ?? driver.id}`,
         userId: driver.id,
@@ -160,8 +244,21 @@ async function main() {
   for (const truck of trucks) {
     await prisma.truck.upsert({
       where: { id: truck.id },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        code: truck.code,
+        registration: truck.immatriculation,
+        brand: truck.marque,
+        model: truck.modele,
+        capacity: truck.capacite,
+        status: truckStatus(truck.statut),
+        depotId: truck.depotId,
+        defaultDriverId: truck.chauffeurId,
+        createdAt: truck.createdAt,
+        updatedAt: truck.updatedAt,
+      },
       create: {
+        organizationId: rootOrganizationId,
         id: truck.id,
         code: truck.code,
         registration: truck.immatriculation,
@@ -187,8 +284,17 @@ async function main() {
   for (const supplier of suppliers) {
     await prisma.supplier.upsert({
       where: { id: supplier.id },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        code: supplier.id,
+        name: supplier.nom,
+        phone: supplier.telephone,
+        email: supplier.email,
+        address: supplier.adresse,
+        city: "Casablanca",
+      },
       create: {
+        organizationId: rootOrganizationId,
         id: supplier.id,
         code: supplier.id,
         name: supplier.nom,
@@ -204,8 +310,13 @@ async function main() {
   for (const categoryId of categoryIds) {
     await prisma.category.upsert({
       where: { id: categoryId },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        code: categoryId,
+        name: categoryId.replace(/^cat-/, "").replaceAll("-", " "),
+      },
       create: {
+        organizationId: rootOrganizationId,
         id: categoryId,
         code: categoryId,
         name: categoryId.replace(/^cat-/, "").replaceAll("-", " "),
@@ -217,8 +328,12 @@ async function main() {
   for (const brandId of brandIds) {
     await prisma.brand.upsert({
       where: { id: brandId },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        name: brandId.replace(/^marque-/, "").replaceAll("-", " "),
+      },
       create: {
+        organizationId: rootOrganizationId,
         id: brandId,
         name: brandId.replace(/^marque-/, "").replaceAll("-", " "),
       },
@@ -228,8 +343,25 @@ async function main() {
   for (const product of products) {
     await prisma.product.upsert({
       where: { id: product.id },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        reference: product.reference,
+        barcode: product.codeBarres,
+        name: product.designation,
+        categoryId: product.categorieId,
+        brandId: product.marqueId,
+        defaultSupplierId: product.fournisseurId,
+        purchasePrice: product.prixAchatHT,
+        salePrice: product.prixVenteDetail,
+        taxRate: product.tauxTVA,
+        unit: product.unite,
+        minimumStock: product.stockAlerte,
+        status: product.actif ? "ACTIVE" : "INACTIVE",
+        createdAt: product.createdAt,
+        updatedAt: product.updatedAt,
+      },
       create: {
+        organizationId: rootOrganizationId,
         id: product.id,
         reference: product.reference,
         barcode: product.codeBarres,
@@ -252,8 +384,17 @@ async function main() {
   for (const location of stockLocations) {
     await prisma.stockLocation.upsert({
       where: { id: location.id },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        code: location.code,
+        name: location.name,
+        type: location.type === "warehouse" ? "DEPOT" : "TRUCK",
+        depotId: location.type === "warehouse" ? defaultDepotId : null,
+        truckId: location.truckId ?? null,
+        active: location.active,
+      },
       create: {
+        organizationId: rootOrganizationId,
         id: location.id,
         code: location.code,
         name: location.name,
@@ -274,10 +415,12 @@ async function main() {
         },
       },
       update: {
+        organizationId: rootOrganizationId,
         quantity: item.quantity,
       },
       create: {
         id: item.id,
+        organizationId: rootOrganizationId,
         productId: item.productId,
         locationId: item.locationId,
         quantity: item.quantity,
@@ -307,6 +450,7 @@ async function main() {
     await prisma.tour.upsert({
       where: { id: tour.id },
       update: {
+        organizationId: rootOrganizationId,
         code: tour.code,
         date: tour.date,
         depotId: defaultDepotId,
@@ -320,6 +464,7 @@ async function main() {
       },
       create: {
         id: tour.id,
+        organizationId: rootOrganizationId,
         code: tour.code,
         date: tour.date,
         depotId: defaultDepotId,
@@ -343,8 +488,11 @@ async function main() {
     const seededLoading = await prisma.truckLoading.upsert({
       where: { tourId: tour.id },
       update: {
+        organizationId: rootOrganizationId,
         depotId: defaultDepotId,
         truckId: tour.truckId,
+        driverId: tour.driverId,
+        date: tour.date,
         status: "VALIDATED",
         validatedAt: tour.date,
         validatedByUserId: "user-admin",
@@ -352,6 +500,7 @@ async function main() {
       },
       create: {
         id: loadingId,
+        organizationId: rootOrganizationId,
         loadingNumber: `CHG-SEED-${tour.id.slice(-6).toUpperCase()}`,
         tourId: tour.id,
         depotId: defaultDepotId,
@@ -378,9 +527,32 @@ async function main() {
   for (const customer of customers) {
     await prisma.customer.upsert({
       where: { id: customer.id },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        code: customer.code,
+        name: customer.nom,
+        phone: customer.telephone,
+        email: customer.email,
+        address: customer.adresse,
+        city: customer.ville,
+        type: customerType(customer.type),
+        status: customerStatus(customer.statut),
+        creditLimit: customer.plafondCredit,
+        currentBalance: customer.creditUtilise,
+        ice: customer.ice,
+        taxId: customer.identifiantFiscal,
+        contactName: customer.contactPrincipal,
+        notes: customer.notes,
+        createdByUserId: customer.createdByUserId,
+        createdByDriverId: customer.createdByDriverId,
+        createdFromTruckId: customer.createdFromTruckId,
+        creationOrigin: customer.creationOrigin,
+        createdAt: customer.createdAt,
+        updatedAt: customer.updatedAt,
+      },
       create: {
         id: customer.id,
+        organizationId: rootOrganizationId,
         code: customer.code,
         name: customer.nom,
         phone: customer.telephone,
@@ -416,14 +588,37 @@ async function main() {
 
     await prisma.sale.upsert({
       where: { id: invoice.id },
-      update: {},
-      create: {
-        id: invoice.id,
+      update: {
+        organizationId: rootOrganizationId,
         invoiceNumber: invoice.numero,
         origin: invoice.origin ?? (invoice.truckId ? "TRUCK" : "COUNTER"),
         status,
         customerId: invoice.clientId,
-        depotId: invoice.truckId ? undefined : defaultDepotId,
+        depotId: invoice.truckId ? null : defaultDepotId,
+        driverId: invoice.driverId,
+        truckId: invoice.truckId,
+        tourId: invoice.tourId,
+        stockLocationId: stockLocation?.id ?? "loc-main-warehouse",
+        subtotalHT: totals.totalHT,
+        discountAmount: 0,
+        taxAmount: totals.totalTVA,
+        totalTTC: totals.totalTTC,
+        paidAmount: method === "CREDIT" ? 0 : totals.totalTTC,
+        creditAmount: method === "CREDIT" ? totals.totalTTC : 0,
+        paymentMethod: method,
+        createdByUserId: invoice.createdByUserId ?? invoice.distributeurId,
+        validatedAt: status === "CANCELLED" ? null : invoice.date,
+        createdAt: invoice.date,
+        updatedAt: invoice.date,
+      },
+      create: {
+        id: invoice.id,
+        organizationId: rootOrganizationId,
+        invoiceNumber: invoice.numero,
+        origin: invoice.origin ?? (invoice.truckId ? "TRUCK" : "COUNTER"),
+        status,
+        customerId: invoice.clientId,
+        depotId: invoice.truckId ? null : defaultDepotId,
         driverId: invoice.driverId,
         truckId: invoice.truckId,
         tourId: invoice.tourId,
@@ -473,9 +668,25 @@ async function main() {
 
     await prisma.purchase.upsert({
       where: { id: purchase.id },
-      update: {},
+      update: {
+        organizationId: rootOrganizationId,
+        purchaseNumber: purchase.numero,
+        supplierId: purchase.fournisseurId,
+        depotId: defaultDepotId,
+        status: purchaseStatus(purchase.statut),
+        orderDate: purchase.date,
+        receivedAt: purchase.statut === "validee" ? purchase.date : null,
+        subtotalHT,
+        taxAmount: round(totalTTC - subtotalHT),
+        totalTTC,
+        createdByUserId: purchase.utilisateurId,
+        validatedByUserId: purchase.statut === "validee" ? purchase.utilisateurId : null,
+        createdAt: purchase.createdAt,
+        updatedAt: purchase.updatedAt,
+      },
       create: {
         id: purchase.id,
+        organizationId: rootOrganizationId,
         purchaseNumber: purchase.numero,
         supplierId: purchase.fournisseurId,
         depotId: defaultDepotId,
@@ -510,6 +721,7 @@ async function main() {
   await prisma.auditLog.create({
     data: {
       userId: "user-admin",
+      organizationId: rootOrganizationId,
       action: "SEED_DATABASE",
       entityType: "SYSTEM",
       entityId: "initial-seed",

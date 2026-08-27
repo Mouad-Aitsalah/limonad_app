@@ -38,6 +38,14 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   {
+    label: "Organisations",
+    href: "/organisations",
+    icon: ShieldUser,
+    description: "Pilotage multi-organisations",
+    order: "00",
+    roles: ["super_admin"],
+  },
+  {
     label: "Dashboard",
     href: "/dashboard",
     icon: LayoutDashboard,

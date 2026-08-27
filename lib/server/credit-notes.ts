@@ -17,6 +17,10 @@ import {
 } from "@/lib/server/accounting";
 import { assertUserRole, requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import {
+  asOrganizationUser,
+  requireOrganizationUser,
+} from "@/lib/server/organization-context";
 import type { CurrentUser } from "@/types/auth";
 import type {
   CreateCreditNoteInput,
@@ -169,12 +173,11 @@ type PersistedLine = {
 };
 
 export async function getCreditNotes(sessionUser?: CurrentUser): Promise<CreditNote[]> {
-  if (sessionUser) {
-    assertUserRole(sessionUser, ["admin", "depot_manager", "cashier"]);
-  } else {
-    await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  }
+  const currentUser = sessionUser
+    ? asOrganizationUser(assertUserRole(sessionUser, ["admin", "depot_manager", "cashier"]))
+    : await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const notes = await prisma.creditNote.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: creditNoteInclude,
     orderBy: [{ createdAt: "desc" }, { updatedAt: "desc" }],
   });
@@ -186,13 +189,11 @@ export async function getCreditNoteById(
   id: string,
   sessionUser?: CurrentUser,
 ): Promise<CreditNote> {
-  if (sessionUser) {
-    assertUserRole(sessionUser, ["admin", "depot_manager", "cashier"]);
-  } else {
-    await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  }
-  const note = await prisma.creditNote.findUnique({
-    where: { id },
+  const currentUser = sessionUser
+    ? asOrganizationUser(assertUserRole(sessionUser, ["admin", "depot_manager", "cashier"]))
+    : await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const note = await prisma.creditNote.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
     include: creditNoteInclude,
   });
 
@@ -201,7 +202,10 @@ export async function getCreditNoteById(
   }
 
   const stockMovements = await prisma.stockMovement.findMany({
-    where: { referenceId: id },
+    where: {
+      referenceId: id,
+      organizationId: currentUser.organizationId,
+    },
     include: stockMovementInclude,
     orderBy: { createdAt: "asc" },
   });
@@ -227,13 +231,13 @@ export async function createCreditNote(
 }
 
 export async function validateCreditNote(id: string): Promise<CreditNote> {
-  const user = await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   return withSerializableRetry(async () =>
     prisma.$transaction(
       async (tx) => {
-        const existing = await tx.creditNote.findUnique({
-          where: { id },
+        const existing = await tx.creditNote.findFirst({
+          where: { id, organizationId: user.organizationId },
           include: creditNoteInclude,
         });
 
@@ -262,6 +266,7 @@ export async function validateCreditNote(id: string): Promise<CreditNote> {
 
         await applyValidationSideEffects(
           tx,
+          user.organizationId,
           existing.id,
           existing.creditNoteNumber,
           existing.partyType,
@@ -286,6 +291,7 @@ export async function validateCreditNote(id: string): Promise<CreditNote> {
         });
 
         await postValidatedCreditNoteAccountingEntry(tx, {
+          organizationId: user.organizationId,
           creditNoteId: updated.id,
           creditNoteNumber: updated.creditNoteNumber,
           partyType: updated.partyType,
@@ -299,6 +305,7 @@ export async function validateCreditNote(id: string): Promise<CreditNote> {
 
         await tx.auditLog.create({
           data: {
+            organizationId: user.organizationId,
             userId: user.id,
             action: "CREDIT_NOTE_VALIDATED",
             entityType: "CreditNote",
@@ -316,13 +323,13 @@ export async function validateCreditNote(id: string): Promise<CreditNote> {
 }
 
 export async function reverseCreditNote(id: string): Promise<CreditNote> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
 
   return withSerializableRetry(async () =>
     prisma.$transaction(
       async (tx) => {
-        const note = await tx.creditNote.findUnique({
-          where: { id },
+        const note = await tx.creditNote.findFirst({
+          where: { id, organizationId: user.organizationId },
           include: creditNoteInclude,
         });
 
@@ -375,7 +382,12 @@ export async function reverseCreditNote(id: string): Promise<CreditNote> {
 
             await tx.stockMovement.create({
               data: {
-                movementNumber: await nextMovementNumber(tx, new Date()),
+                organizationId: user.organizationId,
+                movementNumber: await nextMovementNumber(
+                  tx,
+                  user.organizationId,
+                  new Date(),
+                ),
                 type: "REVERSAL",
                 productId: line.productId,
                 quantity: line.quantity,
@@ -407,6 +419,7 @@ export async function reverseCreditNote(id: string): Promise<CreditNote> {
                 quantity: { increment: line.quantity },
               },
               create: {
+                organizationId: user.organizationId,
                 productId: line.productId,
                 locationId: note.stockSourceLocationId,
                 quantity: line.quantity,
@@ -416,7 +429,12 @@ export async function reverseCreditNote(id: string): Promise<CreditNote> {
 
             await tx.stockMovement.create({
               data: {
-                movementNumber: await nextMovementNumber(tx, new Date()),
+                organizationId: user.organizationId,
+                movementNumber: await nextMovementNumber(
+                  tx,
+                  user.organizationId,
+                  new Date(),
+                ),
                 type: "REVERSAL",
                 productId: line.productId,
                 quantity: line.quantity,
@@ -443,6 +461,7 @@ export async function reverseCreditNote(id: string): Promise<CreditNote> {
         });
 
         await reverseAccountingEntryForSource(tx, {
+          organizationId: user.organizationId,
           sourceType:
             note.partyType === "SUPPLIER"
               ? "SUPPLIER_CREDIT_NOTE"
@@ -456,6 +475,7 @@ export async function reverseCreditNote(id: string): Promise<CreditNote> {
 
         await tx.auditLog.create({
           data: {
+            organizationId: user.organizationId,
             userId: user.id,
             action: "CREDIT_NOTE_REVERSED",
             entityType: "CreditNote",
@@ -466,7 +486,10 @@ export async function reverseCreditNote(id: string): Promise<CreditNote> {
         });
 
         const stockMovements = await tx.stockMovement.findMany({
-          where: { referenceId: note.id },
+          where: {
+            referenceId: note.id,
+            organizationId: user.organizationId,
+          },
           include: stockMovementInclude,
           orderBy: { createdAt: "asc" },
         });
@@ -481,15 +504,15 @@ export async function reverseCreditNote(id: string): Promise<CreditNote> {
 export async function getReturnableProductsForCustomer(
   customerId: string,
 ): Promise<ReturnableProduct[]> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  return computeReturnableProducts(customerId);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  return computeReturnableProducts(currentUser.organizationId, customerId);
 }
 
 async function persistManualCreditNote(
   input: CreateCreditNoteInput,
   status: Exclude<CreditNoteStatus, "CONTREPASSE">,
 ): Promise<CreditNote> {
-  const user = await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const parsed = createCreditNoteSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -532,8 +555,11 @@ async function persistManualCreditNote(
     prisma.$transaction(
       async (tx) => {
         const existingDraft = parsed.data.id
-          ? await tx.creditNote.findUnique({
-              where: { id: parsed.data.id },
+          ? await tx.creditNote.findFirst({
+              where: {
+                id: parsed.data.id,
+                organizationId: user.organizationId,
+              },
               include: { lines: true },
             })
           : null;
@@ -547,31 +573,40 @@ async function persistManualCreditNote(
 
         const [customer, supplier, destination, sourceLocation, products] = await Promise.all([
           customerId
-            ? tx.customer.findUnique({
-                where: { id: customerId },
+            ? tx.customer.findFirst({
+                where: { id: customerId, organizationId: user.organizationId },
                 select: { id: true, name: true },
               })
             : Promise.resolve(null),
           supplierId
-            ? tx.supplier.findUnique({
-                where: { id: supplierId },
+            ? tx.supplier.findFirst({
+                where: { id: supplierId, organizationId: user.organizationId },
                 select: { id: true, name: true, active: true },
               })
             : Promise.resolve(null),
           destinationLocationId
-            ? tx.stockLocation.findUnique({
-                where: { id: destinationLocationId },
+            ? tx.stockLocation.findFirst({
+                where: {
+                  id: destinationLocationId,
+                  organizationId: user.organizationId,
+                },
                 select: { id: true, name: true, active: true },
               })
             : Promise.resolve(null),
           sourceLocationId
-            ? tx.stockLocation.findUnique({
-                where: { id: sourceLocationId },
+            ? tx.stockLocation.findFirst({
+                where: {
+                  id: sourceLocationId,
+                  organizationId: user.organizationId,
+                },
                 select: { id: true, name: true, active: true },
               })
             : Promise.resolve(null),
           tx.product.findMany({
-            where: { id: { in: normalizedLines.map((line) => line.productId) } },
+            where: {
+              id: { in: normalizedLines.map((line) => line.productId) },
+              organizationId: user.organizationId,
+            },
             select: {
               id: true,
               name: true,
@@ -689,10 +724,16 @@ async function persistManualCreditNote(
             })),
           });
         } else {
-          creditNoteNumber = await nextCreditNoteNumber(tx, returnDate, partyType);
+          creditNoteNumber = await nextCreditNoteNumber(
+            tx,
+            user.organizationId,
+            returnDate,
+            partyType,
+          );
 
           const created = await tx.creditNote.create({
             data: {
+              organizationId: user.organizationId,
               creditNoteNumber,
               originalSaleId: null,
               partyType: partyTypeToPrisma[partyType],
@@ -738,6 +779,7 @@ async function persistManualCreditNote(
         if (status === "VALIDE") {
           await applyValidationSideEffects(
             tx,
+            user.organizationId,
             creditNoteId,
             creditNoteNumber,
             partyTypeToPrisma[partyType],
@@ -750,13 +792,14 @@ async function persistManualCreditNote(
           );
         }
 
-        const note = await tx.creditNote.findUniqueOrThrow({
-          where: { id: creditNoteId },
+        const note = await tx.creditNote.findFirstOrThrow({
+          where: { id: creditNoteId, organizationId: user.organizationId },
           include: creditNoteInclude,
         });
 
         if (status === "VALIDE") {
           await postValidatedCreditNoteAccountingEntry(tx, {
+            organizationId: user.organizationId,
             creditNoteId: note.id,
             creditNoteNumber: note.creditNoteNumber,
             partyType: note.partyType,
@@ -771,6 +814,7 @@ async function persistManualCreditNote(
 
         await tx.auditLog.create({
           data: {
+            organizationId: user.organizationId,
             userId: user.id,
             action: existingDraft
               ? status === "VALIDE"
@@ -810,6 +854,7 @@ async function persistManualCreditNote(
 
 async function applyValidationSideEffects(
   tx: Pick<typeof prisma, "stockLevel" | "stockMovement">,
+  organizationId: string,
   creditNoteId: string,
   creditNoteNumber: string,
   partyType: PrismaCreditNotePartyType,
@@ -837,6 +882,7 @@ async function applyValidationSideEffects(
           quantity: { increment: line.quantityReturned },
         },
         create: {
+          organizationId,
           productId: line.productId,
           locationId: destinationLocationId,
           quantity: line.quantityReturned,
@@ -846,7 +892,8 @@ async function applyValidationSideEffects(
 
       await tx.stockMovement.create({
         data: {
-          movementNumber: await nextMovementNumber(tx, returnDate),
+          organizationId,
+          movementNumber: await nextMovementNumber(tx, organizationId, returnDate),
           type: "CUSTOMER_RETURN",
           productId: line.productId,
           quantity: line.quantityReturned,
@@ -898,7 +945,8 @@ async function applyValidationSideEffects(
 
     await tx.stockMovement.create({
       data: {
-        movementNumber: await nextMovementNumber(tx, returnDate),
+        organizationId,
+        movementNumber: await nextMovementNumber(tx, organizationId, returnDate),
         type: "SUPPLIER_RETURN",
         productId: line.productId,
         quantity: line.quantityReturned,
@@ -991,9 +1039,13 @@ function mapCreditNoteToDto(
   };
 }
 
-async function computeReturnableProducts(customerId: string) {
+async function computeReturnableProducts(
+  organizationId: string,
+  customerId: string,
+) {
   const sales = await prisma.sale.findMany({
     where: {
+      organizationId,
       customerId,
       validatedAt: { not: null },
       status: { in: ["VALIDATED", "PARTIALLY_PAID", "PAID", "CREDIT"] },
@@ -1123,12 +1175,16 @@ function computeTotals(lines: PersistedLine[]) {
 
 async function nextCreditNoteNumber(
   tx: Pick<typeof prisma, "creditNote">,
+  organizationId: string,
   date: Date,
   partyType: CreditNotePartyType,
 ) {
   const prefix = `${partyType === "fournisseur" ? "AF" : "AC"}-${formatSequenceDate(date)}-`;
   const last = await tx.creditNote.findFirst({
-    where: { creditNoteNumber: { startsWith: prefix } },
+    where: {
+      organizationId,
+      creditNoteNumber: { startsWith: prefix },
+    },
     orderBy: { creditNoteNumber: "desc" },
     select: { creditNoteNumber: true },
   });
@@ -1139,11 +1195,15 @@ async function nextCreditNoteNumber(
 
 async function nextMovementNumber(
   tx: Pick<typeof prisma, "stockMovement">,
+  organizationId: string,
   date: Date,
 ) {
   const prefix = `MV-${formatSequenceDate(date)}-`;
   const last = await tx.stockMovement.findFirst({
-    where: { movementNumber: { startsWith: prefix } },
+    where: {
+      organizationId,
+      movementNumber: { startsWith: prefix },
+    },
     orderBy: { movementNumber: "desc" },
     select: { movementNumber: true },
   });

@@ -1,4 +1,9 @@
-export type UserRole = "admin" | "depot_manager" | "cashier" | "driver";
+export type UserRole =
+  | "super_admin"
+  | "admin"
+  | "depot_manager"
+  | "cashier"
+  | "driver";
 
 export type CurrentUser = {
   id: string;
@@ -7,6 +12,7 @@ export type CurrentUser = {
   nom: string;
   email: string;
   role: UserRole;
+  organizationId: string | null;
   driverId?: string;
   truckId?: string;
 };

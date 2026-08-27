@@ -48,7 +48,12 @@ async function main() {
 
 async function cancelTourAction(tourCodeOrId: string, execute: boolean) {
   const tour = await findTour(tourCodeOrId);
-  const salesCount = await prisma.sale.count({ where: { tourId: tour.id } });
+  const salesCount = await prisma.sale.count({
+    where: {
+      organizationId: tour.organizationId,
+      tourId: tour.id,
+    },
+  });
   const hasValidatedLoading = tour.loading?.status === "VALIDATED";
 
   const plan = {
@@ -79,11 +84,16 @@ async function cancelTourAction(tourCodeOrId: string, execute: boolean) {
   await prisma.$transaction(async (tx) => {
     await tx.tour.update({ where: { id: tour.id }, data: { status: "CANCELLED" } });
     await tx.truckLoading.updateMany({
-      where: { tourId: tour.id, status: "DRAFT" },
+      where: {
+        organizationId: tour.organizationId,
+        tourId: tour.id,
+        status: "DRAFT",
+      },
       data: { status: "CANCELLED" },
     });
     const otherOpen = await tx.tour.count({
       where: {
+        organizationId: tour.organizationId,
         id: { not: tour.id },
         truckId: tour.truckId,
         status: { in: [...openTourStatuses] },
@@ -134,7 +144,12 @@ async function markReturnedAction(tourCodeOrId: string, execute: boolean) {
 
 async function markWaitingForClosureAction(tourCodeOrId: string, execute: boolean) {
   const tour = await findTour(tourCodeOrId);
-  const salesCount = await prisma.sale.count({ where: { tourId: tour.id } });
+  const salesCount = await prisma.sale.count({
+    where: {
+      organizationId: tour.organizationId,
+      tourId: tour.id,
+    },
+  });
   const hasValidatedLoading = tour.loading?.status === "VALIDATED";
   const returnedAt = tour.returnedAt ?? new Date();
   const allowed =
@@ -193,6 +208,7 @@ async function markWaitingForClosureAction(tourCodeOrId: string, execute: boolea
     });
     const otherOpen = await tx.tour.count({
       where: {
+        organizationId: tour.organizationId,
         id: { not: tour.id },
         truckId: tour.truckId,
         status: { in: [...openTourStatuses] },
@@ -231,15 +247,26 @@ async function prepareTestTourAction(args: Args, execute: boolean) {
 
   const [openDriverTours, openTruckTours, depotLocation] = await Promise.all([
     prisma.tour.findMany({
-      where: { driverId: driver.id, status: { in: [...openTourStatuses] } },
+      where: {
+        organizationId: driver.organizationId,
+        driverId: driver.id,
+        status: { in: [...openTourStatuses] },
+      },
       select: { id: true, code: true, status: true },
     }),
     prisma.tour.findMany({
-      where: { truckId: driver.truck.id, status: { in: [...openTourStatuses] } },
+      where: {
+        organizationId: driver.organizationId,
+        truckId: driver.truck.id,
+        status: { in: [...openTourStatuses] },
+      },
       select: { id: true, code: true, status: true },
     }),
-    prisma.stockLocation.findUnique({
-      where: { depotId: driver.truck.depotId },
+    prisma.stockLocation.findFirst({
+      where: {
+        organizationId: driver.organizationId,
+        depotId: driver.truck.depotId,
+      },
       select: { id: true, code: true },
     }),
   ]);
@@ -269,7 +296,7 @@ async function prepareTestTourAction(args: Args, execute: boolean) {
     return;
   }
 
-  const lines = await resolveLoadingLines(args, depotLocation.id);
+  const lines = await resolveLoadingLines(args, driver.organizationId, depotLocation.id);
   const now = new Date();
   const tourCode = `TEST-${driver.truck.code}-${Date.now()}`;
   const plan = {
@@ -307,6 +334,7 @@ async function prepareTestTourAction(args: Args, execute: boolean) {
     async (tx) => {
       const tour = await tx.tour.create({
         data: {
+          organizationId: driver.organizationId,
           code: tourCode,
           date,
           depotId: driver.truck!.depotId,
@@ -319,6 +347,7 @@ async function prepareTestTourAction(args: Args, execute: boolean) {
       });
       const loading = await tx.truckLoading.create({
         data: {
+          organizationId: driver.organizationId,
           loadingNumber: `TEST-CHG-${Date.now()}`,
           tourId: tour.id,
           depotId: driver.truck!.depotId,
@@ -359,6 +388,7 @@ async function prepareTestTourAction(args: Args, execute: boolean) {
           },
           update: { quantity: { increment: line.quantity } },
           create: {
+            organizationId: driver.organizationId,
             productId: line.productId,
             locationId: driver.truck!.stockLocation!.id,
             quantity: line.quantity,
@@ -367,7 +397,8 @@ async function prepareTestTourAction(args: Args, execute: boolean) {
         });
         await tx.stockMovement.create({
           data: {
-            movementNumber: await nextMovementNumber(tx),
+            organizationId: driver.organizationId,
+            movementNumber: await nextMovementNumber(tx, driver.organizationId),
             type: "TRUCK_LOADING",
             productId: line.productId,
             quantity: line.quantity,
@@ -413,7 +444,11 @@ async function resolveCreatedByUser(args: Args, execute: boolean) {
   return { id: user.id, email: user.email, name: user.fullName };
 }
 
-async function resolveLoadingLines(args: Args, depotLocationId: string) {
+async function resolveLoadingLines(
+  args: Args,
+  organizationId: string,
+  depotLocationId: string,
+) {
   const explicitLines = arrayArg(args.line);
 
   if (explicitLines.length > 0) {
@@ -425,7 +460,12 @@ async function resolveLoadingLines(args: Args, depotLocationId: string) {
           throw new Error(`Ligne invalide: ${line}`);
         }
         const product = await prisma.product.findUnique({
-          where: { reference },
+          where: {
+            organizationId_reference: {
+              organizationId,
+              reference,
+            },
+          },
           select: { id: true, reference: true, name: true },
         });
         if (!product) throw new Error(`Produit introuvable: ${reference}`);
@@ -437,6 +477,7 @@ async function resolveLoadingLines(args: Args, depotLocationId: string) {
 
   const available = await prisma.stockLevel.findMany({
     where: {
+      organizationId,
       locationId: depotLocationId,
       quantity: { gt: 0 },
       product: { status: "ACTIVE" },
@@ -490,8 +531,11 @@ function summarizeTour(tour: Awaited<ReturnType<typeof findTour>>) {
   };
 }
 
-async function nextMovementNumber(tx: Pick<typeof prisma, "stockMovement">) {
-  const count = await tx.stockMovement.count();
+async function nextMovementNumber(
+  tx: Pick<typeof prisma, "stockMovement">,
+  organizationId: string,
+) {
+  const count = await tx.stockMovement.count({ where: { organizationId } });
   return `MV-${String(count + 1).padStart(6, "0")}`;
 }
 

@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { StockLevelDto, StockSummaryDto } from "@/types/operations-dto";
 
 const stockLevelInclude = {
@@ -73,7 +74,9 @@ export function mapStockLevelToDto(level: NonNullable<StockLevelRecord>): StockL
 }
 
 export async function getStockLevels(): Promise<StockLevelDto[]> {
+  const currentUser = await requireOrganizationUser();
   const levels = await prisma.stockLevel.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: stockLevelInclude,
     orderBy: [{ location: { code: "asc" } }, { product: { name: "asc" } }],
   });
@@ -81,8 +84,9 @@ export async function getStockLevels(): Promise<StockLevelDto[]> {
 }
 
 export async function getStockLevelsByLocation(locationId: string): Promise<StockLevelDto[]> {
+  const currentUser = await requireOrganizationUser();
   const levels = await prisma.stockLevel.findMany({
-    where: { locationId },
+    where: { locationId, organizationId: currentUser.organizationId },
     include: stockLevelInclude,
     orderBy: { product: { name: "asc" } },
   });
@@ -90,8 +94,9 @@ export async function getStockLevelsByLocation(locationId: string): Promise<Stoc
 }
 
 export async function getStockLevelsByProduct(productId: string): Promise<StockLevelDto[]> {
+  const currentUser = await requireOrganizationUser();
   const levels = await prisma.stockLevel.findMany({
-    where: { productId },
+    where: { productId, organizationId: currentUser.organizationId },
     include: stockLevelInclude,
     orderBy: { location: { code: "asc" } },
   });
@@ -99,13 +104,19 @@ export async function getStockLevelsByProduct(productId: string): Promise<StockL
 }
 
 export async function getDepotStock(depotId: string): Promise<StockLevelDto[]> {
-  const location = await prisma.stockLocation.findUnique({ where: { depotId } });
+  const currentUser = await requireOrganizationUser();
+  const location = await prisma.stockLocation.findFirst({
+    where: { depotId, organizationId: currentUser.organizationId },
+  });
   if (!location) throw new OperationsServiceError("Emplacement depot introuvable.", 404);
   return getStockLevelsByLocation(location.id);
 }
 
 export async function getTruckStock(truckId: string): Promise<StockLevelDto[]> {
-  const location = await prisma.stockLocation.findUnique({ where: { truckId } });
+  const currentUser = await requireOrganizationUser();
+  const location = await prisma.stockLocation.findFirst({
+    where: { truckId, organizationId: currentUser.organizationId },
+  });
   if (!location) throw new OperationsServiceError("Emplacement camion introuvable.", 404);
   return getStockLevelsByLocation(location.id);
 }
@@ -114,7 +125,8 @@ export async function getStockLevel(
   productId: string,
   locationId: string,
 ): Promise<StockLevelDto> {
-  const level = await getStockLevelRecord(productId, locationId);
+  const currentUser = await requireOrganizationUser();
+  const level = await getStockLevelRecord(productId, locationId, currentUser.organizationId);
   if (!level) throw new OperationsServiceError("Niveau de stock introuvable.", 404);
   return mapStockLevelToDto(level);
 }
@@ -133,9 +145,13 @@ export async function getStockSummary(): Promise<StockSummaryDto> {
   };
 }
 
-async function getStockLevelRecord(productId: string, locationId: string) {
-  return prisma.stockLevel.findUnique({
-    where: { productId_locationId: { productId, locationId } },
+async function getStockLevelRecord(
+  productId: string,
+  locationId: string,
+  organizationId: string,
+) {
+  return prisma.stockLevel.findFirst({
+    where: { productId, locationId, organizationId },
     include: stockLevelInclude,
   });
 }

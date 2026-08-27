@@ -8,8 +8,8 @@ import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
 } from "@/lib/server/accounting";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { getCustomersForCurrentDriver } from "@/lib/server/driver-customers";
 import { markCustomerDeliveredOnTour } from "@/lib/server/driver-tour";
 import {
@@ -48,7 +48,7 @@ const driverSaleSchema = z.object({
 });
 
 export async function getDriverPosContext(): Promise<DriverPosContextDto> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId) {
     return blockedContext("Aucun camion n'est affecte a votre compte.", {
       id: "",
@@ -56,8 +56,8 @@ export async function getDriverPosContext(): Promise<DriverPosContextDto> {
     });
   }
 
-  const driver = await prisma.driver.findUnique({
-    where: { id: user.driverId },
+  const driver = await prisma.driver.findFirst({
+    where: { id: user.driverId, organizationId: user.organizationId },
     select: {
       id: true,
       active: true,
@@ -87,6 +87,7 @@ export async function getDriverPosContext(): Promise<DriverPosContextDto> {
 
   const activeTour = await prisma.tour.findFirst({
     where: {
+      organizationId: user.organizationId,
       driverId: driver.id,
       truckId: driver.truck.id,
       status: "IN_PROGRESS",
@@ -112,6 +113,7 @@ export async function getDriverPosContext(): Promise<DriverPosContextDto> {
   const [levels, customers] = await Promise.all([
     prisma.stockLevel.findMany({
       where: {
+        organizationId: user.organizationId,
         locationId: driver.truck.stockLocation.id,
         quantity: { gt: 0 },
         product: { status: "ACTIVE" },
@@ -161,7 +163,7 @@ export async function getDriverPosContext(): Promise<DriverPosContextDto> {
 }
 
 export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
     throw new OperationsServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
@@ -174,8 +176,11 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
 
   const sale = await prisma.$transaction(
     async (tx) => {
-      const driver = await tx.driver.findUnique({
-        where: { id: user.driverId },
+      const driver = await tx.driver.findFirst({
+        where: {
+          id: user.driverId,
+          organizationId: user.organizationId,
+        },
         select: {
           id: true,
           active: true,
@@ -197,7 +202,12 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
       }
 
       const activeTour = await tx.tour.findFirst({
-        where: { driverId: driver.id, truckId: driver.truck.id, status: "IN_PROGRESS" },
+        where: {
+          organizationId: user.organizationId,
+          driverId: driver.id,
+          truckId: driver.truck.id,
+          status: "IN_PROGRESS",
+        },
         select: {
           id: true,
           code: true,
@@ -214,8 +224,11 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
       }
 
       const customer = parsed.data.customerId
-        ? await tx.customer.findUnique({
-            where: { id: parsed.data.customerId },
+        ? await tx.customer.findFirst({
+            where: {
+              id: parsed.data.customerId,
+              organizationId: user.organizationId,
+            },
             select: {
               id: true,
               status: true,
@@ -233,7 +246,11 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
 
       const productIds = lines.map((line) => line.productId);
       const products = await tx.product.findMany({
-        where: { id: { in: productIds }, status: "ACTIVE" },
+        where: {
+          id: { in: productIds },
+          organizationId: user.organizationId,
+          status: "ACTIVE",
+        },
         select: {
           id: true,
           salePrice: true,
@@ -272,6 +289,7 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
       const taxAmount = roundMoney(computedLines.reduce((sum, line) => sum + line.taxAmount, 0));
       const totalTTC = roundMoney(subtotalHT + taxAmount);
       const stampAmount = await computeCashSaleStampAmount(tx, {
+        organizationId: user.organizationId,
         totalTTC,
         paymentMethod: parsed.data.paymentMethod,
       });
@@ -307,11 +325,21 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
       }
 
       const saleDate = new Date();
-      const sequencing = await resolveSaleSequencing(tx, saleDate, user.id);
+      const sequencing = await resolveSaleSequencing(
+        tx,
+        saleDate,
+        user.id,
+        user.organizationId,
+      );
 
       const sale = await tx.sale.create({
         data: {
-          invoiceNumber: await nextInvoiceNumber(tx, driver.employeeCode),
+          organizationId: user.organizationId,
+          invoiceNumber: await nextInvoiceNumber(
+            tx,
+            driver.employeeCode,
+            user.organizationId,
+          ),
           saleYear: sequencing.saleYear,
           saleNumber: sequencing.saleNumber,
           posSessionId: sequencing.posSessionId,
@@ -359,7 +387,8 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
         payment.paidAmount > 0
           ? await tx.payment.create({
               data: {
-                paymentNumber: await nextPaymentNumber(tx),
+                organizationId: user.organizationId,
+                paymentNumber: await nextPaymentNumber(tx, user.organizationId),
                 saleId: sale.id,
                 amount: payment.paidAmount,
                 method:
@@ -380,6 +409,7 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
       }
 
       await postSaleAccountingEntry(tx, {
+        organizationId: user.organizationId,
         saleId: sale.id,
         invoiceNumber: sale.invoiceNumber,
         customerId: customer?.id ?? null,
@@ -399,7 +429,8 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
       for (const line of computedLines) {
         await tx.stockMovement.create({
           data: {
-            movementNumber: await nextMovementNumber(tx),
+            organizationId: user.organizationId,
+            movementNumber: await nextMovementNumber(tx, user.organizationId),
             type: "TRUCK_SALE",
             productId: line.productId,
             quantity: line.quantity,
@@ -427,10 +458,10 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
 }
 
 export async function getSalesForCurrentDriver(): Promise<SaleDto[]> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId) throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
   const sales = await prisma.sale.findMany({
-    where: { driverId: user.driverId },
+    where: { driverId: user.driverId, organizationId: user.organizationId },
     include: saleInclude,
     orderBy: { createdAt: "desc" },
   });
@@ -438,10 +469,14 @@ export async function getSalesForCurrentDriver(): Promise<SaleDto[]> {
 }
 
 export async function getSalesForDriverByTour(tourId: string): Promise<SaleDto[]> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId) throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
   const sales = await prisma.sale.findMany({
-    where: { tourId, driverId: user.driverId },
+    where: {
+      tourId,
+      driverId: user.driverId,
+      organizationId: user.organizationId,
+    },
     include: saleInclude,
     orderBy: { createdAt: "desc" },
   });
@@ -449,10 +484,10 @@ export async function getSalesForDriverByTour(tourId: string): Promise<SaleDto[]
 }
 
 export async function getDriverSaleById(id: string): Promise<SaleDto> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId) throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
   const sale = await prisma.sale.findFirst({
-    where: { id, driverId: user.driverId },
+    where: { id, driverId: user.driverId, organizationId: user.organizationId },
     include: saleInclude,
   });
   if (!sale) throw new OperationsServiceError("Vente introuvable.", 404);
@@ -460,8 +495,9 @@ export async function getDriverSaleById(id: string): Promise<SaleDto> {
 }
 
 export async function getAllSales(): Promise<SaleDto[]> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const sales = await prisma.sale.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: saleInclude,
     orderBy: { createdAt: "desc" },
   });
@@ -469,8 +505,11 @@ export async function getAllSales(): Promise<SaleDto[]> {
 }
 
 export async function getSaleById(id: string): Promise<SaleDto> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  const sale = await prisma.sale.findUnique({ where: { id }, include: saleInclude });
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const sale = await prisma.sale.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
+    include: saleInclude,
+  });
   if (!sale) throw new OperationsServiceError("Vente introuvable.", 404);
   return mapSaleToDto(sale);
 }

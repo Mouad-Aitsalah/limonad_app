@@ -3,8 +3,8 @@ import "server-only";
 import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { getStockLevel } from "@/lib/server/stock-levels";
 import { nextMovementNumber } from "@/lib/server/sales-shared";
 import type {
@@ -102,7 +102,9 @@ export function mapStockMovementToDto(
 }
 
 export async function getStockMovements(): Promise<StockMovementDto[]> {
+  const currentUser = await requireOrganizationUser();
   const movements = await prisma.stockMovement.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: stockMovementInclude,
     orderBy: { createdAt: "desc" },
     take: 100,
@@ -111,7 +113,8 @@ export async function getStockMovements(): Promise<StockMovementDto[]> {
 }
 
 export async function getStockMovementById(id: string): Promise<StockMovementDto> {
-  const movement = await getStockMovementRecordById(id);
+  const currentUser = await requireOrganizationUser();
+  const movement = await getStockMovementRecordById(id, currentUser.organizationId);
   if (!movement) throw new OperationsServiceError("Mouvement introuvable.", 404);
   return mapStockMovementToDto(movement);
 }
@@ -119,8 +122,10 @@ export async function getStockMovementById(id: string): Promise<StockMovementDto
 export async function getStockMovementsByLocation(
   locationId: string,
 ): Promise<StockMovementDto[]> {
+  const currentUser = await requireOrganizationUser();
   const movements = await prisma.stockMovement.findMany({
     where: {
+      organizationId: currentUser.organizationId,
       OR: [{ sourceLocationId: locationId }, { destinationLocationId: locationId }],
     },
     include: stockMovementInclude,
@@ -132,8 +137,9 @@ export async function getStockMovementsByLocation(
 export async function getStockMovementsByProduct(
   productId: string,
 ): Promise<StockMovementDto[]> {
+  const currentUser = await requireOrganizationUser();
   const movements = await prisma.stockMovement.findMany({
-    where: { productId },
+    where: { productId, organizationId: currentUser.organizationId },
     include: stockMovementInclude,
     orderBy: { createdAt: "desc" },
   });
@@ -143,7 +149,7 @@ export async function getStockMovementsByProduct(
 export async function createStockAdjustment(
   input: StockAdjustmentInput,
 ): Promise<{ level: StockLevelDto; movement: StockMovementDto }> {
-  const sessionUser = await requireSessionUser(["admin", "depot_manager"]);
+  const sessionUser = await requireOrganizationUser(["admin", "depot_manager"]);
   const parsed = stockAdjustmentSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -160,6 +166,7 @@ export async function createStockAdjustment(
 
   const movement = await applyStockMovement({
     ...parsed.data,
+    organizationId: sessionUser.organizationId,
     createdByUserId: sessionUser.id,
   });
   return {
@@ -168,12 +175,17 @@ export async function createStockAdjustment(
   };
 }
 
-export async function applyStockMovement(input: z.infer<typeof stockAdjustmentSchema>) {
+export async function applyStockMovement(
+  input: z.infer<typeof stockAdjustmentSchema> & { organizationId: string },
+) {
   const movement = await prisma.$transaction(async (tx) => {
     const [product, location, user] = await Promise.all([
-      tx.product.findUnique({ where: { id: input.productId }, select: { id: true } }),
-      tx.stockLocation.findUnique({
-        where: { id: input.locationId },
+      tx.product.findFirst({
+        where: { id: input.productId, organizationId: input.organizationId },
+        select: { id: true },
+      }),
+      tx.stockLocation.findFirst({
+        where: { id: input.locationId, organizationId: input.organizationId },
         select: {
           id: true,
           type: true,
@@ -182,7 +194,9 @@ export async function applyStockMovement(input: z.infer<typeof stockAdjustmentSc
         },
       }),
       tx.user.findFirst({
-        where: input.createdByUserId ? { id: input.createdByUserId } : { role: "ADMIN" },
+        where: input.createdByUserId
+          ? { id: input.createdByUserId, organizationId: input.organizationId }
+          : { role: "ADMIN", organizationId: input.organizationId },
         select: { id: true },
       }),
     ]);
@@ -202,6 +216,7 @@ export async function applyStockMovement(input: z.infer<typeof stockAdjustmentSc
     if (location.type === "TRUCK" && location.truckId) {
       const activeTour = await tx.tour.findFirst({
         where: {
+          organizationId: input.organizationId,
           truckId: location.truckId,
           status: "IN_PROGRESS",
         },
@@ -227,6 +242,7 @@ export async function applyStockMovement(input: z.infer<typeof stockAdjustmentSc
       },
       update: {},
       create: {
+        organizationId: input.organizationId,
         productId: input.productId,
         locationId: input.locationId,
         quantity: 0,
@@ -259,7 +275,8 @@ export async function applyStockMovement(input: z.infer<typeof stockAdjustmentSc
 
     return tx.stockMovement.create({
       data: {
-        movementNumber: await nextMovementNumber(tx),
+        organizationId: input.organizationId,
+        movementNumber: await nextMovementNumber(tx, input.organizationId),
         type: "INVENTORY_ADJUSTMENT",
         productId: input.productId,
         quantity: Math.abs(delta),
@@ -284,9 +301,9 @@ export async function applyStockMovement(input: z.infer<typeof stockAdjustmentSc
   return mapStockMovementToDto(movement);
 }
 
-async function getStockMovementRecordById(id: string) {
-  return prisma.stockMovement.findUnique({
-    where: { id },
+async function getStockMovementRecordById(id: string, organizationId: string) {
+  return prisma.stockMovement.findFirst({
+    where: { id, organizationId },
     include: stockMovementInclude,
   });
 }

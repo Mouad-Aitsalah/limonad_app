@@ -3,8 +3,8 @@ import "server-only";
 import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { UserRole } from "@/types/auth";
 import type {
   ContactDto,
@@ -66,9 +66,10 @@ const contactInputSchema = z.object({
 });
 
 export async function getContacts(): Promise<ContactsPayload> {
-  await requireSessionUser(contactManagerRoles);
+  const currentUser = await requireOrganizationUser(contactManagerRoles);
 
   const contacts = await prisma.contact.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: contactInclude,
     orderBy: [{ createdAt: "desc" }, { reference: "asc" }],
   });
@@ -87,10 +88,10 @@ export async function getContacts(): Promise<ContactsPayload> {
 }
 
 export async function getContactById(id: string): Promise<ContactDto> {
-  await requireSessionUser(contactManagerRoles);
+  const currentUser = await requireOrganizationUser(contactManagerRoles);
 
-  const contact = await prisma.contact.findUnique({
-    where: { id },
+  const contact = await prisma.contact.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
     include: contactInclude,
   });
   if (!contact) {
@@ -100,19 +101,26 @@ export async function getContactById(id: string): Promise<ContactDto> {
 }
 
 export async function createContact(input: ContactInput): Promise<ContactDto> {
-  await requireSessionUser(contactManagerRoles);
+  const currentUser = await requireOrganizationUser(contactManagerRoles);
   const data = validateContactInput(input);
 
   if (data.supplierId) {
-    await assertSupplierExists(data.supplierId);
+    await assertSupplierExists(currentUser.organizationId, data.supplierId);
   }
 
   try {
     const contact = await prisma.contact.create({
       data: {
+        organization: {
+          connect: { id: currentUser.organizationId },
+        },
         reference: data.reference,
         fullName: data.fullName,
-        supplierId: data.supplierId,
+        supplier: data.supplierId
+          ? {
+              connect: { id: data.supplierId },
+            }
+          : undefined,
         phone1: data.phone1,
         phone2: data.phone2,
         email: data.email,
@@ -135,16 +143,19 @@ export async function createContact(input: ContactInput): Promise<ContactDto> {
  * 409 instead of a raw Prisma error) is the only real constraint.
  */
 export async function updateContact(id: string, input: ContactInput): Promise<ContactDto> {
-  await requireSessionUser(contactManagerRoles);
+  const currentUser = await requireOrganizationUser(contactManagerRoles);
   const data = validateContactInput(input);
 
-  const existing = await prisma.contact.findUnique({ where: { id }, select: { id: true } });
+  const existing = await prisma.contact.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
+    select: { id: true },
+  });
   if (!existing) {
     throw new OperationsServiceError("Contact introuvable.", 404);
   }
 
   if (data.supplierId) {
-    await assertSupplierExists(data.supplierId);
+    await assertSupplierExists(currentUser.organizationId, data.supplierId);
   }
 
   try {
@@ -153,7 +164,11 @@ export async function updateContact(id: string, input: ContactInput): Promise<Co
       data: {
         reference: data.reference,
         fullName: data.fullName,
-        supplierId: data.supplierId,
+        supplier: data.supplierId
+          ? {
+              connect: { id: data.supplierId },
+            }
+          : { disconnect: true },
         phone1: data.phone1,
         phone2: data.phone2,
         email: data.email,
@@ -183,9 +198,9 @@ function validateContactInput(input: ContactInput) {
   return parsed.data;
 }
 
-async function assertSupplierExists(supplierId: string) {
-  const supplier = await prisma.supplier.findUnique({
-    where: { id: supplierId },
+async function assertSupplierExists(organizationId: string, supplierId: string) {
+  const supplier = await prisma.supplier.findFirst({
+    where: { id: supplierId, organizationId },
     select: { id: true },
   });
   if (!supplier) {

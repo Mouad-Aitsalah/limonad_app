@@ -5,12 +5,12 @@ import { z } from "zod";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { normalizeAccountCode } from "@/lib/server/accounting";
-import { requireSessionUser } from "@/lib/server/auth";
 import {
   getEmployeePayrollContext,
   listEmployeeTransactions,
 } from "@/lib/server/employee-transactions";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { AccountingAccountType } from "@/types/accounting";
 import type { UserRole } from "@/types/auth";
 import type {
@@ -78,9 +78,10 @@ const employeeInputSchema = z.object({
 });
 
 export async function getEmployees(): Promise<EmployeesPayload> {
-  await requireSessionUser(employeeManagerRoles);
+  const currentUser = await requireOrganizationUser(employeeManagerRoles);
 
   const employees = await prisma.employee.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: employeeInclude,
     orderBy: [{ createdAt: "desc" }, { employeeCode: "asc" }],
   });
@@ -89,6 +90,7 @@ export async function getEmployees(): Promise<EmployeesPayload> {
   const period = getCurrentPayrollPeriod();
   const monthlyAdvancesAgg = await prisma.employeeTransaction.aggregate({
     where: {
+      organizationId: currentUser.organizationId,
       type: "ADVANCE",
       status: "VALIDATED",
       payrollYear: period.payrollYear,
@@ -113,8 +115,11 @@ export async function getEmployees(): Promise<EmployeesPayload> {
 }
 
 export async function getEmployeeById(id: string): Promise<EmployeeDto> {
-  await requireSessionUser(employeeManagerRoles);
-  const employee = await prisma.employee.findUnique({ where: { id }, include: employeeInclude });
+  const currentUser = await requireOrganizationUser(employeeManagerRoles);
+  const employee = await prisma.employee.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
+    include: employeeInclude,
+  });
   if (!employee) {
     throw new OperationsServiceError("Employe introuvable.", 404);
   }
@@ -122,10 +127,13 @@ export async function getEmployeeById(id: string): Promise<EmployeeDto> {
 }
 
 export async function getEmployeeOptions(): Promise<EmployeeOptionDto[]> {
-  await requireSessionUser(employeeManagerRoles);
+  const currentUser = await requireOrganizationUser(employeeManagerRoles);
 
   const employees = await prisma.employee.findMany({
-    where: { status: "ACTIVE" },
+    where: {
+      organizationId: currentUser.organizationId,
+      status: "ACTIVE",
+    },
     include: employeeInclude,
     orderBy: [{ fullName: "asc" }, { employeeCode: "asc" }],
   });
@@ -145,10 +153,10 @@ export async function getEmployeeDetail(
   id: string,
   input?: { payrollYear?: number | null; payrollMonth?: number | null },
 ): Promise<EmployeeDetailPayload> {
-  await requireSessionUser(employeeManagerRoles);
+  const currentUser = await requireOrganizationUser(employeeManagerRoles);
 
-  const employee = await prisma.employee.findUnique({
-    where: { id },
+  const employee = await prisma.employee.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
     include: employeeInclude,
   });
   if (!employee) {
@@ -173,29 +181,42 @@ export async function getEmployeeDetail(
 }
 
 export async function createEmployee(input: EmployeeInput): Promise<EmployeeDto> {
-  await requireSessionUser(employeeManagerRoles);
+  const currentUser = await requireOrganizationUser(employeeManagerRoles);
   const data = validateEmployeeInput(input);
 
   try {
     const employee = await withSerializableRetry(() =>
       prisma.$transaction(
         async (tx) => {
-          await assertUniqueEmployeeCode(tx, data.employeeCode);
-          const advanceAccountId = await resolveEmployeeAccountingLink(tx, {
+          await assertUniqueEmployeeCode(
+            tx,
+            currentUser.organizationId,
+            data.employeeCode,
+          );
+          const advanceAccountId = await resolveEmployeeAccountingLink(
+            tx,
+            currentUser.organizationId,
+            {
             code: data.advanceAccountCode,
             name: buildEmployeeAdvanceAccountName(data.fullName),
             type: "RECEIVABLE",
             field: "advanceAccountCode",
-          });
-          const salaryAccountId = await resolveEmployeeAccountingLink(tx, {
+            },
+          );
+          const salaryAccountId = await resolveEmployeeAccountingLink(
+            tx,
+            currentUser.organizationId,
+            {
             code: data.salaryAccountCode,
             name: buildEmployeeSalaryAccountName(data.fullName),
             type: "PAYABLE",
             field: "salaryAccountCode",
-          });
+            },
+          );
 
           return tx.employee.create({
             data: {
+              organizationId: currentUser.organizationId,
               employeeCode: data.employeeCode,
               fullName: data.fullName,
               hireDate: parseDate(data.hireDate),
@@ -223,34 +244,47 @@ export async function createEmployee(input: EmployeeInput): Promise<EmployeeDto>
  * past advances/bonuses are never silently altered by a later edit.
  */
 export async function updateEmployee(id: string, input: EmployeeInput): Promise<EmployeeDto> {
-  await requireSessionUser(employeeManagerRoles);
+  const currentUser = await requireOrganizationUser(employeeManagerRoles);
   const data = validateEmployeeInput(input);
 
   try {
     const employee = await withSerializableRetry(() =>
       prisma.$transaction(
         async (tx) => {
-          const existing = await tx.employee.findUnique({
-            where: { id },
+          const existing = await tx.employee.findFirst({
+            where: { id, organizationId: currentUser.organizationId },
             select: { id: true },
           });
           if (!existing) {
             throw new OperationsServiceError("Employe introuvable.", 404);
           }
 
-          await assertUniqueEmployeeCode(tx, data.employeeCode, id);
-          const advanceAccountId = await resolveEmployeeAccountingLink(tx, {
+          await assertUniqueEmployeeCode(
+            tx,
+            currentUser.organizationId,
+            data.employeeCode,
+            id,
+          );
+          const advanceAccountId = await resolveEmployeeAccountingLink(
+            tx,
+            currentUser.organizationId,
+            {
             code: data.advanceAccountCode,
             name: buildEmployeeAdvanceAccountName(data.fullName),
             type: "RECEIVABLE",
             field: "advanceAccountCode",
-          });
-          const salaryAccountId = await resolveEmployeeAccountingLink(tx, {
+            },
+          );
+          const salaryAccountId = await resolveEmployeeAccountingLink(
+            tx,
+            currentUser.organizationId,
+            {
             code: data.salaryAccountCode,
             name: buildEmployeeSalaryAccountName(data.fullName),
             type: "PAYABLE",
             field: "salaryAccountCode",
-          });
+            },
+          );
 
           return tx.employee.update({
             where: { id },
@@ -292,11 +326,12 @@ function validateEmployeeInput(input: EmployeeInput) {
 
 async function assertUniqueEmployeeCode(
   db: DbClient,
+  organizationId: string,
   employeeCode: string,
   employeeIdToIgnore?: string,
 ) {
-  const existing = await db.employee.findUnique({
-    where: { employeeCode },
+  const existing = await db.employee.findFirst({
+    where: { employeeCode, organizationId },
     select: { id: true },
   });
   if (existing && existing.id !== employeeIdToIgnore) {
@@ -308,6 +343,7 @@ async function assertUniqueEmployeeCode(
 
 async function resolveEmployeeAccountingLink(
   db: DbClient,
+  organizationId: string,
   input: {
     code: string;
     name: string;
@@ -316,8 +352,8 @@ async function resolveEmployeeAccountingLink(
   },
 ) {
   const normalizedCode = normalizeAccountCode(input.code);
-  const existing = await db.accountingAccount.findUnique({
-    where: { code: normalizedCode },
+  const existing = await db.accountingAccount.findFirst({
+    where: { code: normalizedCode, organizationId },
     select: { id: true, type: true },
   });
 
@@ -336,6 +372,7 @@ async function resolveEmployeeAccountingLink(
 
   const created = await db.accountingAccount.create({
     data: {
+      organizationId,
       code: normalizedCode,
       name: input.name,
       type: input.type,

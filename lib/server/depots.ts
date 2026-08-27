@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { DepotDto } from "@/types/operations-dto";
 
 export class OperationsServiceError extends Error {
@@ -38,14 +39,19 @@ export function mapDepotToDto(depot: {
 }
 
 export async function getDepots(): Promise<DepotDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const depots = await prisma.depot.findMany({
+    where: { organizationId: currentUser.organizationId },
     orderBy: { name: "asc" },
   });
   return depots.map(mapDepotToDto);
 }
 
 export async function getDepotById(id: string): Promise<DepotDto> {
-  const depot = await prisma.depot.findUnique({ where: { id } });
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const depot = await prisma.depot.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
+  });
   if (!depot) throw new OperationsServiceError("Depot introuvable.", 404);
   return mapDepotToDto(depot);
 }

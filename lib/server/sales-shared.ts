@@ -1,5 +1,8 @@
+import "server-only";
+
 import type { SaleGetPayload } from "@/lib/generated/prisma/models/Sale";
 import { prisma } from "@/lib/prisma";
+import { getCurrentSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import type { SaleDto } from "@/types/operations-dto";
 
@@ -122,11 +125,17 @@ export async function resolveSaleSequencing(
   tx: Pick<typeof prisma, "sale" | "posSession">,
   now: Date,
   userId: string,
+  organizationId?: string,
 ) {
+  const scopedOrganizationId =
+    organizationId ?? (await resolveOrganizationIdFromUserId(userId));
   const year = now.getFullYear();
   const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const lastSession = await tx.posSession.findFirst({ orderBy: { number: "desc" } });
+  const lastSession = await tx.posSession.findFirst({
+    where: { organizationId: scopedOrganizationId },
+    orderBy: { number: "desc" },
+  });
   const reuseExisting =
     lastSession !== null && lastSession.status === "OPEN" && lastSession.openedAt >= dayStart;
 
@@ -142,6 +151,7 @@ export async function resolveSaleSequencing(
     }
     const created = await tx.posSession.create({
       data: {
+        organizationId: scopedOrganizationId,
         number: (lastSession?.number ?? 0) + 1,
         year,
         openedAt: now,
@@ -152,7 +162,12 @@ export async function resolveSaleSequencing(
     posSessionId = created.id;
   }
 
-  const saleCount = await tx.sale.count({ where: { saleYear: year } });
+  const saleCount = await tx.sale.count({
+    where: {
+      organizationId: scopedOrganizationId,
+      saleYear: year,
+    },
+  });
 
   return { saleYear: year, saleNumber: saleCount + 1, posSessionId };
 }
@@ -160,24 +175,69 @@ export async function resolveSaleSequencing(
 export async function nextInvoiceNumber(
   tx: Pick<typeof prisma, "sale">,
   scopeCode: string,
+  organizationId?: string,
 ) {
+  const scopedOrganizationId =
+    organizationId ?? (await resolveCurrentOrganizationId());
   const today = new Date();
   const date = `${today.getUTCFullYear()}${String(today.getUTCMonth() + 1).padStart(2, "0")}${String(today.getUTCDate()).padStart(2, "0")}`;
   const prefix = `VC-${date}-${scopeCode}-`;
-  const count = await tx.sale.count({ where: { invoiceNumber: { startsWith: prefix } } });
+  const count = await tx.sale.count({
+    where: {
+      organizationId: scopedOrganizationId,
+      invoiceNumber: { startsWith: prefix },
+    },
+  });
   return `${prefix}${String(count + 1).padStart(6, "0")}`;
 }
 
-export async function nextPaymentNumber(tx: Pick<typeof prisma, "payment">) {
-  const count = await tx.payment.count();
+export async function nextPaymentNumber(
+  tx: Pick<typeof prisma, "payment">,
+  organizationId?: string,
+) {
+  const scopedOrganizationId =
+    organizationId ?? (await resolveCurrentOrganizationId());
+  const count = await tx.payment.count({
+    where: { organizationId: scopedOrganizationId },
+  });
   return `PAY-${String(count + 1).padStart(6, "0")}`;
 }
 
-export async function nextMovementNumber(tx: Pick<typeof prisma, "stockMovement">) {
-  const count = await tx.stockMovement.count();
+export async function nextMovementNumber(
+  tx: Pick<typeof prisma, "stockMovement">,
+  organizationId?: string,
+) {
+  const scopedOrganizationId =
+    organizationId ?? (await resolveCurrentOrganizationId());
+  const count = await tx.stockMovement.count({
+    where: { organizationId: scopedOrganizationId },
+  });
   return `MV-${String(count + 1).padStart(6, "0")}`;
 }
 
 export function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+async function resolveOrganizationIdFromUserId(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { organizationId: true },
+  });
+
+  if (!user?.organizationId) {
+    throw new OperationsServiceError("Aucune organisation n'est associee a cet utilisateur.", 403);
+  }
+
+  return user.organizationId;
+}
+
+async function resolveCurrentOrganizationId() {
+  const currentUser = await getCurrentSessionUser();
+
+  if (!currentUser?.organizationId) {
+    throw new OperationsServiceError("Aucune organisation n'est associee a cette session.", 403);
+  }
+
+  return currentUser.organizationId;
 }

@@ -7,6 +7,8 @@ export type User = {
   telephone: string;
   role: UserRole;
   actif: boolean;
+  organizationId: string | null;
+  organizationName: string | null;
   derniereConnexion: Date | null;
   createdAt: Date;
   updatedAt: Date;

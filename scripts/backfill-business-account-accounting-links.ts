@@ -37,10 +37,15 @@ async function main() {
 
   const expenses = await prisma.expenseAccount.findMany({
     where: { accountingAccountId: null },
-    select: { id: true, code: true, name: true },
+    select: { id: true, organizationId: true, code: true, name: true },
   });
   for (const expense of expenses) {
-    const linked = await linkByCode(expense.code, expense.name, "EXPENSE");
+    const linked = await linkByCode(
+      expense.organizationId,
+      expense.code,
+      expense.name,
+      "EXPENSE",
+    );
     if (linked === "skipped") {
       skippedNonNumeric.push(`Charge ${expense.code} (${expense.name})`);
       continue;
@@ -54,10 +59,15 @@ async function main() {
 
   const treasuries = await prisma.treasuryAccount.findMany({
     where: { accountingAccountId: null },
-    select: { id: true, code: true, name: true },
+    select: { id: true, organizationId: true, code: true, name: true },
   });
   for (const treasury of treasuries) {
-    const linked = await linkByCode(treasury.code, treasury.name, "TREASURY");
+    const linked = await linkByCode(
+      treasury.organizationId,
+      treasury.code,
+      treasury.name,
+      "TREASURY",
+    );
     if (linked === "skipped") {
       skippedNonNumeric.push(`Tresorerie ${treasury.code} (${treasury.name})`);
       continue;
@@ -69,17 +79,31 @@ async function main() {
     treasuryLinked += 1;
   }
 
-  const customers = await prisma.customer.findMany({ select: { code: true, name: true } });
+  const customers = await prisma.customer.findMany({
+    select: { organizationId: true, code: true, name: true },
+  });
   for (const customer of customers) {
     const code = resolveCustomerAuxiliaryCode(customer.code);
-    const linked = await linkByCode(code, customer.name, "RECEIVABLE");
+    const linked = await linkByCode(
+      customer.organizationId,
+      code,
+      customer.name,
+      "RECEIVABLE",
+    );
     if (linked !== "skipped") customersWarmed += 1;
   }
 
-  const suppliers = await prisma.supplier.findMany({ select: { code: true, name: true } });
+  const suppliers = await prisma.supplier.findMany({
+    select: { organizationId: true, code: true, name: true },
+  });
   for (const supplier of suppliers) {
     const code = resolveSupplierAuxiliaryCode(supplier.code);
-    const linked = await linkByCode(code, supplier.name, "PAYABLE");
+    const linked = await linkByCode(
+      supplier.organizationId,
+      code,
+      supplier.name,
+      "PAYABLE",
+    );
     if (linked !== "skipped") suppliersWarmed += 1;
   }
 
@@ -103,6 +127,7 @@ async function main() {
  * "skipped" for codes that aren't real accounting-plan numbers.
  */
 async function linkByCode(
+  organizationId: string,
   rawCode: string,
   name: string,
   type: $Enums.AccountingAccountType,
@@ -111,7 +136,12 @@ async function linkByCode(
   if (!/^\d+$/.test(code)) return "skipped";
 
   const existing = await prisma.accountingAccount.findUnique({
-    where: { code },
+    where: {
+      organizationId_code: {
+        organizationId,
+        code,
+      },
+    },
     select: { id: true, type: true },
   });
   if (existing) {
@@ -125,7 +155,7 @@ async function linkByCode(
   }
 
   const created = await prisma.accountingAccount.create({
-    data: { code, name, type, isActive: true },
+    data: { organizationId, code, name, type, isActive: true },
     select: { id: true },
   });
   return created.id;

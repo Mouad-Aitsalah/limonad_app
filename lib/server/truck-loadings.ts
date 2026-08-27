@@ -4,8 +4,9 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import type { TruckLoadingGetPayload } from "@/lib/generated/prisma/models/TruckLoading";
-import { AuthServiceError, requireSessionUser } from "@/lib/server/auth";
+import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { nextMovementNumber } from "@/lib/server/sales-shared";
 import type {
   TruckLoadingCreateInput,
@@ -108,12 +109,18 @@ export async function mapTruckLoadingToDto(
   loading: TruckLoadingWithRelations,
 ): Promise<TruckLoadingDto> {
   const [depotLocation, truckLocation] = await Promise.all([
-    prisma.stockLocation.findUnique({
-      where: { depotId: loading.depotId },
+    prisma.stockLocation.findFirst({
+      where: {
+        organizationId: loading.organizationId,
+        depotId: loading.depotId,
+      },
       select: { id: true },
     }),
-    prisma.stockLocation.findUnique({
-      where: { truckId: loading.truckId },
+    prisma.stockLocation.findFirst({
+      where: {
+        organizationId: loading.organizationId,
+        truckId: loading.truckId,
+      },
       select: { id: true },
     }),
   ]);
@@ -121,6 +128,7 @@ export async function mapTruckLoadingToDto(
   const productIds = loading.lines.map((line) => line.productId);
   const levels = await prisma.stockLevel.findMany({
     where: {
+      organizationId: loading.organizationId,
       productId: { in: productIds },
       locationId: {
         in: [depotLocation?.id, truckLocation?.id].filter(
@@ -197,8 +205,16 @@ export async function mapTruckLoadingToDto(
   };
 }
 
-export async function getLoadingByTourId(tourId: string): Promise<TruckLoadingDto | null> {
-  const loading = await getLoadingRecordByTourId(tourId);
+export async function getLoadingByTourId(
+  tourId: string,
+  organizationId?: string,
+): Promise<TruckLoadingDto | null> {
+  const resolvedOrganizationId =
+    organizationId ??
+    (
+      await requireOrganizationUser(["admin", "depot_manager", "cashier", "driver"])
+    ).organizationId;
+  const loading = await getLoadingRecordByTourId(tourId, resolvedOrganizationId);
   return loading ? mapTruckLoadingToDto(loading) : null;
 }
 
@@ -215,9 +231,13 @@ const truckLoadingCreateSchema = z.object({
 });
 
 export async function getOpenLoadingForTruck(truckId: string): Promise<TruckLoadingDto | null> {
-  await requireSessionUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
   const loading = await prisma.truckLoading.findFirst({
-    where: { truckId, status: "DRAFT" },
+    where: {
+      organizationId: currentUser.organizationId,
+      truckId,
+      status: "DRAFT",
+    },
     include: loadingInclude,
     orderBy: { createdAt: "desc" },
   });
@@ -225,8 +245,9 @@ export async function getOpenLoadingForTruck(truckId: string): Promise<TruckLoad
 }
 
 export async function getLoadingHistory(): Promise<TruckLoadingDto[]> {
-  await requireSessionUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
   const loadings = await prisma.truckLoading.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: loadingInclude,
     orderBy: [{ loadingYear: "desc" }, { loadingSequence: "desc" }, { createdAt: "desc" }],
   });
@@ -234,9 +255,9 @@ export async function getLoadingHistory(): Promise<TruckLoadingDto[]> {
 }
 
 export async function getLoadingById(id: string): Promise<TruckLoadingDto> {
-  await requireSessionUser(["admin", "depot_manager"]);
-  const loading = await prisma.truckLoading.findUnique({
-    where: { id },
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
+  const loading = await prisma.truckLoading.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
     include: loadingInclude,
   });
   if (!loading) throw new OperationsServiceError("Chargement introuvable.", 404);
@@ -252,7 +273,7 @@ export async function getLoadingById(id: string): Promise<TruckLoadingDto> {
 export async function createOrReuseOpenLoading(
   input: TruckLoadingCreateInput,
 ): Promise<{ loading: TruckLoadingDto; reused: boolean }> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const parsed = truckLoadingCreateSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -268,15 +289,22 @@ export async function createOrReuseOpenLoading(
     return prisma.$transaction(
       async (tx) => {
         const existingOpen = await tx.truckLoading.findFirst({
-          where: { truckId: parsed.data.truckId, status: "DRAFT" },
+          where: {
+            organizationId: user.organizationId,
+            truckId: parsed.data.truckId,
+            status: "DRAFT",
+          },
           include: loadingInclude,
         });
         if (existingOpen) {
           return { loading: existingOpen, reused: true };
         }
 
-        const truck = await tx.truck.findUnique({
-          where: { id: parsed.data.truckId },
+        const truck = await tx.truck.findFirst({
+          where: {
+            id: parsed.data.truckId,
+            organizationId: user.organizationId,
+          },
           select: { id: true, depotId: true, status: true },
         });
         if (!truck) throw new OperationsServiceError("Camion introuvable.", 404);
@@ -284,18 +312,22 @@ export async function createOrReuseOpenLoading(
           throw new OperationsServiceError("Le camion est inactif.", 422);
         }
 
-        const driver = await tx.driver.findUnique({
-          where: { id: parsed.data.driverId },
+        const driver = await tx.driver.findFirst({
+          where: {
+            id: parsed.data.driverId,
+            organizationId: user.organizationId,
+          },
           select: { id: true, active: true },
         });
         if (!driver?.active) {
           throw new OperationsServiceError("Chauffeur introuvable ou inactif.", 404);
         }
 
-        const { year, sequence } = await nextLoadingSequence(tx);
+        const { year, sequence } = await nextLoadingSequence(tx, user.organizationId);
 
         const created = await tx.truckLoading.create({
           data: {
+            organizationId: user.organizationId,
             loadingNumber: `CHG/${sequence}/${year}`,
             loadingYear: year,
             loadingSequence: sequence,
@@ -329,13 +361,16 @@ export async function updateOpenLoadingLines(
   loadingId: string,
   input: TruckLoadingMutationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const lines = validateLoadingLines(input);
 
   const loading = await prisma.$transaction(
     async (tx) => {
-      const current = await tx.truckLoading.findUnique({
-        where: { id: loadingId },
+      const current = await tx.truckLoading.findFirst({
+        where: {
+          id: loadingId,
+          organizationId: user.organizationId,
+        },
         select: {
           id: true,
           loadingNumber: true,
@@ -353,10 +388,11 @@ export async function updateOpenLoadingLines(
         throw new OperationsServiceError("Ce chargement est ferme et n'est plus modifiable.", 409);
       }
 
-      await assertProductsExist(tx, lines.map((line) => line.productId));
+      await assertProductsExist(tx, lines.map((line) => line.productId), user.organizationId);
 
       const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
         tx,
+        user.organizationId,
         current.depotId,
         current.truckId,
       );
@@ -369,6 +405,7 @@ export async function updateOpenLoadingLines(
         previousLines: current.lines,
         nextLines: lines,
         stockAlreadyApplied: Boolean(current.stockAppliedAt),
+        organizationId: user.organizationId,
         userId: user.id,
       });
 
@@ -406,7 +443,7 @@ export async function closeLoading(
   loadingId: string,
   input: TruckLoadingValidationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const parsed = truckLoadingValidationSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -423,8 +460,11 @@ export async function closeLoading(
 
   const loading = await prisma.$transaction(
     async (tx) => {
-      const current = await tx.truckLoading.findUnique({
-        where: { id: loadingId },
+      const current = await tx.truckLoading.findFirst({
+        where: {
+          id: loadingId,
+          organizationId: user.organizationId,
+        },
         select: {
           id: true,
           loadingNumber: true,
@@ -450,6 +490,7 @@ export async function closeLoading(
 
       const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
         tx,
+        user.organizationId,
         current.depotId,
         current.truckId,
       );
@@ -471,6 +512,7 @@ export async function closeLoading(
             quantity: line.quantity,
           })),
           stockAlreadyApplied: false,
+          organizationId: user.organizationId,
           userId: user.id,
         });
 
@@ -481,7 +523,11 @@ export async function closeLoading(
       }
 
       const stockedProductIds = await tx.stockLevel.findMany({
-        where: { locationId: truckLocationId, quantity: { gt: 0 } },
+        where: {
+          organizationId: user.organizationId,
+          locationId: truckLocationId,
+          quantity: { gt: 0 },
+        },
         select: { productId: true },
       });
       const requiredProductIds = new Set([
@@ -508,6 +554,7 @@ export async function closeLoading(
         loadingId: current.id,
         loadingNumber: current.loadingNumber,
         truckLocationId,
+        organizationId: user.organizationId,
         lines: parsed.data.lines,
         userId: user.id,
       });
@@ -555,7 +602,7 @@ export async function updateLoadingLines(
   loadingId: string,
   input: TruckLoadingEditInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const parsed = truckLoadingEditSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -581,8 +628,11 @@ export async function updateLoadingLines(
 
   const loading = await prisma.$transaction(
     async (tx) => {
-      const current = await tx.truckLoading.findUnique({
-        where: { id: loadingId },
+      const current = await tx.truckLoading.findFirst({
+        where: {
+          id: loadingId,
+          organizationId: user.organizationId,
+        },
         select: {
           id: true,
           loadingNumber: true,
@@ -600,7 +650,11 @@ export async function updateLoadingLines(
         throw new OperationsServiceError("Chargement annule, modification impossible.", 409);
       }
 
-      await assertProductsExist(tx, parsed.data.lines.map((line) => line.productId));
+      await assertProductsExist(
+        tx,
+        parsed.data.lines.map((line) => line.productId),
+        user.organizationId,
+      );
 
       if (current.status === "VALIDATED") {
         const missingProductIds = parsed.data.lines
@@ -622,6 +676,7 @@ export async function updateLoadingLines(
 
       const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
         tx,
+        user.organizationId,
         current.depotId,
         current.truckId,
       );
@@ -641,6 +696,7 @@ export async function updateLoadingLines(
         previousLines: current.lines,
         nextLines,
         stockAlreadyApplied: Boolean(current.stockAppliedAt),
+        organizationId: user.organizationId,
         userId: user.id,
       });
 
@@ -659,6 +715,7 @@ export async function updateLoadingLines(
           loadingId: current.id,
           loadingNumber: current.loadingNumber,
           truckLocationId,
+          organizationId: user.organizationId,
           lines: parsed.data.lines.map((line) => ({
             productId: line.productId,
             actualRemainingQuantity: line.actualRemainingQuantity as number,
@@ -679,6 +736,7 @@ export async function updateLoadingLines(
 
       await tx.auditLog.create({
         data: {
+          organizationId: user.organizationId,
           userId: user.id,
           action: "TRUCK_LOADING_LINES_UPDATED",
           entityType: "TruckLoading",
@@ -706,6 +764,7 @@ async function applyActualRemainingQuantitiesOnLine(
     loadingId: string;
     loadingNumber: string;
     truckLocationId: string;
+    organizationId: string;
     lines: { productId: string; actualRemainingQuantity: number }[];
     userId: string;
   },
@@ -729,6 +788,7 @@ async function applyActualRemainingQuantitiesOnLine(
         },
         update: { quantity: actualQuantity },
         create: {
+          organizationId: input.organizationId,
           productId: line.productId,
           locationId: input.truckLocationId,
           quantity: actualQuantity,
@@ -738,7 +798,8 @@ async function applyActualRemainingQuantitiesOnLine(
 
       await tx.stockMovement.create({
         data: {
-          movementNumber: await nextMovementNumber(tx),
+          organizationId: input.organizationId,
+          movementNumber: await nextMovementNumber(tx, input.organizationId),
           type: "INVENTORY_ADJUSTMENT",
           productId: line.productId,
           quantity: Math.abs(difference),
@@ -786,9 +847,17 @@ async function applyActualRemainingQuantitiesOnLine(
   }
 }
 
-async function nextLoadingSequence(tx: Pick<typeof prisma, "truckLoading">) {
+async function nextLoadingSequence(
+  tx: Pick<typeof prisma, "truckLoading">,
+  organizationId: string,
+) {
   const year = new Date().getFullYear();
-  const count = await tx.truckLoading.count({ where: { loadingYear: year } });
+  const count = await tx.truckLoading.count({
+    where: {
+      organizationId,
+      loadingYear: year,
+    },
+  });
   return { year, sequence: count + 1 };
 }
 
@@ -815,13 +884,16 @@ export async function createLoading(
   tourId: string,
   input: TruckLoadingMutationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const lines = validateLoadingLines(input);
 
   const loading = await prisma.$transaction(
     async (tx) => {
-      const tour = await tx.tour.findUnique({
-        where: { id: tourId },
+      const tour = await tx.tour.findFirst({
+        where: {
+          id: tourId,
+          organizationId: user.organizationId,
+        },
         select: {
           id: true,
           depotId: true,
@@ -840,11 +912,12 @@ export async function createLoading(
         throw new OperationsServiceError("Cette tournee possede deja un chargement.", 409);
       }
 
-      await assertProductsExist(tx, lines.map((line) => line.productId));
+      await assertProductsExist(tx, lines.map((line) => line.productId), user.organizationId);
 
       const created = await tx.truckLoading.create({
         data: {
-          loadingNumber: await nextLoadingNumber(tx),
+          organizationId: user.organizationId,
+          loadingNumber: await nextLoadingNumber(tx, user.organizationId),
           tourId: tour.id,
           depotId: tour.depotId,
           truckId: tour.truckId,
@@ -856,6 +929,7 @@ export async function createLoading(
 
       const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
         tx,
+        user.organizationId,
         created.depotId,
         created.truckId,
       );
@@ -868,6 +942,7 @@ export async function createLoading(
         previousLines: [],
         nextLines: lines,
         stockAlreadyApplied: false,
+        organizationId: user.organizationId,
         userId: user.id,
       });
 
@@ -896,13 +971,16 @@ export async function updateDraftLoading(
   tourId: string,
   input: TruckLoadingMutationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const lines = validateLoadingLines(input);
 
   const loading = await prisma.$transaction(
     async (tx) => {
-      const current = await tx.truckLoading.findUnique({
-        where: { tourId },
+      const current = await tx.truckLoading.findFirst({
+        where: {
+          tourId,
+          organizationId: user.organizationId,
+        },
         select: {
           id: true,
           loadingNumber: true,
@@ -924,10 +1002,11 @@ export async function updateDraftLoading(
         throw new OperationsServiceError("Un chargement valide est en lecture seule.", 409);
       }
 
-      await assertProductsExist(tx, lines.map((line) => line.productId));
+      await assertProductsExist(tx, lines.map((line) => line.productId), user.organizationId);
 
       const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
         tx,
+        user.organizationId,
         current.depotId,
         current.truckId,
       );
@@ -940,6 +1019,7 @@ export async function updateDraftLoading(
         previousLines: current.lines,
         nextLines: lines,
         stockAlreadyApplied: Boolean(current.stockAppliedAt),
+        organizationId: user.organizationId,
         userId: user.id,
       });
 
@@ -968,11 +1048,14 @@ export async function updateDraftLoading(
 }
 
 export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const loading = await prisma.$transaction(
     async (tx) => {
-      const current = await tx.truckLoading.findUnique({
-        where: { tourId },
+      const current = await tx.truckLoading.findFirst({
+        where: {
+          tourId,
+          organizationId: user.organizationId,
+        },
         select: {
           id: true,
           loadingNumber: true,
@@ -997,6 +1080,7 @@ export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDt
       if (current.stockAppliedAt) {
         const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
           tx,
+          user.organizationId,
           current.depotId,
           current.truckId,
         );
@@ -1009,6 +1093,7 @@ export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDt
           previousLines: current.lines,
           nextLines: [],
           stockAlreadyApplied: true,
+          organizationId: user.organizationId,
           userId: user.id,
         });
       }
@@ -1029,7 +1114,7 @@ export async function validateLoading(
   tourId: string,
   input: TruckLoadingValidationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const parsed = truckLoadingValidationSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -1046,8 +1131,11 @@ export async function validateLoading(
 
   const loading = await prisma.$transaction(
     async (tx) => {
-      const current = await tx.truckLoading.findUnique({
-        where: { tourId },
+      const current = await tx.truckLoading.findFirst({
+        where: {
+          tourId,
+          organizationId: user.organizationId,
+        },
         include: {
           tour: { select: { id: true, status: true, depotId: true, truckId: true } },
           lines: {
@@ -1078,6 +1166,7 @@ export async function validateLoading(
 
       const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
         tx,
+        user.organizationId,
         current.depotId,
         current.truckId,
       );
@@ -1100,6 +1189,7 @@ export async function validateLoading(
             quantity: line.quantity,
           })),
           stockAlreadyApplied: false,
+          organizationId: user.organizationId,
           userId: user.id,
         });
 
@@ -1114,7 +1204,11 @@ export async function validateLoading(
       // count before the fiche can be validated. An omitted line is never
       // treated as 0.
       const stockedProductIds = await tx.stockLevel.findMany({
-        where: { locationId: truckLocationId, quantity: { gt: 0 } },
+        where: {
+          organizationId: user.organizationId,
+          locationId: truckLocationId,
+          quantity: { gt: 0 },
+        },
         select: { productId: true },
       });
       const requiredProductIds = new Set([
@@ -1142,6 +1236,7 @@ export async function validateLoading(
         loadingNumber: current.loadingNumber,
         tourId: current.tour.id,
         truckLocationId,
+        organizationId: user.organizationId,
         lines: parsed.data.lines,
         userId: user.id,
       });
@@ -1189,6 +1284,7 @@ async function applyActualRemainingQuantities(
     loadingNumber: string;
     tourId: string;
     truckLocationId: string;
+    organizationId: string;
     lines: { productId: string; actualRemainingQuantity: number }[];
     userId: string;
   },
@@ -1220,6 +1316,7 @@ async function applyActualRemainingQuantities(
         },
         update: { quantity: actualQuantity },
         create: {
+          organizationId: input.organizationId,
           productId: line.productId,
           locationId: input.truckLocationId,
           quantity: actualQuantity,
@@ -1229,7 +1326,8 @@ async function applyActualRemainingQuantities(
 
       await tx.stockMovement.create({
         data: {
-          movementNumber: await nextMovementNumber(tx),
+          organizationId: input.organizationId,
+          movementNumber: await nextMovementNumber(tx, input.organizationId),
           type: "INVENTORY_ADJUSTMENT",
           productId: line.productId,
           quantity: Math.abs(difference),
@@ -1273,9 +1371,12 @@ async function applyActualRemainingQuantities(
   }
 }
 
-async function getLoadingRecordByTourId(tourId: string) {
-  return prisma.truckLoading.findUnique({
-    where: { tourId },
+async function getLoadingRecordByTourId(tourId: string, organizationId: string) {
+  return prisma.truckLoading.findFirst({
+    where: {
+      tourId,
+      organizationId,
+    },
     include: loadingInclude,
   });
 }
@@ -1323,32 +1424,47 @@ function validateLoadingLines(input: TruckLoadingMutationInput): NormalizedLoadi
 async function assertProductsExist(
   tx: Pick<typeof prisma, "product">,
   productIds: string[],
+  organizationId: string,
 ) {
   const count = await tx.product.count({
-    where: { id: { in: productIds }, status: "ACTIVE" },
+    where: {
+      id: { in: productIds },
+      organizationId,
+      status: "ACTIVE",
+    },
   });
   if (count !== productIds.length) {
     throw new OperationsServiceError("Un produit du chargement est introuvable.", 422);
   }
 }
 
-async function nextLoadingNumber(tx: Pick<typeof prisma, "truckLoading">) {
-  const count = await tx.truckLoading.count();
+async function nextLoadingNumber(
+  tx: Pick<typeof prisma, "truckLoading">,
+  organizationId: string,
+) {
+  const count = await tx.truckLoading.count({ where: { organizationId } });
   return `CHG-${String(count + 1).padStart(6, "0")}`;
 }
 
 async function resolveLoadingLocationIds(
   tx: Pick<typeof prisma, "stockLocation">,
+  organizationId: string,
   depotId: string,
   truckId: string,
 ) {
   const [depotLocation, truckLocation] = await Promise.all([
-    tx.stockLocation.findUnique({
-      where: { depotId },
+    tx.stockLocation.findFirst({
+      where: {
+        organizationId,
+        depotId,
+      },
       select: { id: true, type: true },
     }),
-    tx.stockLocation.findUnique({
-      where: { truckId },
+    tx.stockLocation.findFirst({
+      where: {
+        organizationId,
+        truckId,
+      },
       select: { id: true, type: true },
     }),
   ]);
@@ -1376,6 +1492,7 @@ async function applyLoadingStockDelta(
     previousLines: PersistedLoadingLine[];
     nextLines: NormalizedLoadingLineInput[];
     stockAlreadyApplied: boolean;
+    organizationId: string;
     userId: string;
   },
 ) {
@@ -1444,6 +1561,7 @@ async function applyLoadingStockDelta(
         },
         update: { quantity: { increment: deltaQuantity } },
         create: {
+          organizationId: input.organizationId,
           productId,
           locationId: input.truckLocationId,
           quantity: deltaQuantity,
@@ -1479,6 +1597,7 @@ async function applyLoadingStockDelta(
         },
         update: { quantity: { increment: reverseQuantity } },
         create: {
+          organizationId: input.organizationId,
           productId,
           locationId: input.depotLocationId,
           quantity: reverseQuantity,
@@ -1489,7 +1608,8 @@ async function applyLoadingStockDelta(
 
     await tx.stockMovement.create({
       data: {
-        movementNumber: await nextMovementNumber(tx),
+        organizationId: input.organizationId,
+        movementNumber: await nextMovementNumber(tx, input.organizationId),
         type: "TRUCK_LOADING",
         productId,
         quantity: Math.abs(deltaQuantity),

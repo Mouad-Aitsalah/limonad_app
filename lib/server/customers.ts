@@ -3,8 +3,8 @@ import "server-only";
 import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { CustomerDto, CustomerMutationInput } from "@/types/operations-dto";
 
 const customerTypes = [
@@ -79,7 +79,9 @@ export function mapCustomerToDto(customer: NonNullable<CustomerRecord>): Custome
 }
 
 export async function getCustomers(): Promise<CustomerDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const customers = await prisma.customer.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: customerInclude,
     orderBy: { name: "asc" },
   });
@@ -87,24 +89,26 @@ export async function getCustomers(): Promise<CustomerDto[]> {
 }
 
 export async function getCustomerById(id: string): Promise<CustomerDto> {
-  const customer = await getCustomerRecordById(id);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const customer = await getCustomerRecordById(id, currentUser.organizationId);
   if (!customer) throw new OperationsServiceError("Client introuvable.", 404);
   return mapCustomerToDto(customer);
 }
 
 export async function createCustomer(input: CustomerMutationInput): Promise<CustomerDto> {
-  const user = await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const data = await parseCustomerInput(input);
   const { code, ...customerData } = data;
-  await ensureUniquePhone(data.phone);
-  await ensureUniqueCustomerCode(data.code);
+  await ensureUniquePhone(user.organizationId, data.phone);
+  await ensureUniqueCustomerCode(user.organizationId, data.code);
 
   const customer = await prisma.$transaction(
     async (tx) => {
       return tx.customer.create({
         data: {
+          organizationId: user.organizationId,
           ...customerData,
-          code: code ?? (await nextCustomerCode(tx)),
+          code: code ?? (await nextCustomerCode(tx, user.organizationId)),
           status: customerData.status ?? "ACTIVE",
           creditLimit: customerData.creditLimit ?? 0,
           currentBalance: 0,
@@ -123,11 +127,15 @@ export async function updateCustomer(
   id: string,
   input: CustomerMutationInput,
 ): Promise<CustomerDto> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const existing = await getCustomerRecordById(id, currentUser.organizationId);
+  if (!existing) {
+    throw new OperationsServiceError("Client introuvable.", 404);
+  }
   const data = await parseCustomerInput(input);
   const { code, ...customerData } = data;
-  await ensureUniquePhone(data.phone, id);
-  await ensureUniqueCustomerCode(data.code, id);
+  await ensureUniquePhone(currentUser.organizationId, data.phone, id);
+  await ensureUniqueCustomerCode(currentUser.organizationId, data.code, id);
 
   const customer = await prisma.customer.update({
     where: { id },
@@ -146,9 +154,13 @@ export async function setCustomerStatus(
   id: string,
   status: string,
 ): Promise<CustomerDto> {
-  await requireSessionUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
   if (!customerStatuses.includes(status as (typeof customerStatuses)[number])) {
     throw new OperationsServiceError("Statut invalide.", 422);
+  }
+  const existing = await getCustomerRecordById(id, currentUser.organizationId);
+  if (!existing) {
+    throw new OperationsServiceError("Client introuvable.", 404);
   }
   const customer = await prisma.customer.update({
     where: { id },
@@ -175,10 +187,18 @@ export async function parseCustomerInput(input: CustomerMutationInput) {
   return parsed.data;
 }
 
-export async function ensureUniqueCustomerCode(code?: string | null, currentCustomerId?: string) {
+export async function ensureUniqueCustomerCode(
+  organizationId: string,
+  code?: string | null,
+  currentCustomerId?: string,
+) {
   if (!code) return;
   const owner = await prisma.customer.findFirst({
-    where: { code, ...(currentCustomerId ? { id: { not: currentCustomerId } } : {}) },
+    where: {
+      code,
+      organizationId,
+      ...(currentCustomerId ? { id: { not: currentCustomerId } } : {}),
+    },
     select: { id: true },
   });
   if (owner) {
@@ -188,9 +208,17 @@ export async function ensureUniqueCustomerCode(code?: string | null, currentCust
   }
 }
 
-export async function ensureUniquePhone(phone: string, currentCustomerId?: string) {
+export async function ensureUniquePhone(
+  organizationId: string,
+  phone: string,
+  currentCustomerId?: string,
+) {
   const owner = await prisma.customer.findFirst({
-    where: { phone, ...(currentCustomerId ? { id: { not: currentCustomerId } } : {}) },
+    where: {
+      phone,
+      organizationId,
+      ...(currentCustomerId ? { id: { not: currentCustomerId } } : {}),
+    },
     select: { id: true },
   });
   if (owner) {
@@ -200,9 +228,15 @@ export async function ensureUniquePhone(phone: string, currentCustomerId?: strin
   }
 }
 
-export async function nextCustomerCode(tx: Pick<typeof prisma, "customer">) {
+export async function nextCustomerCode(
+  tx: Pick<typeof prisma, "customer">,
+  organizationId: string,
+) {
   const customers = await tx.customer.findMany({
-    where: { code: { startsWith: customerAccountPrefix } },
+    where: {
+      organizationId,
+      code: { startsWith: customerAccountPrefix },
+    },
     select: { code: true },
   });
 
@@ -228,6 +262,9 @@ const customerInclude = {
   createdBy: { select: { fullName: true } },
 } as const;
 
-async function getCustomerRecordById(id: string) {
-  return prisma.customer.findUnique({ where: { id }, include: customerInclude });
+async function getCustomerRecordById(id: string, organizationId: string) {
+  return prisma.customer.findFirst({
+    where: { id, organizationId },
+    include: customerInclude,
+  });
 }

@@ -36,6 +36,13 @@ export async function loginWithPassword(email: string, password: string) {
       passwordHash: true,
       role: true,
       status: true,
+      organizationId: true,
+      organization: {
+        select: {
+          id: true,
+          status: true,
+        },
+      },
       driverProfile: {
         select: {
           id: true,
@@ -50,6 +57,12 @@ export async function loginWithPassword(email: string, password: string) {
   }
   if (user.status !== "ACTIVE") {
     throw new AuthServiceError("Compte inactif ou bloque.", 403);
+  }
+  if (user.role !== "SUPER_ADMIN" && !user.organizationId) {
+    throw new AuthServiceError("Ce compte n'est rattache a aucune organisation.", 403);
+  }
+  if (user.organization && user.organization.status !== "ACTIVE") {
+    throw new AuthServiceError("Cette organisation est inactive.", 403);
   }
 
   const validPassword = await bcrypt.compare(password, user.passwordHash);
@@ -80,6 +93,13 @@ export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
       email: true,
       role: true,
       status: true,
+      organizationId: true,
+      organization: {
+        select: {
+          id: true,
+          status: true,
+        },
+      },
       driverProfile: {
         select: {
           id: true,
@@ -90,6 +110,8 @@ export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
   });
 
   if (!user || user.status !== "ACTIVE") return null;
+  if (user.role !== "SUPER_ADMIN" && !user.organizationId) return null;
+  if (user.organization && user.organization.status !== "ACTIVE") return null;
   return mapUserToSession(user);
 }
 
@@ -144,6 +166,7 @@ function mapUserToSession(user: {
   fullName: string;
   email: string;
   role: string;
+  organizationId: string | null;
   driverProfile: { id: string; truckId: string | null } | null;
 }): CurrentUser {
   return {
@@ -153,12 +176,14 @@ function mapUserToSession(user: {
     nom: user.fullName,
     email: user.email,
     role: mapRole(user.role),
+    organizationId: user.organizationId,
     driverId: user.driverProfile?.id,
     truckId: user.driverProfile?.truckId ?? undefined,
   };
 }
 
 function mapRole(role: string): UserRole {
+  if (role === "SUPER_ADMIN") return "super_admin";
   if (role === "ADMIN") return "admin";
   if (role === "DEPOT_MANAGER") return "depot_manager";
   if (role === "DRIVER") return "driver";

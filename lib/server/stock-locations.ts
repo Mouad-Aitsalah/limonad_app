@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { StockLocationDto } from "@/types/operations-dto";
 
 const stockLocationInclude = {
@@ -30,7 +31,9 @@ export function mapStockLocationToDto(
 }
 
 export async function getStockLocations(): Promise<StockLocationDto[]> {
+  const currentUser = await requireOrganizationUser();
   const locations = await prisma.stockLocation.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: stockLocationInclude,
     orderBy: [{ type: "asc" }, { code: "asc" }],
   });
@@ -38,14 +41,16 @@ export async function getStockLocations(): Promise<StockLocationDto[]> {
 }
 
 export async function getStockLocationById(id: string): Promise<StockLocationDto> {
-  const location = await getStockLocationRecordById(id);
+  const currentUser = await requireOrganizationUser();
+  const location = await getStockLocationRecordById(id, currentUser.organizationId);
   if (!location) throw new OperationsServiceError("Emplacement introuvable.", 404);
   return mapStockLocationToDto(location);
 }
 
 export async function getDepotStockLocation(depotId: string): Promise<StockLocationDto> {
-  const location = await prisma.stockLocation.findUnique({
-    where: { depotId },
+  const currentUser = await requireOrganizationUser();
+  const location = await prisma.stockLocation.findFirst({
+    where: { depotId, organizationId: currentUser.organizationId },
     include: stockLocationInclude,
   });
   if (!location) {
@@ -55,8 +60,9 @@ export async function getDepotStockLocation(depotId: string): Promise<StockLocat
 }
 
 export async function getTruckStockLocation(truckId: string): Promise<StockLocationDto> {
-  const location = await prisma.stockLocation.findUnique({
-    where: { truckId },
+  const currentUser = await requireOrganizationUser();
+  const location = await prisma.stockLocation.findFirst({
+    where: { truckId, organizationId: currentUser.organizationId },
     include: stockLocationInclude,
   });
   if (!location) {
@@ -65,9 +71,9 @@ export async function getTruckStockLocation(truckId: string): Promise<StockLocat
   return mapStockLocationToDto(location);
 }
 
-async function getStockLocationRecordById(id: string) {
-  return prisma.stockLocation.findUnique({
-    where: { id },
+async function getStockLocationRecordById(id: string, organizationId: string) {
+  return prisma.stockLocation.findFirst({
+    where: { id, organizationId },
     include: stockLocationInclude,
   });
 }

@@ -9,8 +9,9 @@ import {
   defaultAccountingAccounts,
   defaultAccountingSettingsByCode,
 } from "@/lib/accounting";
-import { requireSessionUser } from "@/lib/server/auth";
+import { getCurrentSessionUser, requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type {
   AccountingAccountDto,
   AccountingAccountInput,
@@ -113,6 +114,7 @@ type NormalizedEntryLine = {
 };
 
 type CreatePostedEntryInput = {
+  organizationId?: string;
   date: Date;
   reference?: string | null;
   description: string;
@@ -129,6 +131,7 @@ type CreatePostedEntryInput = {
 };
 
 type SaleAccountingPayload = {
+  organizationId?: string;
   saleId: string;
   invoiceNumber: string;
   customerId?: string | null;
@@ -146,6 +149,7 @@ type SaleAccountingPayload = {
 };
 
 type PurchaseAccountingPayload = {
+  organizationId?: string;
   purchaseId: string;
   purchaseNumber: string;
   supplierId: string;
@@ -158,6 +162,7 @@ type PurchaseAccountingPayload = {
 };
 
 type CreditNoteAccountingPayload = {
+  organizationId?: string;
   creditNoteId: string;
   creditNoteNumber: string;
   partyType: "CUSTOMER" | "SUPPLIER";
@@ -170,6 +175,7 @@ type CreditNoteAccountingPayload = {
 };
 
 type ReverseAccountingEntryPayload = {
+  organizationId?: string;
   sourceType: AccountingSourceType;
   sourceId: string;
   date: Date;
@@ -179,6 +185,7 @@ type ReverseAccountingEntryPayload = {
 };
 
 type EmployeePayrollAccountingPayload = {
+  organizationId?: string;
   operationId: string;
   operationNumber: string;
   employeeId: string;
@@ -214,10 +221,11 @@ const settingsInclude = {
 } as const;
 
 export async function listAccountingAccounts(): Promise<AccountingAccountDto[]> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  await ensureAccountingBootstrap(prisma);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  await ensureAccountingBootstrap(prisma, currentUser.organizationId);
 
   const accounts = await prisma.accountingAccount.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: {
       _count: { select: { lines: true } },
     },
@@ -237,10 +245,11 @@ export async function listAccountingAccounts(): Promise<AccountingAccountDto[]> 
 }
 
 export async function listAccountingAccountOptions(): Promise<AccountingAccountOptionDto[]> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  await ensureAccountingBootstrap(prisma);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  await ensureAccountingBootstrap(prisma, currentUser.organizationId);
 
   const accounts = await prisma.accountingAccount.findMany({
+    where: { organizationId: currentUser.organizationId },
     orderBy: [{ code: "asc" }],
   });
 
@@ -256,8 +265,8 @@ export async function listAccountingAccountOptions(): Promise<AccountingAccountO
 export async function createAccountingAccount(
   input: AccountingAccountInput,
 ): Promise<AccountingAccountDto> {
-  await requireSessionUser(["admin"]);
-  await ensureAccountingBootstrap(prisma);
+  const currentUser = await requireOrganizationUser(["admin"]);
+  await ensureAccountingBootstrap(prisma, currentUser.organizationId);
 
   const parsed = accountInputSchema.safeParse(input);
   if (!parsed.success) {
@@ -265,13 +274,16 @@ export async function createAccountingAccount(
   }
 
   const code = normalizeAccountCode(parsed.data.code);
-  const existing = await prisma.accountingAccount.findUnique({ where: { code } });
+  const existing = await prisma.accountingAccount.findFirst({
+    where: { code, organizationId: currentUser.organizationId },
+  });
   if (existing) {
     throw new OperationsServiceError("Ce code de compte existe deja.", 409);
   }
 
   const account = await prisma.accountingAccount.create({
     data: {
+      organizationId: currentUser.organizationId,
       code,
       name: parsed.data.name.trim(),
       type: parsed.data.type,
@@ -298,21 +310,25 @@ export async function updateAccountingAccount(
   id: string,
   input: AccountingAccountInput,
 ): Promise<AccountingAccountDto> {
-  await requireSessionUser(["admin"]);
-  await ensureAccountingBootstrap(prisma);
+  const currentUser = await requireOrganizationUser(["admin"]);
+  await ensureAccountingBootstrap(prisma, currentUser.organizationId);
 
   const parsed = accountInputSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError("Compte comptable invalide.", 422);
   }
 
-  const account = await prisma.accountingAccount.findUnique({ where: { id } });
+  const account = await prisma.accountingAccount.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
+  });
   if (!account) {
     throw new OperationsServiceError("Compte introuvable.", 404);
   }
 
   const code = normalizeAccountCode(parsed.data.code);
-  const owner = await prisma.accountingAccount.findUnique({ where: { code } });
+  const owner = await prisma.accountingAccount.findFirst({
+    where: { code, organizationId: currentUser.organizationId },
+  });
   if (owner && owner.id !== id) {
     throw new OperationsServiceError("Ce code de compte est deja utilise.", 409);
   }
@@ -346,11 +362,11 @@ export async function setAccountingAccountActive(
   id: string,
   isActive: boolean,
 ): Promise<AccountingAccountDto> {
-  await requireSessionUser(["admin"]);
-  await ensureAccountingBootstrap(prisma);
+  const currentUser = await requireOrganizationUser(["admin"]);
+  await ensureAccountingBootstrap(prisma, currentUser.organizationId);
 
-  const account = await prisma.accountingAccount.findUnique({
-    where: { id },
+  const account = await prisma.accountingAccount.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
     include: { _count: { select: { lines: true } } },
   });
   if (!account) {
@@ -376,11 +392,11 @@ export async function setAccountingAccountActive(
 }
 
 export async function getAccountingSettings(): Promise<AccountingSettingsDto> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  await ensureAccountingBootstrap(prisma);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  await ensureAccountingBootstrap(prisma, currentUser.organizationId);
 
   const settings = await prisma.accountingSettings.findUniqueOrThrow({
-    where: { id: "default" },
+    where: { organizationId: currentUser.organizationId },
     include: settingsInclude,
   });
 
@@ -390,8 +406,8 @@ export async function getAccountingSettings(): Promise<AccountingSettingsDto> {
 export async function updateAccountingSettings(
   input: AccountingSettingsUpdateInput,
 ): Promise<AccountingSettingsDto> {
-  const user = await requireSessionUser(["admin"]);
-  await ensureAccountingBootstrap(prisma);
+  const user = await requireOrganizationUser(["admin"]);
+  await ensureAccountingBootstrap(prisma, user.organizationId);
 
   const parsed = settingsUpdateSchema.safeParse(input);
   if (!parsed.success) {
@@ -404,7 +420,10 @@ export async function updateAccountingSettings(
 
   if (referencedIds.length > 0) {
     const accounts = await prisma.accountingAccount.findMany({
-      where: { id: { in: referencedIds } },
+      where: {
+        id: { in: referencedIds },
+        organizationId: user.organizationId,
+      },
       select: { id: true },
     });
     if (accounts.length !== referencedIds.length) {
@@ -413,9 +432,9 @@ export async function updateAccountingSettings(
   }
 
   const settings = await prisma.accountingSettings.upsert({
-    where: { id: "default" },
+    where: { organizationId: user.organizationId },
     create: {
-      id: "default",
+      organizationId: user.organizationId,
       ...parsed.data,
       updatedByUserId: user.id,
     },
@@ -432,11 +451,15 @@ export async function updateAccountingSettings(
 export async function computeCashSaleStampAmount(
   db: DbClient,
   input: {
+    organizationId?: string;
     totalTTC: DecimalInput;
     paymentMethod: string;
   },
 ) {
-  await ensureAccountingBootstrap(db);
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: input.organizationId,
+  });
+  await ensureAccountingBootstrap(db, organizationId);
   if (input.paymentMethod !== "CASH") {
     return toMoneyDecimal(0);
   }
@@ -445,10 +468,11 @@ export async function computeCashSaleStampAmount(
 }
 
 export async function listAccountingEntries(): Promise<AccountingEntryDto[]> {
-  await requireSessionUser(["admin", "depot_manager", "cashier"]);
-  await ensureAccountingBootstrap(prisma);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  await ensureAccountingBootstrap(prisma, currentUser.organizationId);
 
   const entries = await prisma.accountingEntry.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: entryInclude,
     orderBy: [{ date: "desc" }, { createdAt: "desc" }, { entryNumber: "desc" }],
   });
@@ -457,8 +481,13 @@ export async function listAccountingEntries(): Promise<AccountingEntryDto[]> {
 }
 
 export async function listAccountingJournalLines(): Promise<AccountingJournalLineDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const entries = await listAccountingEntries();
-  const metadata = await buildJournalMetadata(prisma, entries);
+  const metadata = await buildJournalMetadata(
+    prisma,
+    currentUser.organizationId,
+    entries,
+  );
   const sortedEntries = [...entries].sort((left, right) =>
     compareJournalEntries(left, right, metadata),
   );
@@ -513,8 +542,8 @@ function compareJournalLines(
 export async function createManualAccountingEntry(
   input: ManualAccountingEntryInput,
 ): Promise<AccountingEntryDto> {
-  const user = await requireSessionUser(["admin"]);
-  await ensureAccountingBootstrap(prisma);
+  const user = await requireOrganizationUser(["admin"]);
+  await ensureAccountingBootstrap(prisma, user.organizationId);
 
   const parsed = manualEntrySchema.safeParse(input);
   if (!parsed.success) {
@@ -525,9 +554,14 @@ export async function createManualAccountingEntry(
   const normalizedLines = normalizeEntryLines(parsed.data.lines);
   assertBalancedEntry(normalizedLines);
 
-  await assertAccountsExist(prisma, normalizedLines.map((line) => line.accountId));
+  await assertAccountsExist(
+    prisma,
+    user.organizationId,
+    normalizedLines.map((line) => line.accountId),
+  );
 
   const entry = await createPostedEntry(prisma, {
+    organizationId: user.organizationId,
     date: entryDate,
     reference: parsed.data.reference?.trim() || null,
     description: parsed.data.description.trim(),
@@ -549,9 +583,14 @@ export async function postSaleAccountingEntry(
   db: Prisma.TransactionClient,
   payload: SaleAccountingPayload,
 ) {
-  await ensureAccountingBootstrap(db);
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: payload.organizationId,
+    createdByUserId: payload.createdByUserId,
+    saleId: payload.saleId,
+  });
+  await ensureAccountingBootstrap(db, organizationId);
 
-  const settings = await requireSettings(db, [
+  const settings = await requireSettings(db, organizationId, [
     "salesAccountId",
     "salesVatAccountId",
     "cashAccountId",
@@ -561,15 +600,18 @@ export async function postSaleAccountingEntry(
 
   const customerAccountId = await resolveCustomerAuxiliaryAccountId(
     db,
+    organizationId,
     payload.customerId ?? null,
     settings.customerAccountId,
   );
   const stampExpenseAccountId = await requireSystemAccountIdByCode(
     db,
+    organizationId,
     accountingSystemAccountCodes.stampExpense,
   );
   const stampTaxPayableAccountId = await requireSystemAccountIdByCode(
     db,
+    organizationId,
     accountingSystemAccountCodes.stampTaxPayable,
   );
   const paidAmount = toMoneyDecimal(payload.paidAmount);
@@ -579,10 +621,15 @@ export async function postSaleAccountingEntry(
 
   const invoiceEntry =
     (await db.accountingEntry.findFirst({
-      where: { sourceType: "SALE", sourceId: payload.saleId },
+      where: {
+        organizationId,
+        sourceType: "SALE",
+        sourceId: payload.saleId,
+      },
       include: entryInclude,
     })) ??
     (await createPostedEntry(db, {
+      organizationId,
       date: payload.date,
       reference: payload.invoiceNumber,
       description: `Facture vente ${payload.invoiceNumber}`,
@@ -642,7 +689,11 @@ export async function postSaleAccountingEntry(
 
   const settlementSourceId = payload.paymentId;
   const existingSettlement = await db.accountingEntry.findFirst({
-    where: { sourceType: "CUSTOMER_PAYMENT", sourceId: settlementSourceId },
+    where: {
+      organizationId,
+      sourceType: "CUSTOMER_PAYMENT",
+      sourceId: settlementSourceId,
+    },
     include: entryInclude,
   });
   if (existingSettlement) {
@@ -654,6 +705,7 @@ export async function postSaleAccountingEntry(
     : settings.cashAccountId;
 
   await createPostedEntry(db, {
+    organizationId,
     date: payload.date,
     reference: payload.invoiceNumber,
     description: `Reglement facture ${payload.invoiceNumber}`,
@@ -684,9 +736,14 @@ export async function postPurchaseAccountingEntry(
   db: Prisma.TransactionClient,
   payload: PurchaseAccountingPayload,
 ) {
-  await ensureAccountingBootstrap(db);
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: payload.organizationId,
+    createdByUserId: payload.createdByUserId,
+    purchaseId: payload.purchaseId,
+  });
+  await ensureAccountingBootstrap(db, organizationId);
 
-  const settings = await requireSettings(db, [
+  const settings = await requireSettings(db, organizationId, [
     "purchaseAccountId",
     "purchaseVatAccountId",
     "supplierAccountId",
@@ -696,6 +753,7 @@ export async function postPurchaseAccountingEntry(
 
   const supplierAccountId = await resolveSupplierAuxiliaryAccountId(
     db,
+    organizationId,
     payload.supplierId,
     settings.supplierAccountId,
   );
@@ -705,10 +763,15 @@ export async function postPurchaseAccountingEntry(
 
   const invoiceEntry =
     (await db.accountingEntry.findFirst({
-      where: { sourceType: "PURCHASE", sourceId: payload.purchaseId },
+      where: {
+        organizationId,
+        sourceType: "PURCHASE",
+        sourceId: payload.purchaseId,
+      },
       include: entryInclude,
     })) ??
     (await createPostedEntry(db, {
+      organizationId,
       date: payload.date,
       reference: payload.purchaseNumber,
       description: `Facture achat ${payload.purchaseNumber}`,
@@ -744,7 +807,11 @@ export async function postPurchaseAccountingEntry(
 
   const settlementSourceId = `${payload.purchaseId}:settlement`;
   const existingSettlement = await db.accountingEntry.findFirst({
-    where: { sourceType: "SUPPLIER_PAYMENT", sourceId: settlementSourceId },
+    where: {
+      organizationId,
+      sourceType: "SUPPLIER_PAYMENT",
+      sourceId: settlementSourceId,
+    },
     include: entryInclude,
   });
   if (existingSettlement) return invoiceEntry;
@@ -754,6 +821,7 @@ export async function postPurchaseAccountingEntry(
     : settings.cashAccountId;
 
   await createPostedEntry(db, {
+    organizationId,
     date: payload.date,
     reference: payload.purchaseNumber,
     description: `Reglement achat ${payload.purchaseNumber}`,
@@ -784,7 +852,12 @@ export async function postValidatedCreditNoteAccountingEntry(
   db: Prisma.TransactionClient,
   payload: CreditNoteAccountingPayload,
 ) {
-  await ensureAccountingBootstrap(db);
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: payload.organizationId,
+    createdByUserId: payload.createdByUserId,
+    creditNoteId: payload.creditNoteId,
+  });
+  await ensureAccountingBootstrap(db, organizationId);
 
   const sourceType =
     payload.partyType === "SUPPLIER"
@@ -792,7 +865,7 @@ export async function postValidatedCreditNoteAccountingEntry(
       : "CUSTOMER_CREDIT_NOTE";
 
   const existing = await db.accountingEntry.findFirst({
-    where: { sourceType, sourceId: payload.creditNoteId },
+    where: { organizationId, sourceType, sourceId: payload.creditNoteId },
   });
   if (existing) return existing;
 
@@ -810,10 +883,12 @@ export async function postValidatedCreditNoteAccountingEntry(
       // auxiliary-account / return-account treatment used below.
       const supplierGeneralAccountId = await requireSystemAccountIdByCode(
         db,
+        organizationId,
         accountingSystemAccountCodes.supplierGeneral,
       );
       const purchaseAccountId = await requireSystemAccountIdByCode(
         db,
+        organizationId,
         accountingSystemAccountCodes.purchase,
       );
 
@@ -835,6 +910,7 @@ export async function postValidatedCreditNoteAccountingEntry(
       if (taxAmount.gt(0)) {
         const vatRecoverableAccountId = await requireSystemAccountIdByCode(
           db,
+          organizationId,
           accountingSystemAccountCodes.supplierCashCreditNoteVat,
         );
         lines.push({
@@ -847,7 +923,7 @@ export async function postValidatedCreditNoteAccountingEntry(
 
       description = `Avoir fournisseur ${payload.creditNoteNumber}`;
     } else {
-      const settings = await requireSettings(db, [
+      const settings = await requireSettings(db, organizationId, [
         "supplierAccountId",
         "supplierReturnAccountId",
         "purchaseVatAccountId",
@@ -882,14 +958,17 @@ export async function postValidatedCreditNoteAccountingEntry(
       // using the gross TTC amount on every line rather than an HT/VAT split.
       const salesAccountId = await requireSystemAccountIdByCode(
         db,
+        organizationId,
         accountingSystemAccountCodes.sales,
       );
       const transitAccountId = await requireSystemAccountIdByCode(
         db,
+        organizationId,
         accountingSystemAccountCodes.customerCashCreditNoteTransit,
       );
       const cashAccountId = await requireSystemAccountIdByCode(
         db,
+        organizationId,
         accountingSystemAccountCodes.cash,
       );
 
@@ -901,7 +980,7 @@ export async function postValidatedCreditNoteAccountingEntry(
       ];
       description = `Avoir Client ${payload.creditNoteNumber}`;
     } else {
-      const settings = await requireSettings(db, [
+      const settings = await requireSettings(db, organizationId, [
         "customerAccountId",
         "customerReturnAccountId",
         "salesVatAccountId",
@@ -932,6 +1011,7 @@ export async function postValidatedCreditNoteAccountingEntry(
   }
 
   return createPostedEntry(db, {
+    organizationId,
     date: payload.date,
     reference: payload.creditNoteNumber,
     description,
@@ -947,8 +1027,13 @@ export async function reverseAccountingEntryForSource(
   db: Prisma.TransactionClient,
   payload: ReverseAccountingEntryPayload,
 ) {
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: payload.organizationId,
+    createdByUserId: payload.createdByUserId,
+  });
   const original = await db.accountingEntry.findFirst({
     where: {
+      organizationId,
       sourceType: payload.sourceType,
       sourceId: payload.sourceId,
     },
@@ -960,7 +1045,8 @@ export async function reverseAccountingEntryForSource(
 
   const reversal = await db.accountingEntry.create({
     data: {
-      entryNumber: await nextAccountingEntryNumber(db, payload.date),
+      organizationId,
+      entryNumber: await nextAccountingEntryNumber(db, organizationId, payload.date),
       date: payload.date,
       reference: payload.reference ?? original.reference,
       description:
@@ -995,7 +1081,12 @@ export async function postEmployeePayrollAccountingEntry(
   db: Prisma.TransactionClient,
   payload: EmployeePayrollAccountingPayload,
 ) {
-  await ensureAccountingBootstrap(db);
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: payload.organizationId,
+    createdByUserId: payload.createdByUserId,
+    employeeId: payload.employeeId,
+  });
+  await ensureAccountingBootstrap(db, organizationId);
 
   const amount = toMoneyDecimal(payload.amount);
   const advanceToOffset = toMoneyDecimal(payload.advanceToOffset);
@@ -1011,8 +1102,9 @@ export async function postEmployeePayrollAccountingEntry(
         );
       }
 
-      const settings = await requireSettings(db, ["cashAccountId"]);
+      const settings = await requireSettings(db, organizationId, ["cashAccountId"]);
       return createPostedEntry(db, {
+        organizationId,
         date: payload.date,
         reference: payload.operationNumber,
         description: `Avance au personnel - ${payload.employeeName} - ${periodLabel}`,
@@ -1046,8 +1138,13 @@ export async function postEmployeePayrollAccountingEntry(
         );
       }
 
-      const settings = await requireSettings(db, ["employeePayrollExpenseAccountId"]);
+      const settings = await requireSettings(
+        db,
+        organizationId,
+        ["employeePayrollExpenseAccountId"],
+      );
       return createPostedEntry(db, {
+        organizationId,
         date: payload.date,
         reference: payload.operationNumber,
         description: `Remuneration du personnel - ${payload.employeeName} - ${periodLabel}`,
@@ -1088,8 +1185,9 @@ export async function postEmployeePayrollAccountingEntry(
         );
       }
 
-      const settings = await requireSettings(db, ["cashAccountId"]);
+      const settings = await requireSettings(db, organizationId, ["cashAccountId"]);
       return createPostedEntry(db, {
+        organizationId,
         date: payload.date,
         reference: payload.operationNumber,
         description: `Transfert salaire - ${payload.employeeName} - ${periodLabel}`,
@@ -1127,17 +1225,26 @@ export async function postEmployeePayrollAccountingEntry(
 }
 
 async function createPostedEntry(db: DbClient, input: CreatePostedEntryInput) {
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: input.organizationId,
+    createdByUserId: input.createdByUserId,
+  });
   const normalizedLines = normalizeEntryLines(input.lines);
   assertBalancedEntry(normalizedLines);
-  await assertAccountsExist(db, normalizedLines.map((line) => line.accountId));
+  await assertAccountsExist(
+    db,
+    organizationId,
+    normalizedLines.map((line) => line.accountId),
+  );
 
   const entryNumber =
     input.sourceType === "MANUAL_ENTRY" && !input.sourceId
-      ? await nextAccountingEntryNumber(db, input.date)
-      : await nextAccountingEntryNumber(db, input.date);
+      ? await nextAccountingEntryNumber(db, organizationId, input.date)
+      : await nextAccountingEntryNumber(db, organizationId, input.date);
 
   const created = await db.accountingEntry.create({
     data: {
+      organizationId,
       entryNumber,
       date: input.date,
       reference: input.reference ?? null,
@@ -1163,8 +1270,9 @@ async function createPostedEntry(db: DbClient, input: CreatePostedEntryInput) {
   return created;
 }
 
-async function ensureAccountingBootstrap(db: DbClient) {
+async function ensureAccountingBootstrap(db: DbClient, organizationId: string) {
   const existing = await db.accountingAccount.findMany({
+    where: { organizationId },
     select: { id: true, code: true },
   });
 
@@ -1176,6 +1284,7 @@ async function ensureAccountingBootstrap(db: DbClient) {
   if (missing.length > 0) {
     await db.accountingAccount.createMany({
       data: missing.map((account) => ({
+        organizationId,
         code: account.code,
         name: account.name,
         type: account.type,
@@ -1185,7 +1294,10 @@ async function ensureAccountingBootstrap(db: DbClient) {
   }
 
   const bootstrapAccounts = await db.accountingAccount.findMany({
-    where: { code: { in: Object.values(defaultAccountingSettingsByCode) } },
+    where: {
+      organizationId,
+      code: { in: Object.values(defaultAccountingSettingsByCode) },
+    },
     select: { id: true, code: true },
   });
 
@@ -1194,13 +1306,13 @@ async function ensureAccountingBootstrap(db: DbClient) {
   ) as Record<string, string>;
 
   const currentSettings = await db.accountingSettings.findUnique({
-    where: { id: "default" },
+    where: { organizationId },
   });
 
   if (!currentSettings) {
     await db.accountingSettings.create({
       data: {
-        id: "default",
+        organizationId,
         employeePayrollExpenseAccountId:
           accountIdByCode[defaultAccountingSettingsByCode.employeePayrollExpenseAccountId] ?? null,
         salesAccountId: accountIdByCode[defaultAccountingSettingsByCode.salesAccountId] ?? null,
@@ -1247,7 +1359,7 @@ async function ensureAccountingBootstrap(db: DbClient) {
 
   if (Object.keys(defaultsToApply).length > 0) {
     await db.accountingSettings.update({
-      where: { id: "default" },
+      where: { organizationId },
       data: defaultsToApply,
     });
   }
@@ -1255,10 +1367,11 @@ async function ensureAccountingBootstrap(db: DbClient) {
 
 async function requireSettings(
   db: DbClient,
+  organizationId: string,
   keys: AccountingAccountSettingsKey[],
 ): Promise<Record<AccountingAccountSettingsKey, string>> {
   const settings = await db.accountingSettings.findUnique({
-    where: { id: "default" },
+    where: { organizationId },
   });
 
   if (!settings) {
@@ -1290,10 +1403,18 @@ async function requireSettings(
   return result;
 }
 
-async function assertAccountsExist(db: DbClient, accountIds: string[]) {
+async function assertAccountsExist(
+  db: DbClient,
+  organizationId: string,
+  accountIds: string[],
+) {
   const uniqueIds = [...new Set(accountIds)];
   const accounts = await db.accountingAccount.findMany({
-    where: { id: { in: uniqueIds }, isActive: true },
+    where: {
+      id: { in: uniqueIds },
+      organizationId,
+      isActive: true,
+    },
     select: { id: true },
   });
   if (accounts.length !== uniqueIds.length) {
@@ -1306,20 +1427,21 @@ async function assertAccountsExist(db: DbClient, accountIds: string[]) {
 
 async function resolveCustomerAuxiliaryAccountId(
   db: DbClient,
+  organizationId: string,
   customerId: string | null,
   generalAccountId: string,
 ) {
   if (!customerId) return generalAccountId;
 
-  const customer = await db.customer.findUnique({
-    where: { id: customerId },
+  const customer = await db.customer.findFirst({
+    where: { id: customerId, organizationId },
     select: { code: true, name: true },
   });
   if (!customer?.code) return generalAccountId;
 
   const auxiliaryCode = resolveCustomerAuxiliaryCode(customer.code);
 
-  return ensureAccountingAccountByCode(db, {
+  return ensureAccountingAccountByCode(db, organizationId, {
     code: auxiliaryCode,
     name: customer.name,
     type: "RECEIVABLE",
@@ -1328,16 +1450,17 @@ async function resolveCustomerAuxiliaryAccountId(
 
 async function resolveSupplierAuxiliaryAccountId(
   db: DbClient,
+  organizationId: string,
   supplierId: string,
   generalAccountId: string,
 ) {
-  const supplier = await db.supplier.findUnique({
-    where: { id: supplierId },
+  const supplier = await db.supplier.findFirst({
+    where: { id: supplierId, organizationId },
     select: { code: true, name: true },
   });
   if (!supplier?.code) return generalAccountId;
 
-  return ensureAccountingAccountByCode(db, {
+  return ensureAccountingAccountByCode(db, organizationId, {
     code: resolveSupplierAuxiliaryCode(supplier.code),
     name: supplier.name,
     type: "PAYABLE",
@@ -1346,9 +1469,10 @@ async function resolveSupplierAuxiliaryAccountId(
 
 async function requireSystemAccountIdByCode(
   db: DbClient,
+  organizationId: string,
   code: string,
 ) {
-  const accountId = await ensureAccountingAccountByCode(db, {
+  const accountId = await ensureAccountingAccountByCode(db, organizationId, {
     code,
     name:
       defaultAccountingAccounts.find((account) => account.code === code)?.name ??
@@ -1358,8 +1482,8 @@ async function requireSystemAccountIdByCode(
       "ASSET",
   });
 
-  const account = await db.accountingAccount.findUnique({
-    where: { id: accountId },
+  const account = await db.accountingAccount.findFirst({
+    where: { id: accountId, organizationId },
     select: { isActive: true },
   });
   if (!account?.isActive) {
@@ -1371,17 +1495,19 @@ async function requireSystemAccountIdByCode(
 
 export async function ensureAccountingAccountByCode(
   db: DbClient,
+  organizationId: string,
   input: { code: string; name: string; type: AccountingAccountType },
 ) {
   const normalizedCode = normalizeAccountCode(input.code);
-  const existing = await db.accountingAccount.findUnique({
-    where: { code: normalizedCode },
+  const existing = await db.accountingAccount.findFirst({
+    where: { code: normalizedCode, organizationId },
     select: { id: true },
   });
   if (existing) return existing.id;
 
   const created = await db.accountingAccount.create({
     data: {
+      organizationId,
       code: normalizedCode,
       name: input.name,
       type: input.type,
@@ -1391,6 +1517,76 @@ export async function ensureAccountingAccountByCode(
   });
 
   return created.id;
+}
+
+async function resolveOrganizationId(input: {
+  explicitOrganizationId?: string | null;
+  createdByUserId?: string | null;
+  saleId?: string | null;
+  purchaseId?: string | null;
+  creditNoteId?: string | null;
+  employeeId?: string | null;
+}) {
+  if (input.explicitOrganizationId) {
+    return input.explicitOrganizationId;
+  }
+
+  if (input.createdByUserId) {
+    const user = await prisma.user.findUnique({
+      where: { id: input.createdByUserId },
+      select: { organizationId: true },
+    });
+    if (user?.organizationId) {
+      return user.organizationId;
+    }
+  }
+
+  if (input.saleId) {
+    const sale = await prisma.sale.findUnique({
+      where: { id: input.saleId },
+      select: { organizationId: true },
+    });
+    if (sale?.organizationId) {
+      return sale.organizationId;
+    }
+  }
+
+  if (input.purchaseId) {
+    const purchase = await prisma.purchase.findUnique({
+      where: { id: input.purchaseId },
+      select: { organizationId: true },
+    });
+    if (purchase?.organizationId) {
+      return purchase.organizationId;
+    }
+  }
+
+  if (input.creditNoteId) {
+    const creditNote = await prisma.creditNote.findUnique({
+      where: { id: input.creditNoteId },
+      select: { organizationId: true },
+    });
+    if (creditNote?.organizationId) {
+      return creditNote.organizationId;
+    }
+  }
+
+  if (input.employeeId) {
+    const employee = await prisma.employee.findUnique({
+      where: { id: input.employeeId },
+      select: { organizationId: true },
+    });
+    if (employee?.organizationId) {
+      return employee.organizationId;
+    }
+  }
+
+  const currentUser = await getCurrentSessionUser();
+  if (currentUser?.organizationId) {
+    return currentUser.organizationId;
+  }
+
+  throw new OperationsServiceError("Aucune organisation n'est associee a cette operation.", 403);
 }
 
 function normalizeEntryLines(
@@ -1516,6 +1712,7 @@ function mapEntryToDto(entry: {
 
 async function buildJournalMetadata(
   db: DbClient,
+  organizationId: string,
   entries: AccountingEntryDto[],
 ) {
   const saleIds = entries
@@ -1537,7 +1734,7 @@ async function buildJournalMetadata(
   const [sales, payments, employeeOperations] = await Promise.all([
     saleIds.length > 0
       ? db.sale.findMany({
-          where: { id: { in: saleIds } },
+          where: { id: { in: saleIds }, organizationId },
           select: {
             id: true,
             invoiceNumber: true,
@@ -1547,7 +1744,7 @@ async function buildJournalMetadata(
       : Promise.resolve([]),
     paymentIds.length > 0
       ? db.payment.findMany({
-          where: { id: { in: paymentIds } },
+          where: { id: { in: paymentIds }, organizationId },
           select: {
             id: true,
             method: true,
@@ -1563,7 +1760,7 @@ async function buildJournalMetadata(
       : Promise.resolve([]),
     employeeOperationIds.length > 0
       ? db.employeeTransaction.findMany({
-          where: { id: { in: employeeOperationIds } },
+          where: { id: { in: employeeOperationIds }, organizationId },
           select: {
             id: true,
             number: true,
@@ -1704,10 +1901,17 @@ function mapSettingsToDto(settings: {
   };
 }
 
-async function nextAccountingEntryNumber(db: DbClient, date: Date) {
+async function nextAccountingEntryNumber(
+  db: DbClient,
+  organizationId: string,
+  date: Date,
+) {
   const prefix = `EC-${formatSequenceDate(date)}-`;
   const last = await db.accountingEntry.findFirst({
-    where: { entryNumber: { startsWith: prefix } },
+    where: {
+      organizationId,
+      entryNumber: { startsWith: prefix },
+    },
     orderBy: { entryNumber: "desc" },
     select: { entryNumber: true },
   });

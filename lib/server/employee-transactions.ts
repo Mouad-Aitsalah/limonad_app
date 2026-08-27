@@ -5,8 +5,8 @@ import { z } from "zod";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { postEmployeePayrollAccountingEntry } from "@/lib/server/accounting";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { UserRole } from "@/types/auth";
 import type {
   EmployeePayrollContextDto,
@@ -69,10 +69,10 @@ export async function getEmployeePayrollContext(
   employeeId: string,
   input?: { payrollYear?: number | null; payrollMonth?: number | null },
 ): Promise<EmployeePayrollContextDto> {
-  await requireSessionUser(employeeManagerRoles);
+  const currentUser = await requireOrganizationUser(employeeManagerRoles);
 
-  const employee = await prisma.employee.findUnique({
-    where: { id: employeeId },
+  const employee = await prisma.employee.findFirst({
+    where: { id: employeeId, organizationId: currentUser.organizationId },
     include: employeeSnapshotInclude,
   });
   if (!employee) {
@@ -81,6 +81,7 @@ export async function getEmployeePayrollContext(
 
   const period = resolvePayrollPeriod(input);
   const totals = await aggregateValidatedPeriod(prisma, {
+    organizationId: currentUser.organizationId,
     employeeId,
     payrollYear: period.payrollYear,
     payrollMonth: period.payrollMonth,
@@ -112,9 +113,11 @@ export async function getEmployeePayrollContext(
 export async function listEmployeeTransactions(
   filters: EmployeeTransactionFilters = {},
 ): Promise<EmployeeTransactionDto[]> {
-  await requireSessionUser(employeeManagerRoles);
+  const currentUser = await requireOrganizationUser(employeeManagerRoles);
 
-  const where: Prisma.EmployeeTransactionWhereInput = {};
+  const where: Prisma.EmployeeTransactionWhereInput = {
+    organizationId: currentUser.organizationId,
+  };
   if (filters.employeeId) where.employeeId = filters.employeeId;
   if (filters.payrollYear) where.payrollYear = filters.payrollYear;
   if (filters.payrollMonth) where.payrollMonth = filters.payrollMonth;
@@ -139,7 +142,7 @@ export async function getEmployeeTransactions(employeeId: string): Promise<Emplo
  * idempotent and balanced even if the user double-clicks "Valider".
  */
 export async function createEmployeeTransaction(input: EmployeeTransactionInput): Promise<EmployeeTransactionDto> {
-  const user = await requireSessionUser(employeeManagerRoles);
+  const user = await requireOrganizationUser(employeeManagerRoles);
   const parsed = transactionInputSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -160,8 +163,11 @@ export async function createEmployeeTransaction(input: EmployeeTransactionInput)
     prisma.$transaction(
       async (tx) => {
         if (parsed.data.idempotencyKey) {
-          const existing = await tx.employeeTransaction.findUnique({
-            where: { idempotencyKey: parsed.data.idempotencyKey },
+          const existing = await tx.employeeTransaction.findFirst({
+            where: {
+              idempotencyKey: parsed.data.idempotencyKey,
+              organizationId: user.organizationId,
+            },
             include: transactionInclude,
           });
           if (existing) {
@@ -169,8 +175,11 @@ export async function createEmployeeTransaction(input: EmployeeTransactionInput)
           }
         }
 
-        const employee = await tx.employee.findUnique({
-          where: { id: parsed.data.employeeId },
+        const employee = await tx.employee.findFirst({
+          where: {
+            id: parsed.data.employeeId,
+            organizationId: user.organizationId,
+          },
           include: employeeSnapshotInclude,
         });
         if (!employee) {
@@ -179,12 +188,14 @@ export async function createEmployeeTransaction(input: EmployeeTransactionInput)
 
         const number = await nextTransactionNumber(
           tx,
+          user.organizationId,
           parsed.data.payrollYear,
           parsed.data.payrollMonth,
         );
 
         const created = await tx.employeeTransaction.create({
           data: {
+            organizationId: user.organizationId,
             employeeId: parsed.data.employeeId,
             number,
             transactionDate: parseDate(parsed.data.transactionDate),
@@ -204,7 +215,12 @@ export async function createEmployeeTransaction(input: EmployeeTransactionInput)
           return created;
         }
 
-        return validateTransactionRecord(tx, created.id, user.id);
+        return validateTransactionRecord(
+          tx,
+          user.organizationId,
+          created.id,
+          user.id,
+        );
       },
       { isolationLevel: "Serializable" },
     ),
@@ -214,10 +230,10 @@ export async function createEmployeeTransaction(input: EmployeeTransactionInput)
 }
 
 export async function validateEmployeeTransaction(id: string): Promise<EmployeeTransactionDto> {
-  const user = await requireSessionUser(employeeManagerRoles);
+  const user = await requireOrganizationUser(employeeManagerRoles);
   const transaction = await withSerializableRetry(() =>
     prisma.$transaction(
-      async (tx) => validateTransactionRecord(tx, id, user.id),
+      async (tx) => validateTransactionRecord(tx, user.organizationId, id, user.id),
       { isolationLevel: "Serializable" },
     ),
   );
@@ -225,12 +241,12 @@ export async function validateEmployeeTransaction(id: string): Promise<EmployeeT
 }
 
 export async function cancelEmployeeTransaction(id: string): Promise<EmployeeTransactionDto> {
-  const user = await requireSessionUser(employeeManagerRoles);
+  const user = await requireOrganizationUser(employeeManagerRoles);
 
   const transaction = await prisma.$transaction(
     async (tx) => {
-      const existing = await tx.employeeTransaction.findUnique({
-        where: { id },
+      const existing = await tx.employeeTransaction.findFirst({
+        where: { id, organizationId: user.organizationId },
         include: transactionInclude,
       });
       if (!existing) {
@@ -264,11 +280,12 @@ export async function cancelEmployeeTransaction(id: string): Promise<EmployeeTra
 
 async function validateTransactionRecord(
   tx: Prisma.TransactionClient,
+  organizationId: string,
   id: string,
   validatedByUserId: string,
 ) {
-  const existing = await tx.employeeTransaction.findUnique({
-    where: { id },
+  const existing = await tx.employeeTransaction.findFirst({
+    where: { id, organizationId },
     include: transactionInclude,
   });
   if (!existing) {
@@ -281,8 +298,8 @@ async function validateTransactionRecord(
     throw new OperationsServiceError("Une operation annulee ne peut pas etre validee.", 409);
   }
 
-  const employee = await tx.employee.findUnique({
-    where: { id: existing.employeeId },
+  const employee = await tx.employee.findFirst({
+    where: { id: existing.employeeId, organizationId },
     include: employeeSnapshotInclude,
   });
   if (!employee) {
@@ -290,6 +307,7 @@ async function validateTransactionRecord(
   }
 
   const totals = await aggregateValidatedPeriod(tx, {
+    organizationId,
     employeeId: existing.employeeId,
     payrollYear: existing.payrollYear,
     payrollMonth: existing.payrollMonth,
@@ -383,6 +401,7 @@ async function validateTransactionRecord(
         : remainingBefore;
 
   const accountingEntry = await postEmployeePayrollAccountingEntry(tx, {
+    organizationId,
     operationId: existing.id,
     operationNumber: existing.number,
     employeeId: employee.id,
@@ -416,12 +435,16 @@ async function validateTransactionRecord(
 
 async function nextTransactionNumber(
   tx: Prisma.TransactionClient,
+  organizationId: string,
   payrollYear: number,
   payrollMonth: number,
 ) {
   const prefix = `SAL-${payrollYear}${String(payrollMonth).padStart(2, "0")}-`;
   const last = await tx.employeeTransaction.findFirst({
-    where: { number: { startsWith: prefix } },
+    where: {
+      organizationId,
+      number: { startsWith: prefix },
+    },
     orderBy: { number: "desc" },
     select: { number: true },
   });
@@ -470,11 +493,17 @@ export function mapEmployeeTransactionError(error: unknown) {
 
 async function aggregateValidatedPeriod(
   db: typeof prisma | Prisma.TransactionClient,
-  input: { employeeId: string; payrollYear: number; payrollMonth: number },
+  input: {
+    organizationId: string;
+    employeeId: string;
+    payrollYear: number;
+    payrollMonth: number;
+  },
 ) {
   const rows = await db.employeeTransaction.groupBy({
     by: ["type"],
     where: {
+      organizationId: input.organizationId,
       employeeId: input.employeeId,
       payrollYear: input.payrollYear,
       payrollMonth: input.payrollMonth,

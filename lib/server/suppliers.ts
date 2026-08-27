@@ -1,19 +1,23 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { SupplierPartnerDto } from "@/types/operations-dto";
 import type { ProductOptionDto } from "@/types/product-dto";
 
 export async function getSuppliers(): Promise<ProductOptionDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   return prisma.supplier.findMany({
-    where: { active: true },
+    where: { active: true, organizationId: currentUser.organizationId },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
 }
 
 export async function getSupplierPartners(): Promise<SupplierPartnerDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const suppliers = await prisma.supplier.findMany({
+    where: { organizationId: currentUser.organizationId },
     select: {
       id: true,
       code: true,

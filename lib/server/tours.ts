@@ -4,8 +4,9 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import type { TourGetPayload } from "@/lib/generated/prisma/models/Tour";
-import { AuthServiceError, requireSessionUser } from "@/lib/server/auth";
+import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { getLoadingByTourId } from "@/lib/server/truck-loadings";
 import type {
   TourDto,
@@ -63,7 +64,7 @@ const tourStockCountMutationSchema = z.object({
 
 export async function mapTourToDto(tour: TourWithRelations): Promise<TourDto> {
   const [loading, stockSheet] = await Promise.all([
-    getLoadingByTourId(tour.id),
+    getLoadingByTourId(tour.id, tour.organizationId),
     getTourStockSheet(tour),
   ]);
 
@@ -106,7 +107,9 @@ export function mapTourToSummaryDto(tour: TourWithRelations): TourSummaryDto {
 }
 
 export async function getTours(): Promise<TourDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const tours = await prisma.tour.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: tourInclude,
     orderBy: [{ date: "desc" }, { code: "desc" }],
   });
@@ -114,20 +117,24 @@ export async function getTours(): Promise<TourDto[]> {
 }
 
 export async function getTourById(id: string): Promise<TourDto> {
-  const tour = await getTourRecordById(id);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const tour = await getTourRecordById(id, currentUser.organizationId);
   if (!tour) throw new OperationsServiceError("Fiche journaliere introuvable.", 404);
   return mapTourToDto(tour);
 }
 
 export async function createTour(input: TourMutationInput): Promise<TourDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const data = await validateTourInput(input);
   const date = normalizeTourDate(data.date);
 
   try {
     const tour = await prisma.$transaction(async (tx) => {
-      const truck = await tx.truck.findUnique({
-        where: { id: data.truckId },
+      const truck = await tx.truck.findFirst({
+        where: {
+          id: data.truckId,
+          organizationId: user.organizationId,
+        },
         select: {
           id: true,
           depotId: true,
@@ -140,12 +147,17 @@ export async function createTour(input: TourMutationInput): Promise<TourDto> {
       const resolvedTruck = resolveTruckAssignment(truck);
 
       const existing = await tx.tour.findFirst({
-        where: { truckId: resolvedTruck.id, date },
+        where: {
+          organizationId: user.organizationId,
+          truckId: resolvedTruck.id,
+          date,
+        },
         include: tourInclude,
       });
       if (existing) return existing;
 
       await ensureTourAvailability({
+        organizationId: user.organizationId,
         date,
         truckId: resolvedTruck.id,
         driverId: resolvedTruck.driverId,
@@ -153,7 +165,8 @@ export async function createTour(input: TourMutationInput): Promise<TourDto> {
 
       return tx.tour.create({
         data: {
-          code: await nextTourCode(tx),
+          organizationId: user.organizationId,
+          code: await nextTourCode(tx, user.organizationId),
           date,
           depotId: resolvedTruck.depotId,
           truckId: resolvedTruck.id,
@@ -175,14 +188,14 @@ export async function updateDraftTour(
   id: string,
   input: TourMutationInput,
 ): Promise<TourDto> {
-  await requireSessionUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
   const data = await validateTourInput(input);
   const date = normalizeTourDate(data.date);
 
   try {
     const tour = await prisma.$transaction(async (tx) => {
-      const existing = await tx.tour.findUnique({
-        where: { id },
+      const existing = await tx.tour.findFirst({
+        where: { id, organizationId: currentUser.organizationId },
         select: { id: true, status: true },
       });
       if (!existing) {
@@ -195,8 +208,11 @@ export async function updateDraftTour(
         );
       }
 
-      const truck = await tx.truck.findUnique({
-        where: { id: data.truckId },
+      const truck = await tx.truck.findFirst({
+        where: {
+          id: data.truckId,
+          organizationId: currentUser.organizationId,
+        },
         select: {
           id: true,
           depotId: true,
@@ -209,6 +225,7 @@ export async function updateDraftTour(
       const resolvedTruck = resolveTruckAssignment(truck);
 
       await ensureTourAvailability({
+        organizationId: currentUser.organizationId,
         date,
         truckId: resolvedTruck.id,
         driverId: resolvedTruck.driverId,
@@ -238,13 +255,13 @@ export async function updateTourStockCounts(
   tourId: string,
   input: TourStockCountMutationInput,
 ): Promise<TourDto> {
-  const user = await requireSessionUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const data = validateTourStockCountsInput(input);
 
   try {
     await prisma.$transaction(async (tx) => {
-      const tour = await tx.tour.findUnique({
-        where: { id: tourId },
+      const tour = await tx.tour.findFirst({
+        where: { id: tourId, organizationId: user.organizationId },
         select: { id: true },
       });
       if (!tour) {
@@ -254,7 +271,10 @@ export async function updateTourStockCounts(
       const productIds = data.lines.map((line) => line.productId);
       if (productIds.length > 0) {
         const productsCount = await tx.product.count({
-          where: { id: { in: productIds } },
+          where: {
+            id: { in: productIds },
+            organizationId: user.organizationId,
+          },
         });
         if (productsCount !== productIds.length) {
           throw new OperationsServiceError("Un produit est introuvable.", 422);
@@ -303,9 +323,9 @@ export async function updateTourStockCounts(
 }
 
 export async function cancelTour(id: string): Promise<TourDto> {
-  await requireSessionUser(["admin", "depot_manager"]);
-  const tour = await prisma.tour.findUnique({
-    where: { id },
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
+  const tour = await prisma.tour.findFirst({
+    where: { id, organizationId: currentUser.organizationId },
     select: { id: true, status: true, loading: { select: { status: true } } },
   });
   if (!tour) throw new OperationsServiceError("Fiche journaliere introuvable.", 404);
@@ -322,21 +342,25 @@ export async function cancelTour(id: string): Promise<TourDto> {
     include: tourInclude,
   });
   await prisma.truckLoading.updateMany({
-    where: { tourId: id, status: "DRAFT" },
+    where: {
+      tourId: id,
+      organizationId: currentUser.organizationId,
+      status: "DRAFT",
+    },
     data: { status: "CANCELLED" },
   });
   return mapTourToDto(updated);
 }
 
-export async function startTour(tourId: string, userId?: string): Promise<TourDto> {
-  const user = userId ? await requireSessionUser(["driver"]) : await requireSessionUser(["driver"]);
+export async function startTour(tourId: string): Promise<TourDto> {
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
 
   const tour = await prisma.$transaction(async (tx) => {
-    const existing = await tx.tour.findUnique({
-      where: { id: tourId },
+    const existing = await tx.tour.findFirst({
+      where: { id: tourId, organizationId: user.organizationId },
       select: {
         id: true,
         status: true,
@@ -355,6 +379,7 @@ export async function startTour(tourId: string, userId?: string): Promise<TourDt
 
     const activeTour = await tx.tour.findFirst({
       where: {
+        organizationId: user.organizationId,
         id: { not: tourId },
         truckId: user.truckId,
         status: "IN_PROGRESS",
@@ -381,7 +406,7 @@ export async function startTour(tourId: string, userId?: string): Promise<TourDt
 }
 
 export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
@@ -390,8 +415,11 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
     const tour = await withTourSerializableRetry(() =>
       prisma.$transaction(
         async (tx) => {
-          const driver = await tx.driver.findUnique({
-            where: { id: user.driverId },
+          const driver = await tx.driver.findFirst({
+            where: {
+              id: user.driverId,
+              organizationId: user.organizationId,
+            },
             select: {
               id: true,
               active: true,
@@ -415,6 +443,7 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
 
           const existingDriverTour = await tx.tour.findFirst({
             where: {
+              organizationId: user.organizationId,
               driverId: driver.id,
               status: "IN_PROGRESS",
             },
@@ -427,6 +456,7 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
 
           const existingTruckTour = await tx.tour.findFirst({
             where: {
+              organizationId: user.organizationId,
               truckId: driver.truck.id,
               status: "IN_PROGRESS",
             },
@@ -438,12 +468,11 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
           }
 
           const today = getTodayTourDate();
-          const existingDailySheet = await tx.tour.findUnique({
+          const existingDailySheet = await tx.tour.findFirst({
             where: {
-              truckId_date: {
-                truckId: driver.truck.id,
-                date: today,
-              },
+              organizationId: user.organizationId,
+              truckId: driver.truck.id,
+              date: today,
             },
             include: tourInclude,
           });
@@ -463,7 +492,8 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
 
           return tx.tour.create({
             data: {
-              code: await nextTourCode(tx),
+              organizationId: user.organizationId,
+              code: await nextTourCode(tx, user.organizationId),
               date: today,
               depotId: driver.truck.depotId,
               truckId: driver.truck.id,
@@ -486,14 +516,14 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
 }
 
 export async function markTourReturned(tourId: string): Promise<TourDto> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
 
   const tour = await prisma.$transaction(async (tx) => {
-    const existing = await tx.tour.findUnique({
-      where: { id: tourId },
+    const existing = await tx.tour.findFirst({
+      where: { id: tourId, organizationId: user.organizationId },
       select: {
         id: true,
         status: true,
@@ -507,8 +537,8 @@ export async function markTourReturned(tourId: string): Promise<TourDto> {
       throw new AuthServiceError("Cette fiche ne vous appartient pas.", 403);
     }
     if (existing.status === "WAITING_FOR_CLOSURE" || existing.status === "CLOSED") {
-      return tx.tour.findUniqueOrThrow({
-        where: { id: tourId },
+      return tx.tour.findFirstOrThrow({
+        where: { id: tourId, organizationId: user.organizationId },
         include: tourInclude,
       });
     }
@@ -532,13 +562,14 @@ export async function markTourReturned(tourId: string): Promise<TourDto> {
 }
 
 export async function markCurrentDriverTourReturned(): Promise<TourDto> {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
 
   const activeTour = await prisma.tour.findFirst({
     where: {
+      organizationId: user.organizationId,
       driverId: user.driverId,
       truckId: user.truckId,
       status: "IN_PROGRESS",
@@ -553,6 +584,7 @@ export async function markCurrentDriverTourReturned(): Promise<TourDto> {
 
   const latestClosedTour = await prisma.tour.findFirst({
     where: {
+      organizationId: user.organizationId,
       driverId: user.driverId,
       truckId: user.truckId,
       status: {
@@ -570,9 +602,13 @@ export async function markCurrentDriverTourReturned(): Promise<TourDto> {
   return getTourById(latestClosedTour.id);
 }
 
-export async function getActiveTourForDriver(driverId: string): Promise<TourDto | null> {
+export async function getActiveTourForDriver(
+  driverId: string,
+  organizationId: string,
+): Promise<TourDto | null> {
   const tour = await prisma.tour.findFirst({
     where: {
+      organizationId,
       driverId,
       status: "IN_PROGRESS",
     },
@@ -582,34 +618,46 @@ export async function getActiveTourForDriver(driverId: string): Promise<TourDto 
   return tour ? mapTourToDto(tour) : null;
 }
 
-export async function requireActiveTourForDriver(driverId: string): Promise<TourDto> {
-  const tour = await getActiveTourForDriver(driverId);
+export async function requireActiveTourForDriver(
+  driverId: string,
+  organizationId: string,
+): Promise<TourDto> {
+  const tour = await getActiveTourForDriver(driverId, organizationId);
   if (!tour) {
     throw new OperationsServiceError("Aucune tournee active pour ce chauffeur.", 404);
   }
   return tour;
 }
 
-export async function getToursForDriver(driverId: string): Promise<TourDto[]> {
+export async function getToursForDriver(
+  driverId: string,
+  organizationId: string,
+): Promise<TourDto[]> {
   const tours = await prisma.tour.findMany({
-    where: { driverId },
+    where: { driverId, organizationId },
     include: tourInclude,
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
   });
   return Promise.all(tours.map(mapTourToDto));
 }
 
-export async function getToursForTruck(truckId: string): Promise<TourDto[]> {
+export async function getToursForTruck(
+  truckId: string,
+  organizationId: string,
+): Promise<TourDto[]> {
   const tours = await prisma.tour.findMany({
-    where: { truckId },
+    where: { truckId, organizationId },
     include: tourInclude,
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
   });
   return Promise.all(tours.map(mapTourToDto));
 }
 
-async function getTourRecordById(id: string) {
-  return prisma.tour.findUnique({ where: { id }, include: tourInclude });
+async function getTourRecordById(id: string, organizationId: string) {
+  return prisma.tour.findFirst({
+    where: { id, organizationId },
+    include: tourInclude,
+  });
 }
 
 async function validateTourInput(input: TourMutationInput) {
@@ -774,11 +822,13 @@ function resolveTruckAssignment(
 }
 
 async function ensureTourAvailability({
+  organizationId,
   date,
   truckId,
   driverId,
   currentTourId,
 }: {
+  organizationId: string;
   date: Date;
   truckId: string;
   driverId: string;
@@ -787,6 +837,7 @@ async function ensureTourAvailability({
   const [sameTruckSameDate, openTruckTour, openDriverTour] = await Promise.all([
     prisma.tour.findFirst({
       where: {
+        organizationId,
         truckId,
         date,
         ...(currentTourId ? { id: { not: currentTourId } } : {}),
@@ -795,6 +846,7 @@ async function ensureTourAvailability({
     }),
     prisma.tour.findFirst({
       where: {
+        organizationId,
         truckId,
         status: { in: [...openTourStatuses] },
         ...(currentTourId ? { id: { not: currentTourId } } : {}),
@@ -803,6 +855,7 @@ async function ensureTourAvailability({
     }),
     prisma.tour.findFirst({
       where: {
+        organizationId,
         driverId,
         status: { in: [...openTourStatuses] },
         ...(currentTourId ? { id: { not: currentTourId } } : {}),
@@ -829,8 +882,11 @@ async function ensureTourAvailability({
 }
 
 async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockSheetDto> {
-  const truckLocation = await prisma.stockLocation.findUnique({
-    where: { truckId: tour.truck.id },
+  const truckLocation = await prisma.stockLocation.findFirst({
+    where: {
+      truckId: tour.truck.id,
+      organizationId: tour.organizationId,
+    },
     select: { id: true },
   });
 
@@ -860,6 +916,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
         : Promise.resolve([]),
       prisma.stockMovement.findMany({
         where: {
+          organizationId: tour.organizationId,
           status: "VALIDATED",
           createdAt: { lt: dayStart },
           OR: [
@@ -876,6 +933,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
       }),
       prisma.stockMovement.findMany({
         where: {
+          organizationId: tour.organizationId,
           status: "VALIDATED",
           type: "TRUCK_LOADING",
           createdAt: { gte: dayStart, lt: dayEnd },
@@ -891,6 +949,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
         where: {
           sale: {
             tourId: tour.id,
+            organizationId: tour.organizationId,
             status: { not: "CANCELLED" },
           },
         },
@@ -910,7 +969,11 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
         },
       }),
       prisma.stockLevel.findMany({
-        where: { locationId: truckLocation.id, quantity: { gt: 0 } },
+        where: {
+          organizationId: tour.organizationId,
+          locationId: truckLocation.id,
+          quantity: { gt: 0 },
+        },
         select: { productId: true, quantity: true },
       }),
     ]);
@@ -982,7 +1045,10 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
   }
 
   const products = await prisma.product.findMany({
-    where: { id: { in: [...productIds] } },
+    where: {
+      id: { in: [...productIds] },
+      organizationId: tour.organizationId,
+    },
     select: {
       id: true,
       reference: true,
@@ -1034,11 +1100,15 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
   };
 }
 
-async function nextTourCode(tx: Pick<typeof prisma, "tour">) {
+async function nextTourCode(
+  tx: Pick<typeof prisma, "tour">,
+  organizationId: string,
+) {
   const year = new Date().getUTCFullYear();
   const prefix = `TOUR-${year}-`;
   const tours = await tx.tour.findMany({
     where: {
+      organizationId,
       code: {
         startsWith: prefix,
       },

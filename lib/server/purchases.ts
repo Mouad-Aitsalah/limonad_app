@@ -6,8 +6,8 @@ import { Prisma } from "@/lib/generated/prisma/client";
 import type { PurchaseGetPayload } from "@/lib/generated/prisma/models/Purchase";
 import { prisma } from "@/lib/prisma";
 import { postPurchaseAccountingEntry } from "@/lib/server/accounting";
-import { requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { nextMovementNumber, roundMoney } from "@/lib/server/sales-shared";
 import type { Purchase, PurchasePaymentMethod, PurchaseStatus } from "@/types/purchase";
 
@@ -53,7 +53,9 @@ const purchaseInclude = {
 type PurchaseWithRelations = PurchaseGetPayload<{ include: typeof purchaseInclude }>;
 
 export async function getPurchases(): Promise<Purchase[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const purchases = await prisma.purchase.findMany({
+    where: { organizationId: currentUser.organizationId },
     include: purchaseInclude,
     orderBy: [{ createdAt: "desc" }, { purchaseNumber: "desc" }],
   });
@@ -62,7 +64,7 @@ export async function getPurchases(): Promise<Purchase[]> {
 }
 
 export async function createPurchase(input: unknown): Promise<Purchase> {
-  const sessionUser = await requireSessionUser(["admin", "depot_manager", "cashier"]);
+  const sessionUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const parsed = purchaseSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -85,8 +87,11 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
 
   const created = await prisma.$transaction(
     async (tx) => {
-      const user = await tx.user.findUnique({
-        where: { id: sessionUser.id },
+      const user = await tx.user.findFirst({
+        where: {
+          id: sessionUser.id,
+          organizationId: sessionUser.organizationId,
+        },
         select: {
           id: true,
           depotId: true,
@@ -101,23 +106,29 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
       }
 
       const [supplier, stockLocation, products] = await Promise.all([
-        tx.supplier.findUnique({
-          where: { id: parsed.data.fournisseurId },
+        tx.supplier.findFirst({
+          where: {
+            id: parsed.data.fournisseurId,
+            organizationId: sessionUser.organizationId,
+          },
           select: { id: true, active: true },
         }),
-        tx.stockLocation.findUnique({
-          where: { depotId: user.depotId },
+        tx.stockLocation.findFirst({
+          where: {
+            depotId: user.depotId,
+            organizationId: sessionUser.organizationId,
+          },
           select: { id: true, active: true, type: true },
         }),
         tx.product.findMany({
           where: {
             id: { in: normalizedLines.map((line) => line.productId) },
+            organizationId: sessionUser.organizationId,
             status: "ACTIVE",
           },
           select: { id: true, taxRate: true },
         }),
       ]);
-
       if (!supplier) throw new OperationsServiceError("Fournisseur introuvable.", 404);
       if (!supplier.active) throw new OperationsServiceError("Fournisseur inactif.", 409);
       if (!stockLocation || stockLocation.type !== "DEPOT" || !stockLocation.active) {
@@ -153,10 +164,11 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
         computedLines.reduce((sum, line) => sum + line.taxAmount, 0),
       );
       const totalTTC = roundMoney(subtotalHT + taxAmount);
-      const purchaseNumber = await nextPurchaseNumber(tx);
+      const purchaseNumber = await nextPurchaseNumber(tx, sessionUser.organizationId);
 
       const purchase = await tx.purchase.create({
         data: {
+          organizationId: sessionUser.organizationId,
           purchaseNumber,
           supplierId: supplier.id,
           depotId: user.depotId,
@@ -206,6 +218,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
           },
           update: {},
           create: {
+            organizationId: sessionUser.organizationId,
             productId: line.productId,
             locationId: stockLocation.id,
             quantity: 0,
@@ -221,7 +234,8 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
 
         await tx.stockMovement.create({
           data: {
-            movementNumber: await nextMovementNumber(tx),
+            organizationId: sessionUser.organizationId,
+            movementNumber: await nextMovementNumber(tx, sessionUser.organizationId),
             type: "PURCHASE_ENTRY",
             productId: line.productId,
             quantity: line.quantite,
@@ -241,6 +255,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
       }
 
       await postPurchaseAccountingEntry(tx, {
+        organizationId: sessionUser.organizationId,
         purchaseId: purchase.id,
         purchaseNumber: purchase.purchaseNumber,
         supplierId: purchase.supplierId,
@@ -305,9 +320,15 @@ function normalizeLines(lines: z.infer<typeof purchaseSchema>["lignes"]) {
   });
 }
 
-async function nextPurchaseNumber(tx: Prisma.TransactionClient) {
+async function nextPurchaseNumber(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+) {
   const last = await tx.purchase.findFirst({
-    where: { purchaseNumber: { startsWith: "A-" } },
+    where: {
+      organizationId,
+      purchaseNumber: { startsWith: "A-" },
+    },
     orderBy: { purchaseNumber: "desc" },
     select: { purchaseNumber: true },
   });

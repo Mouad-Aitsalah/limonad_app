@@ -12,8 +12,9 @@ import {
   splitGpsRouteIntoSegments,
 } from "@/lib/gps/gps-utils";
 import { prisma } from "@/lib/prisma";
-import { AuthServiceError, requireSessionUser } from "@/lib/server/auth";
+import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { getLoadingByTourId } from "@/lib/server/truck-loadings";
 import {
   getActiveTourForDriver,
@@ -55,10 +56,14 @@ type VisitDbClient = Pick<typeof prisma, "tourCustomerVisit">;
 export async function getCurrentDriverTour(): Promise<CurrentDriverTourDto> {
   const user = await requireDriverUser();
 
-  const activeTour = await getActiveTourForDriver(user.driverId);
+  const activeTour = await getActiveTourForDriver(user.driverId, user.organizationId);
   if (!activeTour) {
-    const startContext = await getDriverTourStartContext(user.driverId);
-    const existingDailyTour = await findDriverDailyTour(user.driverId, startContext.truck.id);
+    const startContext = await getDriverTourStartContext(user.driverId, user.organizationId);
+    const existingDailyTour = await findDriverDailyTour(
+      user.driverId,
+      user.organizationId,
+      startContext.truck.id,
+    );
 
     return emptyCurrentTour(
       existingDailyTour
@@ -69,12 +74,12 @@ export async function getCurrentDriverTour(): Promise<CurrentDriverTourDto> {
     );
   }
 
-  return buildCurrentDriverTourState(user.driverId, activeTour);
+  return buildCurrentDriverTourState(user.organizationId, user.driverId, activeTour);
 }
 
 export async function requireCurrentDriverTour(): Promise<TourDto> {
   const user = await requireDriverUser();
-  return requireActiveTourForDriver(user.driverId);
+  return requireActiveTourForDriver(user.driverId, user.organizationId);
 }
 
 export async function recordCurrentDriverLocation(
@@ -82,7 +87,7 @@ export async function recordCurrentDriverLocation(
 ): Promise<{ currentTour: CurrentDriverTourDto; point: DriverTourPositionDto }> {
   const user = await requireDriverUser();
   const data = locationPingSchema.parse(input);
-  const tour = await requireActiveTourForDriver(user.driverId);
+  const tour = await requireActiveTourForDriver(user.driverId, user.organizationId);
   const recordedAt = data.recordedAt ?? new Date();
   const receivedAt = new Date();
   const nextPoint = {
@@ -150,7 +155,13 @@ export async function recordCurrentDriverLocation(
     },
   });
 
-  await upsertNearbyVisit(user.driverId, tour.id, data.latitude, data.longitude);
+  await upsertNearbyVisit(
+    user.organizationId,
+    user.driverId,
+    tour.id,
+    data.latitude,
+    data.longitude,
+  );
 
   const point: DriverTourPositionDto = {
     latitude: data.latitude,
@@ -167,10 +178,15 @@ export async function recordCurrentDriverLocation(
   // The caller already has the new point and appends it to its own route
   // locally, so the route history here is skipped - only a cheap count is
   // used for the summary's routePointCount.
-  const currentTour = await buildCurrentDriverTourState(user.driverId, tour, {
+  const currentTour = await buildCurrentDriverTourState(
+    user.organizationId,
+    user.driverId,
+    tour,
+    {
     skipRouteHistory: true,
     latestPositionOverride: point,
-  });
+    },
+  );
 
   return { currentTour, point };
 }
@@ -179,13 +195,17 @@ export async function confirmCurrentDriverArrival(
   customerId: string,
 ): Promise<CurrentDriverTourDto> {
   const user = await requireDriverUser();
-  const tour = await requireActiveTourForDriver(user.driverId);
+  const tour = await requireActiveTourForDriver(user.driverId, user.organizationId);
 
   if (tour.status !== "IN_PROGRESS") {
     throw new OperationsServiceError("La tournee doit etre en cours pour confirmer une arrivee.", 409);
   }
 
-  const customer = await getAccessibleDriverCustomer(user.driverId, customerId);
+  const customer = await getAccessibleDriverCustomer(
+    user.organizationId,
+    user.driverId,
+    customerId,
+  );
   const latestPing = await prisma.tourLocationPing.findFirst({
     where: { tourId: tour.id },
     orderBy: { recordedAt: "desc" },
@@ -245,7 +265,7 @@ export async function confirmCurrentDriverArrival(
     },
   });
 
-  return buildCurrentDriverTourState(user.driverId, tour);
+  return buildCurrentDriverTourState(user.organizationId, user.driverId, tour);
 }
 
 export async function markCurrentDriverNoSale(
@@ -253,13 +273,17 @@ export async function markCurrentDriverNoSale(
   input: unknown,
 ): Promise<CurrentDriverTourDto> {
   const user = await requireDriverUser();
-  const tour = await requireActiveTourForDriver(user.driverId);
+  const tour = await requireActiveTourForDriver(user.driverId, user.organizationId);
 
   if (tour.status !== "IN_PROGRESS") {
     throw new OperationsServiceError("La tournee doit etre en cours pour enregistrer une visite.", 409);
   }
 
-  const customer = await getAccessibleDriverCustomer(user.driverId, customerId);
+  const customer = await getAccessibleDriverCustomer(
+    user.organizationId,
+    user.driverId,
+    customerId,
+  );
   const data = noSaleSchema.parse(input);
   const now = new Date();
 
@@ -286,7 +310,7 @@ export async function markCurrentDriverNoSale(
     },
   });
 
-  return buildCurrentDriverTourState(user.driverId, tour);
+  return buildCurrentDriverTourState(user.organizationId, user.driverId, tour);
 }
 
 export async function markCustomerDeliveredOnTour(
@@ -339,6 +363,7 @@ export async function markCustomerDeliveredOnTour(
 }
 
 async function buildCurrentDriverTourState(
+  organizationId: string,
   driverId: string,
   baseTour: TourDto,
   options?: {
@@ -354,12 +379,13 @@ async function buildCurrentDriverTourState(
     latestPositionOverride?: DriverTourPositionDto;
   },
 ): Promise<CurrentDriverTourDto> {
-  const tour = await hydrateTourLoading(baseTour);
+  const tour = await hydrateTourLoading(organizationId, baseTour);
   const skipRouteHistory = options?.skipRouteHistory ?? false;
 
   const [customers, visits, pingsOrCount, sales] = await Promise.all([
     prisma.customer.findMany({
       where: {
+        organizationId,
         status: "ACTIVE",
         OR: [{ creationOrigin: "ADMIN" }, { createdByDriverId: driverId }],
       },
@@ -387,6 +413,7 @@ async function buildCurrentDriverTourState(
         }),
     prisma.sale.findMany({
       where: {
+        organizationId,
         tourId: tour.id,
         status: { not: "CANCELLED" },
       },
@@ -480,12 +507,16 @@ async function buildCurrentDriverTourState(
   };
 }
 
-async function hydrateTourLoading(tour: TourDto): Promise<TourDto> {
-  const loading = await getLoadingByTourId(tour.id);
+async function hydrateTourLoading(
+  organizationId: string,
+  tour: TourDto,
+): Promise<TourDto> {
+  const loading = await getLoadingByTourId(tour.id, organizationId);
   return { ...tour, loading };
 }
 
 async function upsertNearbyVisit(
+  organizationId: string,
   driverId: string,
   tourId: string,
   latitude: number,
@@ -493,6 +524,7 @@ async function upsertNearbyVisit(
 ) {
   const customers = await prisma.customer.findMany({
     where: {
+      organizationId,
       status: "ACTIVE",
       latitude: { not: null },
       longitude: { not: null },
@@ -573,9 +605,14 @@ async function upsertNearbyVisit(
   });
 }
 
-async function getAccessibleDriverCustomer(driverId: string, customerId: string) {
+async function getAccessibleDriverCustomer(
+  organizationId: string,
+  driverId: string,
+  customerId: string,
+) {
   const customer = await prisma.customer.findFirst({
     where: {
+      organizationId,
       id: customerId,
       status: "ACTIVE",
       OR: [{ creationOrigin: "ADMIN" }, { createdByDriverId: driverId }],
@@ -594,13 +631,16 @@ async function getAccessibleDriverCustomer(driverId: string, customerId: string)
   return customer;
 }
 
-async function findDriverDailyTour(driverId: string, truckId: string) {
-  const tour = await prisma.tour.findUnique({
+async function findDriverDailyTour(
+  driverId: string,
+  organizationId: string,
+  truckId: string,
+) {
+  const tour = await prisma.tour.findFirst({
     where: {
-      truckId_date: {
-        truckId,
-        date: getTodayTourDate(),
-      },
+      organizationId,
+      truckId,
+      date: getTodayTourDate(),
     },
     select: {
       status: true,
@@ -622,7 +662,7 @@ async function findDriverDailyTour(driverId: string, truckId: string) {
 }
 
 async function requireDriverUser() {
-  const user = await requireSessionUser(["driver"]);
+  const user = await requireOrganizationUser(["driver"]);
   const driverId = user.driverId;
   if (!driverId) {
     throw new AuthServiceError("Profil chauffeur introuvable.", 403);
@@ -633,9 +673,10 @@ async function requireDriverUser() {
 
 async function getDriverTourStartContext(
   driverId: string,
+  organizationId: string,
 ): Promise<DriverTourStartContextDto> {
-  const driver = await prisma.driver.findUnique({
-    where: { id: driverId },
+  const driver = await prisma.driver.findFirst({
+    where: { id: driverId, organizationId },
     select: {
       id: true,
       active: true,
