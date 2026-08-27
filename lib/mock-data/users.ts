@@ -1,0 +1,87 @@
+import type { User } from "@/types/user";
+
+/**
+ * L'id de chaque compte reprend volontairement celui déjà utilisé dans
+ * lib/mock-data/auth-users.ts (session de connexion) et, pour les chauffeurs,
+ * lib/mock-data/drivers.ts / trucks.ts (affectation camion) — même identité
+ * mock partagée à travers tout COMDIS, prête à devenir une vraie table Utilisateur.
+ */
+export const users: User[] = [
+  {
+    id: "user-admin",
+    nom: "Administrateur COMDIS",
+    email: "admin@comdis.local",
+    telephone: "+212 6 00-000000",
+    role: "admin",
+    actif: true,
+    derniereConnexion: new Date("2026-07-30T08:15:00"),
+    createdAt: new Date("2026-01-05"),
+    updatedAt: new Date("2026-07-30"),
+  },
+  {
+    id: "user-cashier",
+    nom: "Caissier Principal",
+    email: "caissier@comdis.local",
+    telephone: "+212 6 11-223344",
+    role: "cashier",
+    actif: true,
+    derniereConnexion: new Date("2026-07-30T07:50:00"),
+    createdAt: new Date("2026-01-05"),
+    updatedAt: new Date("2026-07-30"),
+  },
+  {
+    id: "user-cashier-2",
+    nom: "Nadia Squalli",
+    email: "nadia.squalli@comdis.local",
+    telephone: "+212 6 22-334455",
+    role: "cashier",
+    actif: false,
+    derniereConnexion: new Date("2026-06-02T09:30:00"),
+    createdAt: new Date("2026-02-10"),
+    updatedAt: new Date("2026-06-15"),
+  },
+  {
+    id: "driver-1",
+    nom: "Youssef Amrani",
+    email: "chauffeur@comdis.local",
+    telephone: "+212 6 33-445566",
+    role: "driver",
+    actif: true,
+    derniereConnexion: new Date("2026-07-29T18:40:00"),
+    createdAt: new Date("2026-01-08"),
+    updatedAt: new Date("2026-07-29"),
+  },
+  {
+    id: "driver-2",
+    nom: "Karim El Idrissi",
+    email: "karim.elidrissi@comdis.local",
+    telephone: "+212 6 44-556677",
+    role: "driver",
+    actif: true,
+    derniereConnexion: new Date("2026-07-29T17:05:00"),
+    createdAt: new Date("2026-01-08"),
+    updatedAt: new Date("2026-07-29"),
+  },
+  {
+    id: "driver-3",
+    nom: "Rachid Benali",
+    email: "rachid.benali@comdis.local",
+    telephone: "+212 6 55-667788",
+    role: "driver",
+    actif: true,
+    derniereConnexion: new Date("2026-07-25T16:20:00"),
+    createdAt: new Date("2026-01-08"),
+    updatedAt: new Date("2026-07-25"),
+  },
+  {
+    id: "driver-4",
+    nom: "Hassan Ouazzani",
+    email: "hassan.ouazzani@comdis.local",
+    telephone: "+212 6 66-778899",
+    role: "driver",
+    actif: true,
+    derniereConnexion: new Date("2026-07-28T14:10:00"),
+    createdAt: new Date("2026-02-05"),
+    updatedAt: new Date("2026-07-28"),
+  },
+];

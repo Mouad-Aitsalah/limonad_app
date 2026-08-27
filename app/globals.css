@@ -1,26 +1,637 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "leaflet/dist/leaflet.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise 650ms ease-out both;
+}
+
+.animation-delay-150 {
+  animation-delay: 150ms;
+}
+
+:root {
+  --background: #eef4f9;
+  --foreground: #102038;
+  --card: #ffffff;
+  --card-foreground: #102038;
+  --popover: #ffffff;
+  --popover-foreground: #102038;
+  --primary: #0f7a5d;
+  --primary-foreground: #f7fffb;
+  --secondary: #edf3f8;
+  --secondary-foreground: #173156;
+  --muted: #e4edf5;
+  --muted-foreground: #61748f;
+  --accent: #dce8f7;
+  --accent-foreground: #173156;
+  --destructive: #d75059;
+  --border: #d7e1ec;
+  --input: #d7e1ec;
+  --ring: #2b6cb0;
+  --chart-1: #0f7a5d;
+  --chart-2: #2b6cb0;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #8b5cf6;
+  --radius: 1rem;
+  --surface: #ffffff;
+  --surface-muted: #f4f8fc;
+  --surface-soft: #e9f1f8;
+  --text-primary: #102038;
+  --text-secondary: #5f7391;
+  --success: #0f7a5d;
+  --warning: #f59e0b;
+  --danger: #dc4c5f;
+  --sidebar: #10253f;
+  --sidebar-foreground: #f3f7fb;
+  --sidebar-primary: #1a365d;
+  --sidebar-primary-foreground: #f8fbff;
+  --sidebar-accent: #173156;
+  --sidebar-accent-foreground: #f3f7fb;
+  --sidebar-border: rgb(255 255 255 / 0.08);
+  --sidebar-ring: rgb(92 150 255 / 0.45);
+  --sidebar-card: rgb(255 255 255 / 0.04);
+  --sidebar-card-border: rgb(255 255 255 / 0.08);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at top left, rgb(90 160 255 / 0.12), transparent 24rem),
+      radial-gradient(circle at top right, rgb(15 122 93 / 0.1), transparent 20rem),
+      linear-gradient(180deg, #f4f8fc 0%, var(--background) 28%, #edf3f9 100%);
+    color: var(--text-primary);
+    min-height: 100vh;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--text-primary);
+  }
+
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  input,
+  select,
+  textarea {
+    color: var(--text-primary);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-secondary);
+  }
+}
+
+@layer components {
+  .page-shell {
+    @apply mx-auto w-full max-w-[1600px];
+  }
+
+  .page-eyebrow {
+    color: var(--text-secondary);
+    letter-spacing: 0.24em;
+    @apply text-[0.68rem] font-semibold uppercase;
+  }
+
+  .surface-card {
+    background: color-mix(in srgb, var(--surface) 94%, white 6%);
+    border: 1px solid rgb(255 255 255 / 0.7);
+    box-shadow:
+      0 18px 38px rgb(15 23 42 / 0.08),
+      0 2px 8px rgb(15 23 42 / 0.04);
+    @apply rounded-[26px];
+  }
+
+  .surface-card-muted {
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.78), rgb(255 255 255 / 0.62));
+    border: 1px solid rgb(255 255 255 / 0.6);
+    @apply rounded-[22px];
+  }
+
+  .table-shell {
+    @apply overflow-hidden rounded-[26px];
+  }
+}
+
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  background: #d9e8f5;
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+.tour-map-customer-marker {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 26px;
+  width: 26px;
+  border-radius: 9999px;
+  border: 2px solid rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 10px 24px rgba(15, 23, 42, 0.18),
+    0 0 0 3px rgba(255, 255, 255, 0.22);
+}
+
+.tour-map-customer-marker::after {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.tour-map-customer-marker::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  height: 11px;
+  width: 11px;
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 0 0 3px 0;
+  background: inherit;
+}
+
+.tour-map-customer-marker[data-status="PENDING"] {
+  background: #facc15;
+}
+
+.tour-map-customer-marker[data-status="NEARBY"] {
+  background: #f59e0b;
+}
+
+.tour-map-customer-marker[data-status="ARRIVED"] {
+  background: #0284c7;
+}
+
+.tour-map-customer-marker[data-status="DELIVERED"] {
+  background: #059669;
+}
+
+.tour-map-customer-marker[data-status="NO_SALE"] {
+  background: #e11d48;
+}
+
+.tour-map-customer-marker[data-selected="true"] {
+  transform: scale(1.1);
+  box-shadow:
+    0 14px 32px rgba(5, 150, 105, 0.25),
+    0 0 0 5px rgba(16, 185, 129, 0.22);
+}
+
+.tour-map-driver-marker {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 36px;
+  width: 36px;
+}
+
+.tour-map-driver-marker__pulse {
+  position: absolute;
+  inset: 5px;
+  border-radius: 9999px;
+  box-shadow:
+    0 0 0 8px rgba(20, 184, 166, 0.14),
+    0 0 0 16px rgba(20, 184, 166, 0.08);
+  animation: tour-driver-pulse 2.4s ease-in-out infinite;
+}
+
+.tour-map-driver-marker__core {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 24px;
+  width: 24px;
+  border-radius: 9999px;
+  border: 3px solid rgba(255, 255, 255, 0.96);
+  background: linear-gradient(180deg, #14b8a6 0%, #0f766e 100%);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.24);
+}
+
+.tour-map-driver-marker__arrow {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  height: 10px;
+  width: 10px;
+  border-top: 3px solid white;
+  border-right: 3px solid white;
+  transform: translateX(-50%) rotate(calc(var(--driver-heading, 0deg) - 45deg));
+  transform-origin: 50% 14px;
+}
+
+.tour-map-driver-marker__dot {
+  height: 8px;
+  width: 8px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.tour-map-driver-tooltip.leaflet-tooltip {
+  border: 0;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.88);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+}
+
+.tour-map-driver-tooltip.leaflet-tooltip::before {
+  display: none;
+}
+
+@keyframes tour-driver-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.6;
+    transform: scale(1.05);
+  }
+}
+
+.tour-map-primary-tooltip.leaflet-tooltip {
+  border: 0;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.15);
+  color: #0f172a;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.45rem 0.7rem;
+}
+
+.tour-map-primary-tooltip.leaflet-tooltip::before {
+  display: none;
+}
+
+.tour-map-popup .leaflet-popup-content-wrapper {
+  border-radius: 18px;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.16);
+}
+
+.tour-map-popup .leaflet-popup-content {
+  margin: 14px 16px;
+  min-width: 180px;
+}
+
+.route-history-marker {
+  display: block;
+  height: 22px;
+  width: 22px;
+  border-radius: 9999px;
+  border: 3px solid rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 12px 24px rgba(15, 23, 42, 0.18),
+    0 0 0 6px rgba(255, 255, 255, 0.12);
+}
+
+.route-history-marker--start {
+  background: linear-gradient(180deg, #22c55e 0%, #15803d 100%);
+}
+
+.route-history-marker--end {
+  background: linear-gradient(180deg, #fb7185 0%, #e11d48 100%);
+}
+
+.customer-location-picker-marker {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 28px;
+  width: 28px;
+  border-radius: 9999px;
+  border: 3px solid rgba(255, 255, 255, 0.96);
+  background: linear-gradient(180deg, #facc15 0%, #f59e0b 100%);
+  box-shadow:
+    0 14px 30px rgba(15, 23, 42, 0.2),
+    0 0 0 10px rgba(250, 204, 21, 0.12);
+}
+
+.customer-location-picker-marker::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  height: 11px;
+  width: 11px;
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 0 0 3px 0;
+  background: #f59e0b;
+}
+
+.customer-location-picker-marker__dot {
+  position: relative;
+  z-index: 1;
+  height: 8px;
+  width: 8px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    min-height: auto !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .receipt-print-area,
+  .receipt-print-area * {
+    visibility: visible !important;
+  }
+
+  .receipt-print-area {
+    display: block !important;
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 80mm !important;
+    padding: 2mm !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .receipt-print-area[data-paper="58"] {
+    width: 58mm !important;
+    padding: 1.5mm !important;
+  }
+
+  .receipt-print-ticket {
+    width: 100%;
+    color: #000;
+    font-family: Arial, system-ui, sans-serif;
+    font-size: 10px;
+    line-height: 1.22;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-ticket {
+    font-size: 9px;
+  }
+
+  .receipt-print-header {
+    margin-bottom: 2mm;
+    text-align: center;
+  }
+
+  .receipt-print-brand {
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+  }
+
+  .receipt-print-meta {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1mm 2mm;
+  }
+
+  .receipt-print-separator {
+    margin: 1.8mm 0;
+    border-top: 1px dashed #000;
+  }
+
+  .receipt-print-grid {
+    display: grid;
+    grid-template-columns: 16mm 15mm minmax(0, 1fr) 7mm;
+    gap: 1mm;
+    align-items: start;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-grid {
+    grid-template-columns: 13mm 13mm minmax(0, 1fr) 5mm;
+    gap: 0.7mm;
+  }
+
+  .receipt-print-head {
+    font-weight: 700;
+  }
+
+  .receipt-print-lines {
+    display: grid;
+    gap: 1mm;
+  }
+
+  .receipt-print-number,
+  .receipt-print-right {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .receipt-print-product {
+    max-height: 2.5em;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .receipt-print-discount {
+    margin-left: 32mm;
+    font-size: 9px;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-discount {
+    margin-left: 27mm;
+  }
+
+  .receipt-print-total {
+    display: flex;
+    justify-content: space-between;
+    gap: 2mm;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .receipt-print-tax {
+    margin-top: 1mm;
+    display: flex;
+    justify-content: space-between;
+    gap: 2mm;
+    font-size: 9px;
+  }
+
+  .receipt-print-footer {
+    display: grid;
+    gap: 0.8mm;
+  }
+
+  /* Deposit ticket (versement de caisse) - reuses .receipt-print-area for
+     visibility/positioning, only the inner grid differs: 3 columns
+     (Coupure / Qte / Montant) instead of the 4-column product grid above. */
+  .receipt-print-deposit-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 12mm 18mm;
+    gap: 1mm;
+    align-items: start;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-deposit-grid {
+    grid-template-columns: minmax(0, 1fr) 10mm 15mm;
+    gap: 0.7mm;
+  }
+
+  .receipt-print-totals {
+    display: grid;
+    gap: 0.8mm;
+    font-size: 10px;
+  }
+
+  .receipt-print-totals-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 2mm;
+  }
+
+  .receipt-print-totals-grand {
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+}
+
+@keyframes customer-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.customer-sheet-enter {
+  animation: customer-sheet-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-sheet-enter {
+    animation: none;
+  }
 }

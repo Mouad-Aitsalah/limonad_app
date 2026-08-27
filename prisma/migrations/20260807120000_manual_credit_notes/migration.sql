@@ -1,0 +1,20 @@
+CREATE TYPE "CreditNoteOrigin" AS ENUM ('MANUAL', 'SALE');
+
+ALTER TYPE "CreditNoteReason" ADD VALUE IF NOT EXISTS 'EXCHANGE_CUSTOMER';
+ALTER TYPE "CreditNoteReason" ADD VALUE IF NOT EXISTS 'COMMERCIAL_RETURN';
+
+ALTER TABLE "CreditNote"
+ADD COLUMN "origin" "CreditNoteOrigin" NOT NULL DEFAULT 'MANUAL';
+
+UPDATE "CreditNote"
+SET "origin" = 'SALE'
+WHERE "originalSaleId" IS NOT NULL;
+
+ALTER TABLE "CreditNote"
+ALTER COLUMN "originalSaleId" DROP NOT NULL;
+
+ALTER TABLE "CreditNoteLine"
+ADD COLUMN "discountRate" DECIMAL(5, 2) NOT NULL DEFAULT 0;
+
+ALTER TABLE "CreditNoteLine"
+ALTER COLUMN "saleLineId" DROP NOT NULL;

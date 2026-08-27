@@ -1,0 +1,29 @@
+import { NextResponse } from "next/server";
+
+import { AuthServiceError } from "@/lib/server/auth";
+import { OperationsServiceError } from "@/lib/server/depots";
+import { mapLoadingError, validateLoading } from "@/lib/server/truck-loadings";
+
+type RouteContext = { params: Promise<{ id: string }> };
+
+export async function POST(request: Request, context: RouteContext) {
+  const { id } = await context.params;
+  try {
+    const body = await request.json().catch(() => ({}));
+    return NextResponse.json({ loading: await validateLoading(id, body) });
+  } catch (error) {
+    if (error instanceof AuthServiceError) {
+      return NextResponse.json({ message: error.message }, { status: error.status });
+    }
+    if (error instanceof OperationsServiceError) return serviceErrorResponse(error);
+    const mapped = mapLoadingError(error);
+    return serviceErrorResponse(mapped);
+  }
+}
+
+function serviceErrorResponse(error: OperationsServiceError) {
+  return NextResponse.json(
+    { message: error.message, fieldErrors: error.fieldErrors },
+    { status: error.status },
+  );
+}
