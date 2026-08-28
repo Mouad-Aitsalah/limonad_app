@@ -665,3 +665,58 @@ export function classifyGpsStatus({
 
   return "UNAVAILABLE";
 }
+
+/**
+ * The admin fleet-tracking status - VERT/ORANGE/ROUGE/GRIS in the product
+ * spec. Deliberately a coarser view of the SAME rule as classifyGpsStatus
+ * above (identical age thresholds, GPS_ACTIVE_MAX_AGE_MS / GPS_INACTIVE_AFTER_MS),
+ * not a second GPS status system: the admin only ever sees what's already
+ * durably recorded server-side (a TourLocationPing, which already passed
+ * every capture-time reliability check - see recordDriverLocationForDriver),
+ * so device-only states like SEARCHING/DENIED/UNAVAILABLE have no meaning
+ * from this vantage point. Only "how old is the last recorded point" does.
+ */
+export type FleetGpsStatus = "ACTIVE" | "SLOW" | "INACTIVE" | "NONE";
+
+export function classifyFleetGpsStatus(
+  lastPingAt: string | null,
+  now: number = Date.now(),
+): FleetGpsStatus {
+  if (!lastPingAt) {
+    return "NONE";
+  }
+
+  const ageMs = now - new Date(lastPingAt).getTime();
+  if (ageMs > GPS_INACTIVE_AFTER_MS) {
+    return "INACTIVE";
+  }
+  if (ageMs > GPS_ACTIVE_MAX_AGE_MS) {
+    return "SLOW";
+  }
+  return "ACTIVE";
+}
+
+/**
+ * A reported heading is only trustworthy while the vehicle is actually
+ * moving - GPS-derived heading is essentially noise for a stationary/parked
+ * truck. Reuses the same "effectively stationary" speed threshold already
+ * applied to route display (GPS_DISPLAY_STATIONARY_SPEED_KMH), rather than
+ * inventing a second one just for marker rotation.
+ */
+export function resolveReliableHeadingDegrees(
+  heading: number | null | undefined,
+  speedMetersPerSecond: number | null | undefined,
+): number | null {
+  if (heading === null || heading === undefined || !Number.isFinite(heading)) {
+    return null;
+  }
+
+  if (speedMetersPerSecond !== null && speedMetersPerSecond !== undefined && Number.isFinite(speedMetersPerSecond)) {
+    const speedKmh = speedMetersPerSecond * 3.6;
+    if (speedKmh < GPS_DISPLAY_STATIONARY_SPEED_KMH) {
+      return null;
+    }
+  }
+
+  return heading;
+}

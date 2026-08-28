@@ -5,7 +5,7 @@ import {
   splitGpsRouteIntoSegments,
 } from "@/lib/gps/gps-utils";
 import { prisma } from "@/lib/prisma";
-import { requireSessionUser } from "@/lib/server/auth";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type {
   TruckRouteDto,
   TruckRoutePointDto,
@@ -44,7 +44,7 @@ type TruckRoutesSearchParams = Record<string, string | string[] | undefined>;
 export async function getTruckRoutesPageData(
   searchParams: TruckRoutesSearchParams,
 ): Promise<TruckRoutesPageData> {
-  await requireSessionUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
 
   const requestedDate = parseDateParam(searchParams.date) ?? getTodayDateParam();
   const requestedTruckId = pickFirstValue(searchParams.truckId);
@@ -53,8 +53,8 @@ export async function getTruckRoutesPageData(
   const tourId = pickFirstValue(searchParams.tourId);
 
   const selectedTourSeed = tourId
-    ? await prisma.tour.findUnique({
-        where: { id: tourId },
+    ? await prisma.tour.findFirst({
+        where: { id: tourId, organizationId: currentUser.organizationId },
         select: {
           id: true,
           date: true,
@@ -70,6 +70,7 @@ export async function getTruckRoutesPageData(
 
   const [trucks, drivers, tours] = await Promise.all([
     prisma.truck.findMany({
+      where: { organizationId: currentUser.organizationId },
       select: {
         id: true,
         code: true,
@@ -78,7 +79,7 @@ export async function getTruckRoutesPageData(
       orderBy: { code: "asc" },
     }),
     prisma.driver.findMany({
-      where: { active: true },
+      where: { organizationId: currentUser.organizationId, active: true },
       select: {
         id: true,
         employeeCode: true,
@@ -89,6 +90,7 @@ export async function getTruckRoutesPageData(
     }),
     prisma.tour.findMany({
       where: {
+        organizationId: currentUser.organizationId,
         date: fromDateParam(date),
         ...(truckId ? { truckId } : {}),
         ...(driverId ? { driverId } : {}),
@@ -179,10 +181,10 @@ export async function getTruckRoutesPageData(
 }
 
 export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto | null> {
-  await requireSessionUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
 
-  const tour = await prisma.tour.findUnique({
-    where: { id: tourId },
+  const tour = await prisma.tour.findFirst({
+    where: { id: tourId, organizationId: currentUser.organizationId },
     select: {
       id: true,
       code: true,

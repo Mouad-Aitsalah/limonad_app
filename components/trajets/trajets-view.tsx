@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SectionCard } from "@/components/ui/section-card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -26,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { LiveFleetView } from "@/components/trajets/live-fleet-view";
 import { formatCurrency } from "@/lib/utils";
 import type {
   TruckRoutesPageData,
@@ -77,7 +79,7 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
       <AppPageHeader
         eyebrow="TRACABILITE"
         title="Trajets des camions"
-        description="Consultez le parcours GPS effectue par chaque camion selon la date."
+        description="Suivez vos camions en direct ou consultez l'historique GPS d'une tournee terminee."
         actions={
           <Button
             type="button"
@@ -91,6 +93,17 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
         }
       />
 
+      <Tabs defaultValue="direct">
+        <TabsList>
+          <TabsTrigger value="direct">En direct</TabsTrigger>
+          <TabsTrigger value="historique">Historique</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="direct" className="pt-4">
+          <LiveFleetView />
+        </TabsContent>
+
+        <TabsContent value="historique" className="space-y-6 pt-4">
       <SectionCard
         title="Filtres"
         description="Choisissez une date, un camion et une tournee pour charger le trajet reel enregistre."
@@ -389,6 +402,8 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
           />
         )}
       </SectionCard>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

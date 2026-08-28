@@ -93,11 +93,19 @@ function buildBadgeElement(options: {
   glyph: string;
   haloColor?: string;
   cursor?: string;
+  /** Rotates the glyph in place around its own (already center-anchored) center — see createTruckMarkerContent. */
+  rotationDegrees?: number | null;
 }): HTMLDivElement {
   const wrapper = document.createElement("div");
   wrapper.style.width = `${options.size}px`;
   wrapper.style.height = `${options.size}px`;
-  wrapper.style.transform = "translate(0, 50%)";
+  // transform-origin defaults to the element's own center, so appending a
+  // rotate() after the center-anchoring translate() pivots the glyph around
+  // that same anchored point instead of moving it.
+  wrapper.style.transform =
+    options.rotationDegrees != null
+      ? `translate(0, 50%) rotate(${options.rotationDegrees}deg)`
+      : "translate(0, 50%)";
   if (options.cursor) {
     wrapper.style.cursor = options.cursor;
   }
@@ -105,12 +113,26 @@ function buildBadgeElement(options: {
   return wrapper;
 }
 
-/** Content for the driver truck AdvancedMarkerElement — center-anchored on the real GPS position. */
-export function createTruckMarkerContent(): HTMLDivElement {
+/**
+ * Content for a truck AdvancedMarkerElement — center-anchored on the real
+ * GPS position. Used both for the driver's own "Mon camion" marker (no
+ * rotation, headingDegrees omitted) and the admin fleet map's truck markers.
+ *
+ * The glyph's un-rotated artwork (lucide's Truck icon) faces east, so
+ * rotation = headingDegrees - 90 aligns 0=north/90=east/180=south/270=west.
+ * Pass null/omit headingDegrees whenever heading isn't reliable (see
+ * resolveReliableHeadingDegrees in lib/gps/gps-utils.ts) rather than
+ * spinning the icon on noisy/stationary readings.
+ */
+export function createTruckMarkerContent(options?: {
+  headingDegrees?: number | null;
+}): HTMLDivElement {
+  const headingDegrees = options?.headingDegrees;
   return buildBadgeElement({
     size: TRUCK_ICON_SIZE,
     color: TRUCK_COLOR,
     glyph: TRUCK_GLYPH,
+    rotationDegrees: headingDegrees != null ? headingDegrees - 90 : null,
   });
 }
 
