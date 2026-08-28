@@ -20,6 +20,7 @@ const loadingInclude = {
   depot: { select: { id: true, name: true } },
   truck: { select: { id: true, code: true } },
   driver: { select: { id: true, user: { select: { fullName: true } } } },
+  tour: { select: { code: true } },
   createdBy: { select: { fullName: true } },
   validatedBy: { select: { fullName: true } },
   updatedBy: { select: { fullName: true } },
@@ -152,6 +153,7 @@ export async function mapTruckLoadingToDto(
     loadingYear: loading.loadingYear,
     loadingSequence: loading.loadingSequence,
     tourId: loading.tourId,
+    tourCode: loading.tour?.code ?? null,
     driverId: loading.driverId,
     driverName: loading.driver.user.fullName,
     date: loading.date.toISOString(),
@@ -242,6 +244,46 @@ export async function getOpenLoadingForTruck(truckId: string): Promise<TruckLoad
     orderBy: { createdAt: "desc" },
   });
   return loading ? mapTruckLoadingToDto(loading) : null;
+}
+
+/**
+ * The truck's loading currently available to back a NEW tour: not yet
+ * claimed by any tour (tourId: null), with stock actually applied
+ * (stockAppliedAt set - a bare fiche with no lines yet has nothing to
+ * drive with), and not cancelled. DRAFT (still open at the depot/admin
+ * level) or VALIDATED (already closed/reconciled) are both eligible -
+ * mirrors the driver tour-start rule that existed before TruckLoading was
+ * decoupled from Tour (see the "decouple_truck_loading_from_tour"
+ * migration): either state was always enough to drive.
+ *
+ * This is the bridge between the two independently-evolved systems: admins
+ * keep managing loadings entirely through /chargements (truckId + status,
+ * never touching Tour - see the module doc above), while a driver starting
+ * a tour claims whichever one of the truck's loadings hasn't been claimed
+ * yet (lib/server/tours.ts#claimLoadingAndStartTour). Once claimed
+ * (tourId set), a loading can never be claimed again by a different tour,
+ * which is exactly what keeps each tour's stock bilan (charge/rechargee/
+ * vendue/restante) from ever mixing with another tour's.
+ *
+ * Takes a transaction client so callers can claim the result atomically
+ * within the same transaction that creates/starts the tour.
+ */
+export async function getClaimableLoadingForTruck(
+  tx: Pick<typeof prisma, "truckLoading">,
+  organizationId: string,
+  truckId: string,
+): Promise<{ id: string; status: string } | null> {
+  return tx.truckLoading.findFirst({
+    where: {
+      organizationId,
+      truckId,
+      tourId: null,
+      stockAppliedAt: { not: null },
+      status: { in: ["DRAFT", "VALIDATED"] },
+    },
+    select: { id: true, status: true },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
 export async function getLoadingHistory(): Promise<TruckLoadingDto[]> {
@@ -342,7 +384,10 @@ export async function createOrReuseOpenLoading(
         });
         return { loading: created, reused: false };
       },
-      { isolationLevel: "Serializable" },
+      // 15s: several sequential round-trips per transaction can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
     );
   });
 
@@ -425,7 +470,10 @@ export async function updateOpenLoadingLines(
         include: loadingInclude,
       });
     },
-    { isolationLevel: "Serializable" },
+    // 15s: several sequential round-trips per transaction can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) against
+    // Neon's serverless connection latency, even with no real conflict.
+    { isolationLevel: "Serializable", timeout: 15000 },
   );
 
   return mapTruckLoadingToDto(loading);
@@ -569,7 +617,10 @@ export async function closeLoading(
         include: loadingInclude,
       });
     },
-    { isolationLevel: "Serializable" },
+    // 15s: several sequential round-trips per transaction can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) against
+    // Neon's serverless connection latency, even with no real conflict.
+    { isolationLevel: "Serializable", timeout: 15000 },
   );
 
   return mapTruckLoadingToDto(loading);
@@ -752,7 +803,10 @@ export async function updateLoadingLines(
         include: loadingInclude,
       });
     },
-    { isolationLevel: "Serializable" },
+    // 15s: several sequential round-trips per transaction can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) against
+    // Neon's serverless connection latency, even with no real conflict.
+    { isolationLevel: "Serializable", timeout: 15000 },
   );
 
   return mapTruckLoadingToDto(loading);
@@ -961,7 +1015,10 @@ export async function createLoading(
         include: loadingInclude,
       });
     },
-    { isolationLevel: "Serializable" },
+    // 15s: several sequential round-trips per transaction can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) against
+    // Neon's serverless connection latency, even with no real conflict.
+    { isolationLevel: "Serializable", timeout: 15000 },
   );
 
   return mapTruckLoadingToDto(loading);
@@ -1041,7 +1098,10 @@ export async function updateDraftLoading(
         include: loadingInclude,
       });
     },
-    { isolationLevel: "Serializable" },
+    // 15s: several sequential round-trips per transaction can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) against
+    // Neon's serverless connection latency, even with no real conflict.
+    { isolationLevel: "Serializable", timeout: 15000 },
   );
 
   return mapTruckLoadingToDto(loading);
@@ -1104,7 +1164,10 @@ export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDt
         include: loadingInclude,
       });
     },
-    { isolationLevel: "Serializable" },
+    // 15s: several sequential round-trips per transaction can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) against
+    // Neon's serverless connection latency, even with no real conflict.
+    { isolationLevel: "Serializable", timeout: 15000 },
   );
 
   return mapTruckLoadingToDto(loading);
@@ -1260,7 +1323,10 @@ export async function validateLoading(
         include: loadingInclude,
       });
     },
-    { isolationLevel: "Serializable" },
+    // 15s: several sequential round-trips per transaction can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) against
+    // Neon's serverless connection latency, even with no real conflict.
+    { isolationLevel: "Serializable", timeout: 15000 },
   );
 
   return mapTruckLoadingToDto(loading);

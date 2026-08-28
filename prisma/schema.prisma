@@ -775,8 +775,13 @@ model Tour {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
+  // Tour identity is its own code (see lib/server/tours.ts#nextTourCode,
+  // TOUR-YYYYMMDD-NNN) - NOT truckId+date. A truck can run several tours in
+  // one day (see the "1 tour active a la fois" rule enforced in code
+  // instead: lib/server/tours.ts#ensureTourAvailability /
+  // createAndStartTourForCurrentDriver only ever allow one non-terminal
+  // tour per truck/driver at a time, regardless of date).
   @@unique([organizationId, code])
-  @@unique([organizationId, truckId, date])
   @@index([organizationId])
   @@index([date])
   @@index([driverId])

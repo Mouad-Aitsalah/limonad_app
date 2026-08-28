@@ -977,6 +977,7 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
                       <TableHead>Date</TableHead>
                       <TableHead>Chauffeur</TableHead>
                       <TableHead>Camion</TableHead>
+                      <TableHead>Tournee</TableHead>
                       <TableHead>Depot</TableHead>
                       <TableHead className="text-right">Produits</TableHead>
                       <TableHead className="text-right">Quantite</TableHead>
@@ -989,7 +990,7 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
                   <TableBody>
                     {filteredHistory.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={11} className="py-8 text-center text-muted-foreground">
+                        <TableCell colSpan={12} className="py-8 text-center text-muted-foreground">
                           Aucune fiche de chargement ne correspond a la recherche.
                         </TableCell>
                       </TableRow>
@@ -1002,6 +1003,9 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
                           <TableCell>{new Date(loading.date).toLocaleDateString("fr-FR")}</TableCell>
                           <TableCell>{loading.driverName}</TableCell>
                           <TableCell>{loading.truckCode}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {loading.tourCode ?? "-"}
+                          </TableCell>
                           <TableCell>{loading.depotName}</TableCell>
                           <TableCell className="text-right tabular-nums">
                             {loading.lines.length}

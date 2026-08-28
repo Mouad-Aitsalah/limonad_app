@@ -451,7 +451,11 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
 
       return tx.sale.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
     },
-    { isolationLevel: "Serializable" },
+    // 15s: this transaction chains several sequential lookups plus the
+    // accounting entry posting (assertAccountsExist etc.), which can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) against
+    // Neon's serverless connection latency, even with no real conflict.
+    { isolationLevel: "Serializable", timeout: 15000 },
   );
 
   return mapSaleToDto(sale);

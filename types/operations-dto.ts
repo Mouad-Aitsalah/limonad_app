@@ -256,6 +256,8 @@ export interface TruckLoadingDto {
   loadingYear: number | null;
   loadingSequence: number | null;
   tourId: string | null;
+  /** The tour that claimed this loading when its driver started (see lib/server/tours.ts#claimLoadingAndStartTour) - null until then, permanently once claimed. */
+  tourCode: string | null;
   driverId: string;
   driverName: string;
   date: string;

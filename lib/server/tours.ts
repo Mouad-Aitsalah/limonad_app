@@ -7,7 +7,7 @@ import type { TourGetPayload } from "@/lib/generated/prisma/models/Tour";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
-import { getLoadingByTourId } from "@/lib/server/truck-loadings";
+import { getClaimableLoadingForTruck, getLoadingByTourId } from "@/lib/server/truck-loadings";
 import type {
   TourDto,
   TourMutationInput,
@@ -146,19 +146,8 @@ export async function createTour(input: TourMutationInput): Promise<TourDto> {
 
       const resolvedTruck = resolveTruckAssignment(truck);
 
-      const existing = await tx.tour.findFirst({
-        where: {
-          organizationId: user.organizationId,
-          truckId: resolvedTruck.id,
-          date,
-        },
-        include: tourInclude,
-      });
-      if (existing) return existing;
-
       await ensureTourAvailability({
         organizationId: user.organizationId,
-        date,
         truckId: resolvedTruck.id,
         driverId: resolvedTruck.driverId,
       });
@@ -166,7 +155,7 @@ export async function createTour(input: TourMutationInput): Promise<TourDto> {
       return tx.tour.create({
         data: {
           organizationId: user.organizationId,
-          code: await nextTourCode(tx, user.organizationId),
+          code: await nextTourCode(tx, user.organizationId, date),
           date,
           depotId: resolvedTruck.depotId,
           truckId: resolvedTruck.id,
@@ -226,7 +215,6 @@ export async function updateDraftTour(
 
       await ensureTourAvailability({
         organizationId: currentUser.organizationId,
-        date,
         truckId: resolvedTruck.id,
         driverId: resolvedTruck.driverId,
         currentTourId: id,
@@ -352,55 +340,104 @@ export async function cancelTour(id: string): Promise<TourDto> {
   return mapTourToDto(updated);
 }
 
+/**
+ * Claims whichever of the truck's loadings hasn't been claimed by another
+ * tour yet (see getClaimableLoadingForTruck) and transitions the tour to
+ * IN_PROGRESS. Shared by both places a tour can start - the driver's own
+ * auto-create-and-start flow and an admin-prepared tour's startTour() -
+ * so "a tour can only start once a real, not-yet-used chargement backs
+ * it" is enforced identically everywhere, and each tour ends up with its
+ * own distinct loading (never the one another tour already claimed).
+ *
+ * A tour that somehow already has a loading attached (e.g. created through
+ * the tour-scoped lib/server/truck-loadings.ts#createLoading path) keeps
+ * it as-is instead of claiming a second one.
+ */
+async function claimLoadingAndStartTour(
+  tx: Pick<typeof prisma, "tour" | "truck" | "truckLoading">,
+  tour: { id: string; organizationId: string; truckId: string },
+): Promise<TourWithRelations> {
+  const alreadyLinkedLoading = await tx.truckLoading.findFirst({
+    where: { tourId: tour.id },
+    select: { id: true },
+  });
+
+  if (!alreadyLinkedLoading) {
+    const claimableLoading = await getClaimableLoadingForTruck(
+      tx,
+      tour.organizationId,
+      tour.truckId,
+    );
+    if (!claimableLoading) {
+      throw new OperationsServiceError("Aucune tournee prete avec chargement valide.", 409);
+    }
+    await tx.truckLoading.update({
+      where: { id: claimableLoading.id },
+      data: { tourId: tour.id },
+    });
+  }
+
+  await tx.truck.update({
+    where: { id: tour.truckId },
+    data: { status: "ON_TOUR" },
+  });
+
+  return tx.tour.update({
+    where: { id: tour.id },
+    data: { status: "IN_PROGRESS", startedAt: new Date() },
+    include: tourInclude,
+  });
+}
+
 export async function startTour(tourId: string): Promise<TourDto> {
   const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
 
-  const tour = await prisma.$transaction(async (tx) => {
-    const existing = await tx.tour.findFirst({
-      where: { id: tourId, organizationId: user.organizationId },
-      select: {
-        id: true,
-        status: true,
-        truckId: true,
-        driverId: true,
-        loading: { select: { status: true } },
-      },
-    });
-    if (!existing) throw new OperationsServiceError("Fiche journaliere introuvable.", 404);
-    if (existing.driverId !== user.driverId || existing.truckId !== user.truckId) {
-      throw new AuthServiceError("Cette fiche ne vous appartient pas.", 403);
-    }
-    if (existing.status !== "LOADED" || existing.loading?.status !== "VALIDATED") {
-      throw new OperationsServiceError("Le chargement doit etre valide avant depart.", 409);
-    }
+  const tour = await prisma.$transaction(
+    async (tx) => {
+      const existing = await tx.tour.findFirst({
+        where: { id: tourId, organizationId: user.organizationId },
+        select: {
+          id: true,
+          organizationId: true,
+          status: true,
+          truckId: true,
+          driverId: true,
+        },
+      });
+      if (!existing) throw new OperationsServiceError("Fiche journaliere introuvable.", 404);
+      if (existing.driverId !== user.driverId || existing.truckId !== user.truckId) {
+        throw new AuthServiceError("Cette fiche ne vous appartient pas.", 403);
+      }
+      if (!["DRAFT", "PREPARED", "LOADED"].includes(existing.status)) {
+        throw new OperationsServiceError("Cette tournee ne peut pas etre demarree.", 409);
+      }
 
-    const activeTour = await tx.tour.findFirst({
-      where: {
-        organizationId: user.organizationId,
-        id: { not: tourId },
-        truckId: user.truckId,
-        status: "IN_PROGRESS",
-      },
-      select: { id: true },
-    });
-    if (activeTour) {
-      throw new OperationsServiceError("Ce camion possede deja une tournee active.", 409);
-    }
+      const activeTour = await tx.tour.findFirst({
+        where: {
+          organizationId: user.organizationId,
+          id: { not: tourId },
+          truckId: user.truckId,
+          status: "IN_PROGRESS",
+        },
+        select: { id: true },
+      });
+      if (activeTour) {
+        throw new OperationsServiceError("Ce camion possede deja une tournee active.", 409);
+      }
 
-    await tx.truck.update({
-      where: { id: user.truckId },
-      data: { status: "ON_TOUR" },
-    });
-
-    return tx.tour.update({
-      where: { id: tourId },
-      data: { status: "IN_PROGRESS", startedAt: new Date() },
-      include: tourInclude,
-    });
-  });
+      return claimLoadingAndStartTour(tx, existing);
+    },
+    // claimLoadingAndStartTour adds several sequential round-trips (loading
+    // lookup + claim + truck/tour updates) on top of this transaction's own
+    // reads; against Neon's serverless connection latency that can exceed
+    // Prisma's 5s default interactive-transaction timeout (P2028) even with
+    // no real write conflict. 15s gives headroom without masking a genuine
+    // hang.
+    { timeout: 15000 },
+  );
 
   return mapTourToDto(tour);
 }
@@ -467,45 +504,53 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
             throw new OperationsServiceError("Ce camion possede deja une tournee active.", 409);
           }
 
-          const today = getTodayTourDate();
-          const existingDailySheet = await tx.tour.findFirst({
+          // A tour already prepared (DRAFT/PREPARED/LOADED) for this truck -
+          // whichever day it was created - is resumed instead of creating a
+          // duplicate. Not date-scoped any more: once a tour reaches a
+          // terminal state (WAITING_FOR_CLOSURE/CLOSED/CANCELLED/INTERRUPTED)
+          // it no longer matches here, so a same-day 2nd/3rd tour is never
+          // blocked by an earlier, already-finished one.
+          const resumableTour = await tx.tour.findFirst({
             where: {
               organizationId: user.organizationId,
               truckId: driver.truck.id,
-              date: today,
+              status: { in: ["DRAFT", "PREPARED", "LOADED"] },
             },
-            include: tourInclude,
+            orderBy: { createdAt: "desc" },
+            select: { id: true, organizationId: true, truckId: true, driverId: true },
           });
 
-          if (existingDailySheet) {
-            return startExistingDailyTour(tx, {
-              tour: existingDailySheet,
-              driverId: driver.id,
-              truckId: driver.truck.id,
-            });
+          if (resumableTour) {
+            if (resumableTour.driverId !== driver.id) {
+              throw new AuthServiceError("Cette fiche ne vous appartient pas.", 403);
+            }
+            return claimLoadingAndStartTour(tx, resumableTour);
           }
 
-          await tx.truck.update({
-            where: { id: driver.truck.id },
-            data: { status: "ON_TOUR" },
-          });
-
-          return tx.tour.create({
+          const today = getTodayTourDate();
+          const newTour = await tx.tour.create({
             data: {
               organizationId: user.organizationId,
-              code: await nextTourCode(tx, user.organizationId),
+              code: await nextTourCode(tx, user.organizationId, today),
               date: today,
               depotId: driver.truck.depotId,
               truckId: driver.truck.id,
               driverId: driver.id,
-              status: "IN_PROGRESS",
-              startedAt: new Date(),
+              status: "PREPARED",
               createdByUserId: user.id,
             },
-            include: tourInclude,
+            select: { id: true, organizationId: true, truckId: true },
           });
+
+          return claimLoadingAndStartTour(tx, newTour);
         },
-        { isolationLevel: "Serializable" },
+        // See the matching comment on startTour(): several sequential
+        // lookups (driver, existingDriverTour, existingTruckTour,
+        // resumableTour, then claimLoadingAndStartTour's own queries) can
+        // exceed Prisma's 5s default interactive-transaction timeout
+        // (P2028) against Neon's serverless connection latency, even with
+        // no real conflict - 15s gives headroom.
+        { isolationLevel: "Serializable", timeout: 15000 },
       ),
     );
 
@@ -718,73 +763,6 @@ export function getTodayTourDate() {
   return new Date(`${dateParam}T00:00:00.000Z`);
 }
 
-async function startExistingDailyTour(
-  tx: Pick<typeof prisma, "tour" | "truck">,
-  {
-    tour,
-    driverId,
-    truckId,
-  }: {
-    tour: TourWithRelations;
-    driverId: string;
-    truckId: string;
-  },
-) {
-  if (tour.driver.id !== driverId || tour.truck.id !== truckId) {
-    throw new AuthServiceError("Cette fiche ne vous appartient pas.", 403);
-  }
-
-  if (tour.status === "IN_PROGRESS") {
-    return tour;
-  }
-
-  if (tour.status === "WAITING_FOR_CLOSURE" || tour.status === "CLOSED") {
-    throw new OperationsServiceError(
-      "La tournee du jour est deja terminee pour ce camion.",
-      409,
-    );
-  }
-
-  if (tour.status === "CANCELLED" || tour.status === "INTERRUPTED") {
-    throw new OperationsServiceError(
-      "La fiche journaliere du jour ne peut pas etre relancee.",
-      409,
-    );
-  }
-
-  if (!tour.loading) {
-    throw new OperationsServiceError(
-      "Aucune fiche de chargement n'existe pour ce camion aujourd'hui.",
-      409,
-    );
-  }
-
-  const canStartFromDraft =
-    tour.loading.status === "DRAFT" && Boolean(tour.loading.stockAppliedAt);
-  const canStartFromValidated = tour.loading.status === "VALIDATED";
-
-  if (!canStartFromDraft && !canStartFromValidated) {
-    throw new OperationsServiceError(
-      "Le chargement doit etre valide avant de commencer la tournee.",
-      409,
-    );
-  }
-
-  await tx.truck.update({
-    where: { id: truckId },
-    data: { status: "ON_TOUR" },
-  });
-
-  return tx.tour.update({
-    where: { id: tour.id },
-    data: {
-      status: "IN_PROGRESS",
-      startedAt: tour.startedAt ?? new Date(),
-    },
-    include: tourInclude,
-  });
-}
-
 function resolveTruckAssignment(
   truck: {
     id: string;
@@ -821,29 +799,25 @@ function resolveTruckAssignment(
   };
 }
 
+/**
+ * "One tour active/open at a time" per truck and per driver - deliberately
+ * NOT scoped by date any more: a truck/driver can run any number of tours
+ * across a day (or several), just never two open ones simultaneously. See
+ * the Tour model comment in schema.prisma for why date+truckId is no
+ * longer a uniqueness key.
+ */
 async function ensureTourAvailability({
   organizationId,
-  date,
   truckId,
   driverId,
   currentTourId,
 }: {
   organizationId: string;
-  date: Date;
   truckId: string;
   driverId: string;
   currentTourId?: string;
 }) {
-  const [sameTruckSameDate, openTruckTour, openDriverTour] = await Promise.all([
-    prisma.tour.findFirst({
-      where: {
-        organizationId,
-        truckId,
-        date,
-        ...(currentTourId ? { id: { not: currentTourId } } : {}),
-      },
-      select: { id: true },
-    }),
+  const [openTruckTour, openDriverTour] = await Promise.all([
     prisma.tour.findFirst({
       where: {
         organizationId,
@@ -864,15 +838,6 @@ async function ensureTourAvailability({
     }),
   ]);
 
-  if (sameTruckSameDate) {
-    throw new OperationsServiceError(
-      "Ce camion possede deja une fiche journaliere a cette date.",
-      409,
-      {
-        truckId: "Ce camion possede deja une fiche journaliere a cette date.",
-      },
-    );
-  }
   if (openTruckTour) {
     throw new OperationsServiceError("Ce camion possede deja une tournee ouverte.", 409);
   }
@@ -898,9 +863,24 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
     };
   }
 
-  const dayStart = normalizeTourDate(tour.date);
-  const dayEnd = new Date(dayStart);
-  dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+  // Scoped to this tour's own lifetime (createdAt), not the calendar day:
+  // several tours can now share a day, so "opening" must mean "everything
+  // before THIS tour started" (which correctly folds in whatever an
+  // earlier same-day tour left behind via its own closeLoading) rather
+  // than "before midnight" - the old day-based window would otherwise
+  // attribute an earlier same-day tour's loading/reload movements to this
+  // one, or vice versa.
+  //
+  // A tour's own claimed loading (see claimLoadingAndStartTour) is very
+  // often charged by the admin BEFORE the driver claims/starts the tour -
+  // that charge's stock movement can therefore predate tourStartedAt and
+  // fall inside this "opening" window. It must never be counted there: it
+  // is already counted via loadingLines/loadedQuantities below, straight
+  // from the claimed loading's own lines. Movements below are filtered by
+  // referenceId to exclude it, the same way reloadingMovements already
+  // excludes it.
+  const tourStartedAt = tour.createdAt;
+  const ownLoadingId = tour.loading?.id ?? null;
 
   const [loadingLines, openingMovements, reloadingMovements, saleLines, stockCounts, currentLevels] =
     await Promise.all([
@@ -918,7 +898,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
         where: {
           organizationId: tour.organizationId,
           status: "VALIDATED",
-          createdAt: { lt: dayStart },
+          createdAt: { lt: tourStartedAt },
           OR: [
             { sourceLocationId: truckLocation.id },
             { destinationLocationId: truckLocation.id },
@@ -929,6 +909,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
           quantity: true,
           sourceLocationId: true,
           destinationLocationId: true,
+          referenceId: true,
         },
       }),
       prisma.stockMovement.findMany({
@@ -936,7 +917,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
           organizationId: tour.organizationId,
           status: "VALIDATED",
           type: "TRUCK_LOADING",
-          createdAt: { gte: dayStart, lt: dayEnd },
+          createdAt: { gte: tourStartedAt },
           destinationLocationId: truckLocation.id,
         },
         select: {
@@ -980,6 +961,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
 
   const initialQuantities = new Map<string, number>();
   for (const movement of openingMovements) {
+    if (movement.referenceId && movement.referenceId === ownLoadingId) continue;
     const current = initialQuantities.get(movement.productId) ?? 0;
     const delta =
       (movement.destinationLocationId === truckLocation.id ? movement.quantity : 0) -
@@ -1100,12 +1082,21 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
   };
 }
 
+/**
+ * TOUR-YYYYMMDD-NNN, sequence reset per calendar day (not per year): the
+ * whole point is that several tours share the same day, so the code must
+ * stay distinct within that day, not require a unique date the way the old
+ * @@unique([truckId, date]) constraint did. `date` is the tour's own date
+ * field (already UTC-midnight-normalized by callers), not "now", so a
+ * backdated/forward-dated admin tour still gets a code matching its date.
+ */
 async function nextTourCode(
   tx: Pick<typeof prisma, "tour">,
   organizationId: string,
+  date: Date,
 ) {
-  const year = new Date().getUTCFullYear();
-  const prefix = `TOUR-${year}-`;
+  const datePart = formatTourCodeDate(date);
+  const prefix = `TOUR-${datePart}-`;
   const tours = await tx.tour.findMany({
     where: {
       organizationId,
@@ -1124,7 +1115,11 @@ async function nextTourCode(
   }, 0);
   const nextSequence = highestSequence + 1;
 
-  return `${prefix}${String(nextSequence).padStart(4, "0")}`;
+  return `${prefix}${String(nextSequence).padStart(3, "0")}`;
+}
+
+function formatTourCodeDate(date: Date) {
+  return date.toISOString().slice(0, 10).replaceAll("-", "");
 }
 
 function mapTourError(error: unknown) {

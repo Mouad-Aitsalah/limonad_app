@@ -16,7 +16,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { signTrackingToken } from "@/lib/server/tracking-token";
-import { getLoadingByTourId } from "@/lib/server/truck-loadings";
+import { getClaimableLoadingForTruck, getLoadingByTourId } from "@/lib/server/truck-loadings";
 import {
   getActiveTourForDriver,
   getTodayTourDate,
@@ -60,18 +60,39 @@ export async function getCurrentDriverTour(): Promise<CurrentDriverTourDto> {
   const activeTour = await getActiveTourForDriver(user.driverId, user.organizationId);
   if (!activeTour) {
     const startContext = await getDriverTourStartContext(user.driverId, user.organizationId);
-    const existingDailyTour = await findDriverDailyTour(
+
+    // 1. an ACTIVE tour was already ruled out above. 2. a tour already
+    // prepared (DRAFT/PREPARED/LOADED) for this truck - whichever day it
+    // was created - is resumable as-is. 3. otherwise, a fresh tour can
+    // start as soon as the truck has an unclaimed, stock-applied loading
+    // (see getClaimableLoadingForTruck) - never gated on "a tour already
+    // exists today for this truck", which is exactly what used to block a
+    // 2nd/3rd same-day tour once the 1st one closed.
+    const resumableTour = await findResumableTourForDriverTruck(
       user.driverId,
+      user.organizationId,
+      startContext.truck.id,
+    );
+    if (resumableTour) {
+      return emptyCurrentTour(
+        "Une tournee preparee vous attend. Vous pouvez la commencer.",
+        startContext,
+        true,
+      );
+    }
+
+    const claimableLoading = await getClaimableLoadingForTruck(
+      prisma,
       user.organizationId,
       startContext.truck.id,
     );
 
     return emptyCurrentTour(
-      existingDailyTour
-        ? buildDailyTourMessage(existingDailyTour)
-        : "Aucune tournee active.",
+      claimableLoading
+        ? "Vous pouvez commencer une nouvelle tournee."
+        : "Aucune tournee prete avec chargement valide.",
       startContext,
-      existingDailyTour ? resolveCanStartDailyTour(existingDailyTour) : true,
+      Boolean(claimableLoading),
     );
   }
 
@@ -701,7 +722,15 @@ async function getAccessibleDriverCustomer(
   return customer;
 }
 
-async function findDriverDailyTour(
+/**
+ * The tour that would be resumed if this driver clicked "Commencer" right
+ * now: the most recent NON-TERMINAL tour (DRAFT/PREPARED/LOADED) for their
+ * truck, regardless of which day it was created - not date-scoped, so a
+ * previous day's or an earlier same-day tour that already reached a
+ * terminal state (WAITING_FOR_CLOSURE/CLOSED/CANCELLED/INTERRUPTED) never
+ * matches here and never blocks a fresh tour from starting instead.
+ */
+async function findResumableTourForDriverTruck(
   driverId: string,
   organizationId: string,
   truckId: string,
@@ -710,18 +739,10 @@ async function findDriverDailyTour(
     where: {
       organizationId,
       truckId,
-      date: getTodayTourDate(),
+      status: { in: ["DRAFT", "PREPARED", "LOADED"] },
     },
-    select: {
-      status: true,
-      loading: {
-        select: {
-          status: true,
-          stockAppliedAt: true,
-        },
-      },
-      driverId: true,
-    },
+    orderBy: { createdAt: "desc" },
+    select: { driverId: true },
   });
 
   if (!tour || tour.driverId !== driverId) {
@@ -840,58 +861,6 @@ function emptyCurrentTour(
     proximity: null,
     summary: null,
   };
-}
-
-function resolveCanStartDailyTour(
-  tour: Awaited<ReturnType<typeof findDriverDailyTour>>,
-) {
-  if (!tour) {
-    return false;
-  }
-
-  if (
-    tour.status === "WAITING_FOR_CLOSURE" ||
-    tour.status === "CLOSED" ||
-    tour.status === "CANCELLED" ||
-    tour.status === "INTERRUPTED"
-  ) {
-    return false;
-  }
-
-  if (!tour.loading) {
-    return false;
-  }
-
-  return (
-    tour.loading.status === "VALIDATED" ||
-    (tour.loading.status === "DRAFT" && Boolean(tour.loading.stockAppliedAt))
-  );
-}
-
-function buildDailyTourMessage(
-  tour: NonNullable<Awaited<ReturnType<typeof findDriverDailyTour>>>,
-) {
-  if (!tour.loading) {
-    return "Aucune fiche de chargement n'existe pour ce camion aujourd'hui.";
-  }
-
-  if (tour.status === "WAITING_FOR_CLOSURE" || tour.status === "CLOSED") {
-    return "La tournee du jour est deja terminee pour ce camion.";
-  }
-
-  if (tour.status === "CANCELLED" || tour.status === "INTERRUPTED") {
-    return "La fiche journaliere du jour ne peut pas etre relancee.";
-  }
-
-  if (tour.loading.status === "VALIDATED") {
-    return "La fiche journaliere du jour existe deja. Vous pouvez commencer la tournee.";
-  }
-
-  if (tour.loading.status === "DRAFT" && tour.loading.stockAppliedAt) {
-    return "La fiche journaliere du jour existe deja. Le stock est deja applique au camion, vous pouvez commencer la tournee.";
-  }
-
-  return "Le chargement doit etre valide avant de commencer la tournee.";
 }
 
 function buildTourSummary(

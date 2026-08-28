@@ -1,0 +1,13 @@
+-- Allows multiple Tour rows for the same truck on the same day. The old
+-- constraint hard-blocked a truck from ever starting a second tour once its
+-- first tour of the day existed (regardless of that tour's status) - a
+-- driver could never start a 2nd/3rd tour after closing the 1st.
+--
+-- "One active tour at a time" stays fully enforced in application code
+-- (lib/server/tours.ts#ensureTourAvailability / createAndStartTourForCurrentDriver
+-- already check for a non-terminal Tour by status, not by date). Tour
+-- identity is its own unique `code` (TOUR-YYYYMMDD-NNN), unaffected.
+--
+-- Purely a DROP INDEX: no data is touched, no rows are deleted, every
+-- existing Tour is preserved exactly as-is.
+DROP INDEX IF EXISTS "Tour_organizationId_truckId_date_key";
