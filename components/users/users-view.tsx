@@ -38,6 +38,10 @@ export function UsersView({ initialUsers }: { initialUsers: User[] }) {
     setUsers((current) => [user, ...current]);
   }
 
+  function handleUserUpdated(user: User) {
+    setUsers((current) => current.map((existing) => (existing.id === user.id ? user : existing)));
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -69,7 +73,7 @@ export function UsersView({ initialUsers }: { initialUsers: User[] }) {
             {filteredUsers.length > 1 ? "s" : ""}
           </p>
 
-          <UsersTable users={filteredUsers} />
+          <UsersTable users={filteredUsers} onUserUpdated={handleUserUpdated} />
         </CardContent>
       </Card>
     </div>

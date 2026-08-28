@@ -15,6 +15,7 @@ import { prisma } from "@/lib/prisma";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { signTrackingToken } from "@/lib/server/tracking-token";
 import { getLoadingByTourId } from "@/lib/server/truck-loadings";
 import {
   getActiveTourForDriver,
@@ -86,8 +87,77 @@ export async function recordCurrentDriverLocation(
   input: unknown,
 ): Promise<{ currentTour: CurrentDriverTourDto; point: DriverTourPositionDto }> {
   const user = await requireDriverUser();
-  const data = locationPingSchema.parse(input);
+  return recordDriverLocationForDriver(user.organizationId, user.driverId, input);
+}
+
+/**
+ * Issues the short-lived bearer token the Capacitor driver app hands to
+ * @capgo/background-geolocation (as `Authorization: Bearer <token>`) so
+ * native code can POST GPS points directly to /api/driver/tour/location/native
+ * once the WebView is suspended - see lib/server/tracking-token.ts. Only
+ * mintable from an authenticated driver session with a tour actually in
+ * progress; the token then carries that exact driver/organization/tour
+ * triple as its own authority.
+ */
+export async function issueDriverTrackingToken(): Promise<{
+  token: string;
+  expiresAt: string;
+  tourId: string;
+}> {
+  const user = await requireDriverUser();
   const tour = await requireActiveTourForDriver(user.driverId, user.organizationId);
+
+  if (tour.status !== "IN_PROGRESS") {
+    throw new OperationsServiceError(
+      "Le suivi GPS ne peut demarrer qu'une fois la tournee commencée.",
+      409,
+    );
+  }
+
+  const { token, expiresAt } = signTrackingToken({
+    userId: user.id,
+    driverId: user.driverId,
+    organizationId: user.organizationId,
+    tourId: tour.id,
+  });
+
+  return { token, expiresAt, tourId: tour.id };
+}
+
+/**
+ * Core GPS-ping validation/filtering/persistence, shared by the
+ * session-authenticated web path (recordCurrentDriverLocation, above) and
+ * the token-authenticated native background path
+ * (app/api/driver/tour/location/native). There is only ever one place a
+ * GPS point actually gets written for a tour - both callers funnel through
+ * this exact same logic, just with driverId/organizationId resolved
+ * differently (session vs. signed token).
+ */
+export async function recordDriverLocationForDriver(
+  organizationId: string,
+  driverId: string,
+  input: unknown,
+  options?: {
+    /**
+     * Native path only: the resolved active tour must match this id. The
+     * token was minted for one specific tour, so if the driver's active
+     * tour has since changed (that tour ended, a new one started), a
+     * stale-but-still-valid token must be rejected rather than silently
+     * writing into the new tour.
+     */
+    expectedTourId?: string;
+  },
+): Promise<{ currentTour: CurrentDriverTourDto; point: DriverTourPositionDto }> {
+  const data = locationPingSchema.parse(input);
+  const tour = await requireActiveTourForDriver(driverId, organizationId);
+
+  if (options?.expectedTourId && tour.id !== options.expectedTourId) {
+    throw new OperationsServiceError(
+      "Le jeton de suivi ne correspond plus a la tournee active.",
+      409,
+    );
+  }
+
   const recordedAt = data.recordedAt ?? new Date();
   const receivedAt = new Date();
   const nextPoint = {
@@ -156,8 +226,8 @@ export async function recordCurrentDriverLocation(
   });
 
   await upsertNearbyVisit(
-    user.organizationId,
-    user.driverId,
+    organizationId,
+    driverId,
     tour.id,
     data.latitude,
     data.longitude,
@@ -179,8 +249,8 @@ export async function recordCurrentDriverLocation(
   // locally, so the route history here is skipped - only a cheap count is
   // used for the summary's routePointCount.
   const currentTour = await buildCurrentDriverTourState(
-    user.organizationId,
-    user.driverId,
+    organizationId,
+    driverId,
     tour,
     {
     skipRouteHistory: true,

@@ -1,12 +1,17 @@
 "use client";
 
 import * as React from "react";
+import { Capacitor } from "@capacitor/core";
 
 import {
   useDriverGeolocation,
   type DriverGpsPosition,
 } from "@/hooks/use-driver-geolocation";
 import { calculateDistanceMeters } from "@/lib/gps/gps-utils";
+import {
+  startNativeTracking,
+  stopNativeTracking,
+} from "@/lib/gps/native-tracking";
 import type {
   CurrentDriverTourDto,
   CustomerDto,
@@ -173,6 +178,14 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
       return;
     }
 
+    if (Capacitor.isNativePlatform()) {
+      // Native background-geolocation already POSTs every point straight to
+      // the server from native code (see lib/gps/native-tracking.ts and the
+      // tour-status effect below) - fetching here too would double-write
+      // every GPS point.
+      return;
+    }
+
     try {
       const response = await fetch("/api/driver/tour/location", {
         method: "POST",
@@ -215,6 +228,35 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
   });
   const lastKnownPosition = gps.lastKnownPosition;
   const resetGps = gps.reset;
+  const activeTourId = currentTour?.tour?.id ?? null;
+  const activeTourStatus = currentTour?.tour?.status ?? null;
+
+  // Native background tracking follows the tour lifecycle: starts the
+  // moment a tour becomes IN_PROGRESS, stops as soon as it no longer is
+  // (return, closure, cancellation) - mirroring exactly when the web path
+  // above is allowed to push points. A no-op entirely on the web (see
+  // lib/gps/native-tracking.ts). The position callback only updates the
+  // live/displayed position (via gps.reset) - it never fetch()es, since the
+  // native `url` POST already persisted the point server-side.
+  React.useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    if (activeTourStatus === "IN_PROGRESS" && activeTourId) {
+      void startNativeTracking(activeTourId, (position) => {
+        if (mountedRef.current) resetGps(position);
+      });
+    } else {
+      void stopNativeTracking();
+    }
+  }, [activeTourId, activeTourStatus, resetGps]);
+
+  React.useEffect(() => {
+    return () => {
+      if (Capacitor.isNativePlatform()) {
+        void stopNativeTracking();
+      }
+    };
+  }, []);
 
   React.useEffect(() => {
     currentTourRef.current = currentTour;

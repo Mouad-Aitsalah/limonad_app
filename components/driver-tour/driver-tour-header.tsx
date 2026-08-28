@@ -1,9 +1,10 @@
 "use client";
 
-import { Menu } from "lucide-react";
+import { Menu, Settings } from "lucide-react";
 
 import { useSidebar } from "@/hooks/use-sidebar";
 import type { GpsStatus } from "@/lib/gps/gps-utils";
+import { isNativeGpsPlatform, openNativeLocationSettings } from "@/lib/gps/native-tracking";
 import { cn } from "@/lib/utils";
 
 const gpsStatusLabels: Record<GpsStatus, string> = {
@@ -66,6 +67,16 @@ export function DriverTourHeader({
             className={cn("h-2.5 w-2.5 rounded-full", gpsStatusClasses[gpsStatus])}
           />
           <span className="whitespace-nowrap">{gpsStatusLabels[gpsStatus]}</span>
+          {gpsStatus === "DENIED" && isNativeGpsPlatform() ? (
+            <button
+              type="button"
+              onClick={() => void openNativeLocationSettings()}
+              className="ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-foreground/70 hover:text-foreground"
+              aria-label="Ouvrir les reglages de localisation"
+            >
+              <Settings className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
         </div>
       </div>
     </header>

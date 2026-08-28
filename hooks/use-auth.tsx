@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { stopNativeTracking } from "@/lib/gps/native-tracking";
 import type { CurrentUser } from "@/types/auth";
 
 type LoginResult =
@@ -90,6 +91,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = React.useCallback(async () => {
+    // No-op on the web / when nothing is tracking - see lib/gps/native-tracking.ts.
+    await stopNativeTracking();
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     setCurrentUser(null);
   }, []);

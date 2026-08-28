@@ -12,6 +12,13 @@ export type User = {
   derniereConnexion: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  // Only populated when role === "driver" - mirrors the Driver row created
+  // alongside a DRIVER-role User (lib/server/users.ts#createUser). null for
+  // every other role, and null truck simply means "not assigned yet".
+  driver: {
+    id: string;
+    truck: { id: string; code: string; registration: string } | null;
+  } | null;
 };
 
 // The org-admin-only "Nouvel utilisateur" role choices - never includes

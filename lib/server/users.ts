@@ -17,6 +17,12 @@ const userInclude = {
       name: true,
     },
   },
+  driverProfile: {
+    select: {
+      id: true,
+      truck: { select: { id: true, code: true, registration: true } },
+    },
+  },
 } satisfies Prisma.UserInclude;
 
 type UserRecord = Prisma.UserGetPayload<{ include: typeof userInclude }>;
@@ -184,6 +190,9 @@ function mapUserToDto(user: UserRecord): User {
     derniereConnexion: null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
+    driver: user.driverProfile
+      ? { id: user.driverProfile.id, truck: user.driverProfile.truck }
+      : null,
   };
 }
 
