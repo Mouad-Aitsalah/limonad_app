@@ -420,6 +420,8 @@ export interface CustomerDto {
   contactName?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  locationAccuracy?: number | null;
+  locationUpdatedAt?: string | null;
   notes?: string | null;
   createdByUserId: string;
   createdByUserName: string;
@@ -462,6 +464,7 @@ export type CustomerMutationInput = {
   contactName?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  locationAccuracy?: number | null;
   notes?: string | null;
 };
 

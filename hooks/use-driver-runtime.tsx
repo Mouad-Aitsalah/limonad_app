@@ -337,6 +337,20 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
     const nextCustomers = upsertSortedCustomer(customersRef.current, customer);
     customersRef.current = nextCustomers;
     setCustomers(nextCustomers);
+
+    // Also merge into the active tour's own customer list (map markers,
+    // nearby-customer detection within the tour view) so a client
+    // created/edited from /driver/clients - including its GPS location -
+    // shows up immediately on /driver/tournee without a full page reload,
+    // not just in the global customers list above.
+    if (currentTourRef.current) {
+      const nextTour = mergeCustomerIntoCurrentTour(currentTourRef.current, customer);
+      if (nextTour !== currentTourRef.current) {
+        currentTourRef.current = nextTour;
+        setCurrentTour(nextTour);
+      }
+    }
+
     syncNearbyCustomer();
   }, [syncNearbyCustomer]);
 
@@ -455,6 +469,44 @@ function toNearbySuggestion(
     customer: candidate.customer,
     distanceMeters: candidate.distanceMeters,
   };
+}
+
+/**
+ * Projects a CustomerDto (the global customer shape) into the tour-scoped
+ * DriverTourCustomerDto shape and upserts it into current.customers, so a
+ * client created/edited from /driver/clients appears on the tour map right
+ * away. A brand-new entry starts PENDING with no visit history yet - an
+ * existing one keeps its visitStatus/lastEventAt/noSaleReason/distance
+ * untouched, only its identity/address/coordinates are refreshed.
+ */
+function mergeCustomerIntoCurrentTour(
+  current: CurrentDriverTourDto,
+  customer: CustomerDto,
+): CurrentDriverTourDto {
+  const existingIndex = current.customers.findIndex((item) => item.id === customer.id);
+  const existing = existingIndex >= 0 ? current.customers[existingIndex] : null;
+
+  const tourCustomer: DriverTourCustomerDto = {
+    id: customer.id,
+    code: customer.code,
+    name: customer.name,
+    phone: customer.phone,
+    address: customer.address,
+    city: customer.city,
+    latitude: customer.latitude ?? null,
+    longitude: customer.longitude ?? null,
+    distanceMeters: existing?.distanceMeters ?? null,
+    visitStatus: existing?.visitStatus ?? "PENDING",
+    lastEventAt: existing?.lastEventAt ?? null,
+    noSaleReason: existing?.noSaleReason ?? null,
+  };
+
+  const nextCustomers =
+    existingIndex >= 0
+      ? current.customers.map((item, index) => (index === existingIndex ? tourCustomer : item))
+      : [...current.customers, tourCustomer];
+
+  return { ...current, customers: nextCustomers };
 }
 
 function mergeHydratedCurrentTour(

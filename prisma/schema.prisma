@@ -723,6 +723,8 @@ model Customer {
   contactName        String?
   latitude           Decimal?               @db.Decimal(10, 7)
   longitude          Decimal?               @db.Decimal(10, 7)
+  locationAccuracy   Decimal?               @db.Decimal(10, 2)
+  locationUpdatedAt  DateTime?
   notes              String?
   createdByUserId    String
   createdBy          User                   @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)

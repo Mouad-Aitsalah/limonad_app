@@ -185,8 +185,9 @@ export function AccountForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <div className="grid gap-4 sm:grid-cols-2">
+    <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
+        <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Type de compte" error={fieldErrors.type}>
           <Select
             value={values.type}
@@ -487,9 +488,10 @@ export function AccountForm({
             </Field>
           </>
         ) : null}
+        </div>
       </div>
 
-      <DialogFooter>
+      <DialogFooter className="shrink-0">
         <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
           Annuler
         </Button>

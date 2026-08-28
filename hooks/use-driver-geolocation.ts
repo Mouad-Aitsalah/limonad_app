@@ -105,6 +105,17 @@ export function useDriverGeolocation({
   const lastAcceptedRef = React.useRef<DriverGpsPosition | null>(initialPosition);
   /** Last time any watchPosition callback (success or error) fired — feeds the stalled-watch watchdog. Null until the first callback. */
   const lastCallbackAtRef = React.useRef<number | null>(null);
+  /**
+   * The accuracy actually measured by the most recent captureFreshPosition()
+   * attempt, win or lose. A plain ref (not React state) on purpose: a caller
+   * that awaits captureFreshPosition() and immediately reads this needs the
+   * value synchronously, before React has flushed the setLivePosition/etc.
+   * state updates scheduled inside that same call - a state-based read at
+   * that point can still observe the PREVIOUS attempt's value.
+   */
+  const lastAttemptAccuracyRef = React.useRef<number | null>(null);
+  /** Same rationale as lastAttemptAccuracyRef, for the failure classification of that same attempt. */
+  const lastAttemptFailureKindRef = React.useRef<GpsFailureKind>(null);
 
   const supported = React.useMemo(() => browserGpsProvider.isSupported(), []);
   const secureContext = React.useMemo(() => isSecureGeolocationContext(), []);
@@ -393,6 +404,8 @@ export function useDriverGeolocation({
       setSearching(true);
       setErrorMessage(null);
       setFailureKind(null);
+      lastAttemptAccuracyRef.current = null;
+      lastAttemptFailureKindRef.current = null;
 
       try {
         const raw = await browserGpsProvider.getCurrentPosition({
@@ -400,11 +413,13 @@ export function useDriverGeolocation({
         });
         const nowMs = Date.now();
         const position = toDriverGpsPosition(raw);
+        lastAttemptAccuracyRef.current = position.accuracy ?? null;
 
         setSearching(false);
         setNow(nowMs);
 
         if (!isGpsPointUsable(position, nowMs)) {
+          lastAttemptFailureKindRef.current = "IMPRECISE";
           setFailureKind("IMPRECISE");
           setErrorMessage(
             position.accuracy && position.accuracy > GPS_MAX_USABLE_ACCURACY_METERS
@@ -446,6 +461,7 @@ export function useDriverGeolocation({
         return position;
       } catch (error) {
         const gpsError = error as GpsProviderError;
+        lastAttemptFailureKindRef.current = gpsError.kind;
         setSearching(false);
         setFailureKind(gpsError.kind);
         setErrorMessage(gpsError.message);
@@ -515,6 +531,10 @@ export function useDriverGeolocation({
     /** Exposed for completeness (e.g. a future debug affordance) — recovery is now fully automatic, see the watchdog effect above. */
     retry,
     captureFreshPosition,
+    /** The accuracy measured by the most recent captureFreshPosition() attempt, even a rejected one - see the ref's own doc comment above. */
+    lastAttemptAccuracyRef,
+    /** The failure classification of that same attempt - read this instead of `failureKind` right after awaiting captureFreshPosition(). */
+    lastAttemptFailureKindRef,
     reset,
     stop,
   };

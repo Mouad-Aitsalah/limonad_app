@@ -42,8 +42,22 @@ export const customerMutationSchema = z.object({
   ice: optionalString(),
   taxId: optionalString(),
   contactName: optionalString(),
-  latitude: z.coerce.number().nullable().optional(),
-  longitude: z.coerce.number().nullable().optional(),
+  // Never trust the frontend alone: a coordinate outside these ranges is
+  // physically impossible and rejected here regardless of what produced it
+  // (manual entry, a corrupted capture, or a forged request).
+  latitude: z.coerce
+    .number()
+    .min(-90, "La latitude doit etre comprise entre -90 et 90.")
+    .max(90, "La latitude doit etre comprise entre -90 et 90.")
+    .nullable()
+    .optional(),
+  longitude: z.coerce
+    .number()
+    .min(-180, "La longitude doit etre comprise entre -180 et 180.")
+    .max(180, "La longitude doit etre comprise entre -180 et 180.")
+    .nullable()
+    .optional(),
+  locationAccuracy: z.coerce.number().min(0).nullable().optional(),
   notes: optionalString(),
 });
 
@@ -67,6 +81,8 @@ export function mapCustomerToDto(customer: NonNullable<CustomerRecord>): Custome
     contactName: customer.contactName,
     latitude: customer.latitude?.toNumber() ?? null,
     longitude: customer.longitude?.toNumber() ?? null,
+    locationAccuracy: customer.locationAccuracy?.toNumber() ?? null,
+    locationUpdatedAt: customer.locationUpdatedAt?.toISOString() ?? null,
     notes: customer.notes,
     createdByUserId: customer.createdByUserId,
     createdByUserName: customer.createdBy.fullName,
@@ -108,6 +124,7 @@ export async function createCustomer(input: CustomerMutationInput): Promise<Cust
         data: {
           organizationId: user.organizationId,
           ...customerData,
+          locationUpdatedAt: resolveLocationUpdatedAt(customerData.latitude, customerData.longitude),
           code: code ?? (await nextCustomerCode(tx, user.organizationId)),
           status: customerData.status ?? "ACTIVE",
           creditLimit: customerData.creditLimit ?? 0,
@@ -141,6 +158,7 @@ export async function updateCustomer(
     where: { id },
     data: {
       ...customerData,
+      locationUpdatedAt: resolveLocationUpdatedAt(customerData.latitude, customerData.longitude),
       ...(code ? { code } : {}),
       creditLimit: customerData.creditLimit ?? 0,
       status: customerData.status ?? "ACTIVE",
@@ -168,6 +186,19 @@ export async function setCustomerStatus(
     include: customerInclude,
   });
   return mapCustomerToDto(customer);
+}
+
+/**
+ * locationUpdatedAt is always server-derived, never client-supplied: it
+ * marks "a valid latitude/longitude pair was submitted just now", distinct
+ * from the generic updatedAt column which bumps on every field edit (e.g.
+ * a phone number correction), not just a location change.
+ */
+export function resolveLocationUpdatedAt(
+  latitude: number | null | undefined,
+  longitude: number | null | undefined,
+): Date | null {
+  return latitude != null && longitude != null ? new Date() : null;
 }
 
 export async function parseCustomerInput(input: CustomerMutationInput) {

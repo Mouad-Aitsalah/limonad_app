@@ -8,8 +8,9 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { driverCustomerTypes as customerTypes } from "@/components/driver-clients/driver-customer-form";
+import { DriverCustomerForm } from "@/components/driver-clients/driver-customer-form";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
 import { cn, formatCurrency } from "@/lib/utils";
 import {
@@ -21,16 +22,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { CustomerDto, CustomerMutationInput } from "@/types/operations-dto";
-
-const customerTypes = [
-  ["GROCERY", "Epicerie"],
-  ["CAFE", "Cafe"],
-  ["RESTAURANT", "Restaurant"],
-  ["SUPERMARKET", "Supermarche"],
-  ["WHOLESALER", "Grossiste"],
-  ["COUNTER", "Client comptoir"],
-  ["OTHER", "Autre"],
-] as const;
 
 export function DriverClientsView({
   initialCustomers,
@@ -45,6 +36,7 @@ export function DriverClientsView({
   const [search, setSearch] = React.useState("");
   const [editing, setEditing] = React.useState<CustomerDto | null>(null);
   const [showForm, setShowForm] = React.useState(false);
+  const [focusLocation, setFocusLocation] = React.useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = React.useState<string | null>(() =>
     resolveInitialSelectedCustomerId(initialCustomers, initialSelectedCustomerId),
   );
@@ -83,6 +75,7 @@ export function DriverClientsView({
     driverRuntime.upsertCustomer(savedCustomer);
     setEditing(null);
     setShowForm(false);
+    setFocusLocation(false);
     toast.success(id ? "Client modifie avec succes" : "Client ajoute avec succes");
     return null;
   }
@@ -102,6 +95,7 @@ export function DriverClientsView({
           type="button"
           onClick={() => {
             setEditing(null);
+            setFocusLocation(false);
             setShowForm(true);
           }}
         >
@@ -111,11 +105,14 @@ export function DriverClientsView({
       </div>
 
       {(showForm || editing) && (
-        <CustomerForm
+        <DriverCustomerForm
+          key={editing?.id ?? "new"}
           customer={editing}
+          focusLocation={focusLocation}
           onCancel={() => {
             setShowForm(false);
             setEditing(null);
+            setFocusLocation(false);
           }}
           onSave={saveCustomer}
         />
@@ -139,6 +136,15 @@ export function DriverClientsView({
               <p className="text-sm text-muted-foreground">
                 {selectedCustomer.address}, {selectedCustomer.city}
               </p>
+              <p className="text-xs text-muted-foreground">
+                {hasCustomerLocation(selectedCustomer)
+                  ? `Position : ${selectedCustomer.latitude!.toFixed(5)}, ${selectedCustomer.longitude!.toFixed(5)}${
+                      selectedCustomer.locationAccuracy
+                        ? ` (+/-${Math.round(selectedCustomer.locationAccuracy)} m)`
+                        : ""
+                    }`
+                  : "Localisation non renseignee"}
+              </p>
             </div>
 
             <div className="flex flex-col gap-2 sm:min-w-[220px]">
@@ -160,10 +166,26 @@ export function DriverClientsView({
                 disabled={selectedCustomer.creationOrigin !== "DRIVER"}
                 onClick={() => {
                   setEditing(selectedCustomer);
+                  setFocusLocation(false);
                   setShowForm(true);
                 }}
               >
                 Modifier la fiche
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl"
+                disabled={selectedCustomer.creationOrigin !== "DRIVER"}
+                onClick={() => {
+                  setEditing(selectedCustomer);
+                  setFocusLocation(true);
+                  setShowForm(true);
+                }}
+              >
+                {hasCustomerLocation(selectedCustomer)
+                  ? "Mettre a jour la localisation"
+                  : "Ajouter la localisation"}
               </Button>
             </div>
           </CardContent>
@@ -246,69 +268,9 @@ export function DriverClientsView({
   );
 }
 
-function CustomerForm({
-  customer,
-  onCancel,
-  onSave,
-}: {
-  customer?: CustomerDto | null;
-  onCancel: () => void;
-  onSave: (input: CustomerMutationInput, id?: string) => Promise<Record<string, string> | null>;
-}) {
-  const [errors, setErrors] = React.useState<Record<string, string>>({});
-
-  async function action(formData: FormData) {
-    const input: CustomerMutationInput = {
-      name: String(formData.get("name") ?? ""),
-      phone: String(formData.get("phone") ?? ""),
-      email: String(formData.get("email") ?? "") || null,
-      address: String(formData.get("address") ?? ""),
-      city: String(formData.get("city") ?? ""),
-      type: String(formData.get("type") ?? "OTHER"),
-      creditLimit: Number(formData.get("creditLimit") ?? 0),
-      ice: String(formData.get("ice") ?? "") || null,
-      taxId: String(formData.get("taxId") ?? "") || null,
-      contactName: String(formData.get("contactName") ?? "") || null,
-      notes: String(formData.get("notes") ?? "") || null,
-    };
-    setErrors((await onSave(input, customer?.id)) ?? {});
-  }
-
-  return (
-    <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
-      <CardContent>
-        <form action={action} className="grid gap-4 md:grid-cols-2">
-          <Field label="Nom" error={errors.name}><Input name="name" defaultValue={customer?.name} required /></Field>
-          <Field label="Telephone" error={errors.phone}><Input name="phone" defaultValue={customer?.phone} required /></Field>
-          <Field label="Adresse" error={errors.address}><Input name="address" defaultValue={customer?.address} required /></Field>
-          <Field label="Ville" error={errors.city}><Input name="city" defaultValue={customer?.city} required /></Field>
-          <Field label="Type">
-            <select name="type" defaultValue={customer?.type ?? "GROCERY"} className="h-9 rounded-lg border border-input bg-background px-3 text-sm">
-              {customerTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </Field>
-          <Field label="Email" error={errors.email}><Input name="email" type="email" defaultValue={customer?.email ?? ""} /></Field>
-          <Field label="ICE"><Input name="ice" defaultValue={customer?.ice ?? ""} /></Field>
-          <Field label="Identifiant fiscal"><Input name="taxId" defaultValue={customer?.taxId ?? ""} /></Field>
-          <Field label="Contact principal"><Input name="contactName" defaultValue={customer?.contactName ?? ""} /></Field>
-          <Field label="Plafond credit"><Input name="creditLimit" type="number" min={0} defaultValue={customer?.creditLimit ?? 0} /></Field>
-          <div className="space-y-2 md:col-span-2">
-            <Label>Notes</Label>
-            <Input name="notes" defaultValue={customer?.notes ?? ""} />
-          </div>
-          {errors.form && <p className="text-sm text-destructive md:col-span-2">{errors.form}</p>}
-          <div className="flex gap-2 md:col-span-2">
-            <Button type="submit">Enregistrer</Button>
-            <Button type="button" variant="outline" onClick={onCancel}>Annuler</Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
-function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
-  return <div className="space-y-2"><Label>{label}</Label>{children}{error && <p className="text-xs text-destructive">{error}</p>}</div>;
+function hasCustomerLocation(customer: CustomerDto) {
+  return customer.latitude !== null && customer.latitude !== undefined
+    && customer.longitude !== null && customer.longitude !== undefined;
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

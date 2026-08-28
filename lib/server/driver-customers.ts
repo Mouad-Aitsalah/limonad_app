@@ -6,6 +6,7 @@ import {
   mapCustomerToDto,
   nextCustomerCode,
   parseCustomerInput,
+  resolveLocationUpdatedAt,
 } from "@/lib/server/customers";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -69,6 +70,8 @@ export async function createCustomerForCurrentDriver(
             contactName: data.contactName,
             latitude: data.latitude,
             longitude: data.longitude,
+            locationAccuracy: data.locationAccuracy,
+            locationUpdatedAt: resolveLocationUpdatedAt(data.latitude, data.longitude),
             notes: data.notes,
             status: existing.status === "BLOCKED" ? "BLOCKED" : (data.status ?? "ACTIVE"),
           },
@@ -80,6 +83,7 @@ export async function createCustomerForCurrentDriver(
         data: {
           organizationId: user.organizationId,
           ...data,
+          locationUpdatedAt: resolveLocationUpdatedAt(data.latitude, data.longitude),
           code: await nextCustomerCode(tx, user.organizationId),
           status: "ACTIVE",
           creditLimit: data.creditLimit ?? 0,

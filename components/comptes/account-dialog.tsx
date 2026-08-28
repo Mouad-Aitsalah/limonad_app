@@ -46,8 +46,8 @@ export function AccountDialog({
         </DialogTrigger>
       ) : null}
 
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[95vh] flex-col overflow-hidden sm:max-h-[90vh] sm:max-w-2xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="text-xl">
             {account ? "Modifier le compte" : "Nouveau compte"}
           </DialogTitle>
