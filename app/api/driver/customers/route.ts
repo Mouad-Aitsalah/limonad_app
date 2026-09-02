@@ -7,6 +7,7 @@ import {
 } from "@/lib/server/driver-customers";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { reportUnexpected } from "@/lib/server/report-error";
 
 export async function GET() {
   try {
@@ -15,6 +16,7 @@ export async function GET() {
     if (error instanceof AuthServiceError || error instanceof OperationsServiceError) {
       return NextResponse.json({ message: error.message }, { status: error.status });
     }
+    reportUnexpected(error, { route: "GET /api/driver/customers", area: "driver" });
     return NextResponse.json({ message: "Impossible de charger les clients." }, { status: 500 });
   }
 }

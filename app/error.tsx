@@ -1,0 +1,64 @@
+"use client";
+
+/**
+ * Generic segment error boundary (renders inside the root layout). Reports
+ * the exception to Sentry and shows a fixed, non-technical message - no
+ * stack trace, no raw `error.message`, only the opaque `error.digest`.
+ */
+import * as Sentry from "@sentry/nextjs";
+import { useEffect } from "react";
+
+export default function ErrorBoundary({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  useEffect(() => {
+    Sentry.captureException(error);
+  }, [error]);
+
+  return (
+    <div
+      style={{
+        minHeight: "60vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+        color: "#0f172a",
+      }}
+    >
+      <div style={{ textAlign: "center", padding: "2rem", maxWidth: "26rem" }}>
+        <h1 style={{ fontSize: "1.15rem", fontWeight: 600, margin: 0 }}>
+          Une erreur est survenue
+        </h1>
+        <p style={{ marginTop: "0.75rem", color: "#475569", fontSize: "0.9rem" }}>
+          Le problème a été signalé automatiquement. Vous pouvez réessayer.
+        </p>
+        {error.digest ? (
+          <p style={{ marginTop: "1rem", color: "#94a3b8", fontSize: "0.75rem" }}>
+            Référence&nbsp;: {error.digest}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => reset()}
+          style={{
+            marginTop: "1.5rem",
+            padding: "0.5rem 1.25rem",
+            borderRadius: "0.5rem",
+            border: "1px solid #cbd5e1",
+            background: "#ffffff",
+            color: "#0f172a",
+            fontSize: "0.9rem",
+            cursor: "pointer",
+          }}
+        >
+          Réessayer
+        </button>
+      </div>
+    </div>
+  );
+}

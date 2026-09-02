@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs/config";
 
 const nextConfig: NextConfig = {
   // Wildcard patterns instead of specific IPs, so the dev server keeps
@@ -12,4 +13,14 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// 4Q.4A foundation: DSN-only. No auth token is set, so the Sentry bundler
+// plugin never attempts a release creation or a source-map upload - source
+// maps stay disabled explicitly on top of that. `org`/`project` are read
+// from the environment when present (build-time only) but are optional here.
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  silent: true,
+  telemetry: false,
+  sourcemaps: { disable: true },
+});
