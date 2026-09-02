@@ -267,6 +267,36 @@ export function calculateDistanceMeters(
 /** Alias matching the common name for this formula. */
 export const haversineDistance = calculateDistanceMeters;
 
+/** Meters per degree of latitude (WGS84 average) - used only to size a
+ * bounding box, never for real distance math (calculateDistanceMeters above
+ * stays the single source of truth for that). */
+const METERS_PER_DEGREE_LATITUDE = 111_320;
+
+/**
+ * A degree box (±marginMeters in each direction) around (latitude, longitude).
+ * A square of half-width R fully contains a circle of radius R, so filtering
+ * DB candidates to this box before computing the real distance can never
+ * exclude a point that is genuinely within marginMeters - it only skips
+ * points that are provably too far to matter, exactly like a `take` cap
+ * skips rows that are provably not needed. No index required: it's a plain
+ * range filter, meant to bound an otherwise-unbounded proximity scan (see
+ * lib/server/driver-tour.ts's upsertNearbyVisit and
+ * lib/server/driver-customers.ts's getDriverProximityCustomers).
+ */
+export function boundingBoxAround(latitude: number, longitude: number, marginMeters: number) {
+  const latDelta = marginMeters / METERS_PER_DEGREE_LATITUDE;
+  const cosLat = Math.cos((latitude * Math.PI) / 180);
+  // Near the poles cos(lat) -> 0, which would blow up the longitude delta -
+  // never actually reached by real delivery routes, but clamped defensively.
+  const lngDelta = marginMeters / (METERS_PER_DEGREE_LATITUDE * Math.max(Math.abs(cosLat), 0.01));
+  return {
+    minLat: latitude - latDelta,
+    maxLat: latitude + latDelta,
+    minLng: longitude - lngDelta,
+    maxLng: longitude + lngDelta,
+  };
+}
+
 export function calculateSpeedKmh(
   previous: GpsPointLike,
   current: GpsPointLike,
