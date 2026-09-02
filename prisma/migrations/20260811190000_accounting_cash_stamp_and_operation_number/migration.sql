@@ -44,11 +44,15 @@ SET "operationNumber" = ordered_lines.row_num
 FROM ordered_lines
 WHERE line.id = ordered_lines.id;
 
-SELECT setval(
-  '"AccountingEntryLine_operationNumber_seq"',
-  COALESCE((SELECT MAX("operationNumber") FROM "AccountingEntryLine"), 0),
-  true
-);
+DO $$
+DECLARE
+  max_operation_number INTEGER;
+BEGIN
+  SELECT MAX("operationNumber") INTO max_operation_number FROM "AccountingEntryLine";
+  IF max_operation_number IS NOT NULL THEN
+    PERFORM setval('"AccountingEntryLine_operationNumber_seq"', max_operation_number, true);
+  END IF;
+END $$;
 
 ALTER TABLE "AccountingEntryLine"
 ALTER COLUMN "operationNumber" SET DEFAULT nextval('"AccountingEntryLine_operationNumber_seq"'),
