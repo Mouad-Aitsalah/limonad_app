@@ -11,7 +11,7 @@ import type {
 } from "@/types/organization";
 import { BCRYPT_COST } from "@/lib/password-hashing";
 import { prisma } from "@/lib/prisma";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { OperationsServiceError, provisionDepot } from "@/lib/server/depots";
 import { requireSuperAdmin } from "@/lib/server/organization-context";
 import { passwordPolicySchema } from "@/lib/server/password-policy";
 
@@ -199,6 +199,21 @@ export async function createOrganization(
         status: "ACTIVE",
       },
       select: { id: true },
+    });
+
+    // Every organization needs at least one depot + its DEPOT stock
+    // location to be usable (POS, versements, stock). Provision a default
+    // one here so a freshly created org is never stuck with an empty
+    // /api/depots. The new admin is bound to it straight away.
+    const defaultDepot = await provisionDepot(tx, {
+      organizationId: createdOrganization.id,
+      name: "Dépôt Principal",
+      address: data.address,
+      city: data.city,
+    });
+    await tx.user.update({
+      where: { id: createdAdmin.id },
+      data: { depotId: defaultDepot.id },
     });
 
     await tx.accountingSettings.create({

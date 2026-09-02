@@ -84,7 +84,7 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
     if (!canAssignDepot) return;
     let cancelled = false;
 
-    fetch("/api/depots")
+    fetch("/api/depots?active=true")
       .then((response) => response.json())
       .then((data: { depots?: DepotDto[] }) => {
         if (!cancelled) setDepots((data.depots ?? []).filter((depot) => depot.active));

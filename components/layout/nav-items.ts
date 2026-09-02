@@ -74,6 +74,14 @@ export const navItems: NavItem[] = [
     order: "04",
   },
   {
+    label: "Depots",
+    href: "/depots",
+    icon: Warehouse,
+    description: "Depots de l'organisation",
+    order: "042",
+    roles: ["admin"],
+  },
+  {
     label: "Inventaire",
     href: "/inventaire",
     icon: ClipboardCheck,

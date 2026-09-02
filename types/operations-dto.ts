@@ -6,8 +6,17 @@ export interface DepotDto {
   city: string;
   phone?: string | null;
   active: boolean;
+  // The DEPOT-type StockLocation bound to this depot (1:1). Every depot
+  // created through the app gets one in the same transaction; only legacy
+  // rows might miss it.
+  stockLocationName: string | null;
+  stockLocationActive: boolean | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DepotCreateInput {
+  name: string;
 }
 
 export interface TruckDto {

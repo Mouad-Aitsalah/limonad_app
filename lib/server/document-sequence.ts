@@ -102,4 +102,5 @@ export const DocumentType = {
   LoadingNumber: "LOADING_NUMBER", // truck-loadings.ts nextLoadingNumber (CHG-000001, global per org)
   DriverEmployeeCode: "DRIVER_EMPLOYEE_CODE", // users.ts nextDriverEmployeeCode (DRV-0001, global per org)
   Inventory: "INVENTORY", // inventories.ts inline count()+1 (INV-0001, global per org)
+  DepotCode: "DEPOT_CODE", // depots.ts provisionDepot (DEP-001, global per org; the linked StockLocation reuses it as SL-DEP-001)
 } as const;
