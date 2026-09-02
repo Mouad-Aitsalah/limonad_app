@@ -297,6 +297,7 @@ model User {
   depotId                   String?
   depot                     Depot?                @relation(fields: [depotId], references: [id], onDelete: SetNull)
   driverProfile             Driver?
+  sessions                  Session[]
   stockMovements            StockMovement[]       @relation("StockMovementCreatedBy")
   createdCustomers          Customer[]            @relation("CustomerCreatedBy")
   createdTours              Tour[]                @relation("TourCreatedBy")
@@ -329,6 +330,36 @@ model User {
   @@index([depotId])
 }
 
+/**
+ * Server-side, revocable login sessions (see lib/server/auth.ts). Replaces
+ * the previous self-sufficient signed-cookie session: the cookie now only
+ * ever carries an opaque random token, never a raw user id/role/org - the
+ * token is hashed (SHA-256) before being looked up here, and the raw token
+ * is never persisted anywhere. Deleting/deactivating a user or calling
+ * revokeAllUserSessions() takes effect immediately for every row here,
+ * which a self-sufficient signed token could never support (it stays
+ * "valid" - passes signature verification - until it naturally expires,
+ * with no way to invalidate it early).
+ * onDelete: Cascade (unlike most User relations elsewhere in this schema,
+ * which use Restrict to preserve business/audit history) is deliberate: a
+ * Session has no meaning without its User and is not business data to
+ * retain - if a User row is ever hard-deleted, its sessions should vanish
+ * with it rather than block the delete or dangle.
+ */
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
 model Organization {
   id                   String                @id @default(cuid())
   code                 String                @unique
@@ -349,6 +380,7 @@ model Organization {
   suppliers            Supplier[]
   contacts             Contact[]
   expenseAccounts      ExpenseAccount[]
+  documentSequences    DocumentSequence[]
   treasuryAccounts     TreasuryAccount[]
   products             Product[]
   stockLocations       StockLocation[]
@@ -421,6 +453,7 @@ model Truck {
   tours                     Tour[]
   truckLoadings             TruckLoading[]
   sales                     Sale[]
+  creditNotes               CreditNote[]
   customersCreatedFromTruck Customer[]
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt
@@ -447,6 +480,7 @@ model Driver {
   tours          Tour[]
   truckLoadings  TruckLoading[]
   sales          Sale[]
+  creditNotes    CreditNote[]
   customers      Customer[]
   discrepancies  Discrepancy[]
   createdAt      DateTime       @default(now())
@@ -626,6 +660,11 @@ model Product {
   @@index([categoryId])
   @@index([brandId])
   @@index([defaultSupplierId])
+  // Phase 3 - PG/Neon infra audit: (organizationId, createdAt DESC) speeds
+  // up /produits' getProductsPage (WHERE organizationId ORDER BY createdAt
+  // DESC, id DESC LIMIT N) - measured ~3.7x faster at 5k rows bench-scale.
+  // Additive only.
+  @@index([organizationId, createdAt(sort: Desc)])
 }
 
 model StockLocation {
@@ -745,6 +784,11 @@ model Customer {
   @@index([phone])
   @@index([createdByUserId])
   @@index([createdByDriverId])
+  // Phase 3 - PG/Neon infra audit: (organizationId, createdAt DESC) speeds
+  // up /comptes' getBusinessAccountsPage customerBranch (WHERE
+  // organizationId ORDER BY createdAt DESC LIMIT N) - measured ~90x faster
+  // at 24k rows bench-scale (seq scan+sort -> index scan). Additive only.
+  @@index([organizationId, createdAt(sort: Desc)])
 }
 
 model Tour {
@@ -768,6 +812,7 @@ model Tour {
   loading         TruckLoading?
   stockCounts     TourStockCount[]
   sales           Sale[]
+  creditNotes     CreditNote[]
   closure         TourClosure?
   discrepancies   Discrepancy[]
   locationPings   TourLocationPing[]
@@ -940,6 +985,14 @@ model CashDeposit {
   cashTotal       Decimal                   @default(0) @db.Decimal(12, 2)
   checkTotal      Decimal                   @default(0) @db.Decimal(12, 2)
   total           Decimal                   @default(0) @db.Decimal(12, 2)
+  cashSales       Decimal?                  @db.Decimal(12, 2)
+  cashExpenses    Decimal?                  @db.Decimal(12, 2)
+  availableCash   Decimal?                  @db.Decimal(12, 2)
+  suggestedDeposit Decimal?                 @db.Decimal(12, 2)
+  suggestedCashReserve Decimal?             @db.Decimal(12, 2)
+  countedCash     Decimal?                  @db.Decimal(12, 2)
+  cashDifference  Decimal?                  @db.Decimal(12, 2)
+  cashRemaining   Decimal?                  @db.Decimal(12, 2)
   status          CashDepositStatus         @default(VALIDATED)
   notes           String?
   createdByUserId String
@@ -1075,6 +1128,13 @@ model Sale {
   createdByUserId String
   createdBy       User          @relation("SaleCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   validatedAt     DateTime?
+  // Client-generated, stable for one logical sale attempt (see
+  // lib/server/counter-sales.ts / driver-sales.ts). Same pattern as
+  // EmployeeTransaction.idempotencyKey: nullable so existing rows and any
+  // caller that doesn't send one are unaffected - Postgres treats NULL as
+  // distinct from NULL in a unique index, so the constraint below only ever
+  // constrains rows that actually carry a key.
+  idempotencyKey  String?
   lines           SaleLine[]
   payments        Payment[]
   creditNotes     CreditNote[]
@@ -1083,6 +1143,7 @@ model Sale {
 
   @@unique([organizationId, invoiceNumber])
   @@unique([organizationId, saleYear, saleNumber])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId])
   @@index([createdAt])
   @@index([driverId])
@@ -1168,11 +1229,30 @@ model CreditNote {
   validatedBy                User?                  @relation("CreditNoteValidatedBy", fields: [validatedByUserId], references: [id], onDelete: SetNull)
   validatedAt                DateTime?
   reversedAt                 DateTime?
+  // Same idempotency pattern as Sale.idempotencyKey / EmployeeTransaction -
+  // see lib/server/credit-notes.ts. Only ever set on the create path
+  // (persistManualCreditNote without an existing draft id).
+  idempotencyKey             String?
+  // F4 (Phase 2 audit): set exclusively by the driver-return path
+  // (createDriverReturn in lib/server/credit-notes.ts) - always derived from
+  // the driver's own authenticated session and their real IN_PROGRESS tour,
+  // never from client input. A depot/counter return (the admin/depot_manager
+  // /cashier path via persistManualCreditNote) always leaves these null.
+  // Same field shape as Sale.driverId/truckId/tourId, mirrored on purpose so
+  // getTourStockSheet's existing per-tour scoping logic generalizes
+  // identically to credit notes.
+  driverId                   String?
+  driver                     Driver?                @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  truckId                    String?
+  truck                      Truck?                 @relation(fields: [truckId], references: [id], onDelete: Restrict)
+  tourId                     String?
+  tour                       Tour?                  @relation(fields: [tourId], references: [id], onDelete: Restrict)
   lines                      CreditNoteLine[]
   createdAt                  DateTime               @default(now())
   updatedAt                  DateTime               @updatedAt
 
   @@unique([organizationId, creditNoteNumber])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId])
   @@index([originalSaleId])
   @@index([customerId])
@@ -1180,6 +1260,9 @@ model CreditNote {
   @@index([partyType])
   @@index([stockDestinationLocationId])
   @@index([stockSourceLocationId])
+  @@index([driverId])
+  @@index([truckId])
+  @@index([tourId])
 }
 
 model CreditNoteLine {
@@ -1476,6 +1559,18 @@ enum InventoryStatus {
 // resumed, and only "Terminer l'inventaire" (finalizeInventory) ever
 // touches real StockLevel/StockMovement data. Reuses Product/Depot/
 // StockLocation/StockLevel/StockMovement - no parallel stock model.
+//
+// F7 (Phase 2 audit): at most one EN_COURS Inventory per (organizationId,
+// depotId) - enforced both by createInventory's own Serializable
+// transaction and by a partial unique index created in raw migration SQL
+// (see Inventory_open_per_depot_key, migration
+// 20260830190000_add_inventory_open_per_depot_constraint), since Prisma's
+// schema syntax has no way to express a partial/filtered unique index -
+// exactly the same pattern already used for TruckLoading's one-open-loading
+// -per-truck constraint (TruckLoading_open_per_truck_key). depotId is the
+// right scope: StockLocation.depotId is @unique, so a depot has at most one
+// StockLocation - "same depot" and "same stock location" are equivalent
+// here.
 model Inventory {
   organizationId  String
   organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -1518,4 +1613,40 @@ model InventoryLine {
 
   @@unique([inventoryId, productId])
   @@index([productId])
+}
+
+/**
+ * Phase 3 - numbering chantier: a single atomic, per-organization counter
+ * table replacing every count()+1 / findFirst-orderBy-desc+1 /
+ * findMany+Math.max+1 pattern previously used to generate business document
+ * numbers (StockMovement, Customer, Sale, Purchase, CreditNote, Inventory,
+ * TruckLoading, Tour, CashDeposit, EmployeeTransaction, AccountingEntry,
+ * Category, Driver employee codes, Supplier/ExpenseAccount/TreasuryAccount
+ * codes - see the Phase 3 report for the full inventory and each one's
+ * exact (documentType, scopeKey) mapping).
+ *
+ * scopeKey carries whatever sub-scope a given number format already used
+ * (a calendar day "20260830", a year "2026", a payroll month "202608", or
+ * "" when the format has no sub-scope beyond the organization) - the SAME
+ * counter never mixes two different sub-scopes, exactly like the bespoke
+ * per-type logic it replaces.
+ *
+ * Reservation is a single atomic
+ * `INSERT ... ON CONFLICT (...) DO UPDATE SET "currentValue" = "currentValue" + 1 RETURNING "currentValue"`
+ * (lib/server/document-sequence.ts's reserveDocumentSequence) - safe under
+ * concurrent callers without needing Serializable isolation or app-level
+ * retries for the numbering step itself, and O(1) regardless of how many
+ * documents already exist.
+ */
+model DocumentSequence {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  documentType   String
+  scopeKey       String       @default("")
+  currentValue   Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, documentType, scopeKey])
 }
