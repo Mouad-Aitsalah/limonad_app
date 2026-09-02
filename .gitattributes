@@ -1,0 +1,10 @@
+# Prisma migration files are checksummed byte-for-byte by `prisma migrate`
+# (no line-ending normalization). They MUST check out as LF on every
+# platform, or a Windows clone (core.autocrlf=true) would compute CRLF
+# checksums that never match the LF checksums recorded in an existing
+# database's _prisma_migrations table, and `prisma migrate deploy` would
+# refuse to run against dev/prod. See PHASE-4O.2 report.
+/prisma/migrations/**/*.sql text eol=lf
+/prisma/migrations/migration_lock.toml text eol=lf
+/prisma/schema.prisma text eol=lf
+*.sql text eol=lf
