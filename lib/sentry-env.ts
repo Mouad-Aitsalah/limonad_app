@@ -30,3 +30,31 @@ export function isSentryEnabled(dsn: string | undefined): boolean {
   const environment = resolveSentryEnvironment();
   return environment === "production" || environment === "preview";
 }
+
+/**
+ * PHASE-4Q.4B TEMPORARY DIAGNOSTIC — Preview only.
+ *
+ * Prints, at most once per runtime, whether a DSN reached this build and
+ * whether Sentry resolves to `enabled`, so we can tell from the Vercel logs
+ * why a Preview event is not arriving. NON-SENSITIVE by construction: only
+ * booleans and the coarse environment string are logged — never the DSN
+ * value, never any config object. Remove once Preview delivery is confirmed.
+ */
+let previewDiagnosticsLogged = false;
+
+export function logSentryPreviewDiagnostics(dsn: string | undefined): void {
+  if (previewDiagnosticsLogged) return;
+  if (resolveSentryEnvironment() !== "preview") return;
+  previewDiagnosticsLogged = true;
+  console.log(
+    "[sentry-4Q.4B]",
+    JSON.stringify({
+      runtime: process.env.NEXT_RUNTIME ?? "browser",
+      vercelEnv: process.env.VERCEL_ENV ?? process.env.NEXT_PUBLIC_VERCEL_ENV ?? null,
+      dsnPresent: Boolean(dsn),
+      sentryEnabled: isSentryEnabled(dsn),
+      environment: resolveSentryEnvironment(),
+      releasePresent: Boolean(resolveSentryRelease()),
+    }),
+  );
+}
