@@ -118,7 +118,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
       });
       if (!user?.depotId || !user.depot?.active) {
         throw new OperationsServiceError(
-          "Aucun depot actif n'est rattache a cet utilisateur.",
+          "Aucun depot actif n'est associe a votre compte. Contactez un administrateur.",
           409,
         );
       }

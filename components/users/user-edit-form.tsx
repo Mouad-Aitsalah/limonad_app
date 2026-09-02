@@ -14,12 +14,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { roleLabels } from "@/lib/roles";
-import type { TruckDto } from "@/types/operations-dto";
+import type { DepotDto, TruckDto } from "@/types/operations-dto";
 import type { User } from "@/types/user";
 
 // Base UI's Select needs a non-empty sentinel for "no selection" - it can't
 // be tied to an empty string, which SelectItem treats as invalid.
 const UNASSIGNED = "__none__";
+
+// Non-driver roles for which assigning a depot is meaningful (POS,
+// versements). "super_admin" has no depot-scoped screens; "driver" is
+// scoped through Truck/Driver instead.
+const DEPOT_ROLES: User["role"][] = ["admin", "cashier", "depot_manager"];
 
 type UserEditFormProps = {
   user: User;
@@ -29,6 +34,7 @@ type UserEditFormProps = {
 
 export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
   const isDriver = user.role === "driver" && !!user.driver;
+  const canAssignDepot = DEPOT_ROLES.includes(user.role);
 
   const [trucks, setTrucks] = React.useState<TruckDto[]>([]);
   // Starts true whenever a driver is being edited so the fetch below only
@@ -39,6 +45,13 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
   const [selectedTruckId, setSelectedTruckId] = React.useState(
     () => user.driver?.truck?.id ?? UNASSIGNED,
   );
+
+  const [depots, setDepots] = React.useState<DepotDto[]>([]);
+  const [loadingDepots, setLoadingDepots] = React.useState(canAssignDepot);
+  const [selectedDepotId, setSelectedDepotId] = React.useState(
+    () => user.depotId ?? UNASSIGNED,
+  );
+
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   // Synchronous guard against a double-click racing two PATCHes before
@@ -67,6 +80,27 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
     };
   }, [isDriver]);
 
+  React.useEffect(() => {
+    if (!canAssignDepot) return;
+    let cancelled = false;
+
+    fetch("/api/depots")
+      .then((response) => response.json())
+      .then((data: { depots?: DepotDto[] }) => {
+        if (!cancelled) setDepots((data.depots ?? []).filter((depot) => depot.active));
+      })
+      .catch(() => {
+        if (!cancelled) setDepots([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDepots(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canAssignDepot]);
+
   // Only trucks with no driver, plus whichever truck this driver already
   // has (so switching away and back to it stays possible), can be picked -
   // a truck can only ever have one active driver (Driver.truckId is
@@ -79,7 +113,7 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
     [trucks, user.driver?.id],
   );
 
-  async function handleSave() {
+  async function handleSaveTruck() {
     if (!user.driver || savingRef.current) return;
 
     savingRef.current = true;
@@ -127,6 +161,47 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
     }
   }
 
+  async function handleSaveDepot() {
+    if (savingRef.current) return;
+
+    savingRef.current = true;
+    setSaving(true);
+    setError(null);
+    try {
+      const depotId = selectedDepotId === UNASSIGNED ? null : selectedDepotId;
+      const response = await fetch(`/api/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ depotId }),
+      });
+      const result = (await response.json()) as {
+        user?: User;
+        message?: string;
+        fieldErrors?: Record<string, string>;
+      };
+
+      if (!response.ok || !result.user) {
+        const message = result.message ?? "Impossible de modifier l'utilisateur.";
+        setError(result.fieldErrors?.depotId ?? message);
+        toast.error(message);
+        return;
+      }
+
+      toast.success(
+        result.user.depotName
+          ? `Dépôt ${result.user.depotName} affecté à ${user.nom}.`
+          : `Dépôt retiré pour ${user.nom}.`,
+      );
+      onSaved(result.user);
+    } catch {
+      setError("Impossible de modifier l'utilisateur.");
+      toast.error("Impossible de modifier l'utilisateur.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 space-y-4 overflow-y-auto px-1 py-1">
@@ -162,18 +237,56 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
                 ))}
               </SelectContent>
             </Select>
-            {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
         )}
+
+        {canAssignDepot && (
+          <div className="space-y-2">
+            <Label>Dépôt actuel</Label>
+            <Select
+              value={selectedDepotId}
+              onValueChange={(value) => value && setSelectedDepotId(value)}
+              disabled={loadingDepots}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Sélectionner">
+                  {(value: string | null) =>
+                    !value || value === UNASSIGNED
+                      ? "Aucun dépôt"
+                      : (depots.find((depot) => depot.id === value)?.name ?? "Sélectionner")
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNASSIGNED}>Aucun dépôt</SelectItem>
+                {depots.map((depot) => (
+                  <SelectItem key={depot.id} value={depot.id}>
+                    {depot.name} — {depot.city}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Requis pour le point de vente et les versements.
+            </p>
+          </div>
+        )}
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
       </div>
 
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
-          {isDriver ? "Annuler" : "Fermer"}
+          {isDriver || canAssignDepot ? "Annuler" : "Fermer"}
         </Button>
         {isDriver && (
-          <Button type="button" onClick={handleSave} disabled={saving || loadingTrucks}>
-            {saving ? "Enregistrement..." : "Enregistrer"}
+          <Button type="button" onClick={handleSaveTruck} disabled={saving || loadingTrucks}>
+            {saving ? "Enregistrement..." : "Enregistrer le camion"}
+          </Button>
+        )}
+        {canAssignDepot && (
+          <Button type="button" onClick={handleSaveDepot} disabled={saving || loadingDepots}>
+            {saving ? "Enregistrement..." : "Enregistrer le dépôt"}
           </Button>
         )}
       </DialogFooter>

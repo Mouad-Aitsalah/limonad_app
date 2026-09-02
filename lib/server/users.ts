@@ -11,10 +11,21 @@ import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-seq
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { passwordPolicySchema } from "@/lib/server/password-policy";
 import type { UserRole } from "@/types/auth";
-import type { CreatableUserRole, User, UserCreateInput } from "@/types/user";
+import type {
+  CreatableUserRole,
+  User,
+  UserCreateInput,
+  UserUpdateInput,
+} from "@/types/user";
 
 const userInclude = {
   organization: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  depot: {
     select: {
       id: true,
       name: true,
@@ -35,6 +46,13 @@ type UserRecord = Prisma.UserGetPayload<{ include: typeof userInclude }>;
 // sends. It is provisioned through a separate super-admin surface.
 const creatableRoleValues = ["admin", "depot_manager", "cashier", "driver"] as const satisfies readonly CreatableUserRole[];
 
+const depotIdSchema = z
+  .string()
+  .trim()
+  .transform((value) => (value.length > 0 ? value : null))
+  .nullable()
+  .optional();
+
 const createUserSchema = z.object({
   nom: z.string().trim().min(1, "Le nom est obligatoire.").max(160),
   email: z
@@ -51,7 +69,46 @@ const createUserSchema = z.object({
   password: passwordPolicySchema,
   role: z.enum(creatableRoleValues),
   actif: z.boolean().optional(),
+  depotId: depotIdSchema,
 });
+
+const updateUserSchema = z.object({
+  depotId: depotIdSchema,
+});
+
+/**
+ * Resolves a client-supplied depotId to a real, assignable Depot for THIS
+ * organization. The client's value is never trusted: the depot must exist,
+ * belong to `organizationId`, and be active. Anything else is a clean 4xx
+ * (never a 500). Returns null for a null/absent id.
+ */
+async function resolveAssignableDepot(
+  depotId: string | null | undefined,
+  organizationId: string,
+): Promise<string | null> {
+  if (!depotId) return null;
+
+  const depot = await prisma.depot.findFirst({
+    where: { id: depotId, organizationId },
+    select: { id: true, active: true },
+  });
+
+  if (!depot) {
+    throw new OperationsServiceError(
+      "Le depot selectionne est introuvable pour cette organisation.",
+      400,
+      { depotId: "Depot invalide." },
+    );
+  }
+  if (!depot.active) {
+    throw new OperationsServiceError(
+      "Le depot selectionne est inactif.",
+      400,
+      { depotId: "Ce depot est inactif." },
+    );
+  }
+  return depot.id;
+}
 
 export async function getUsers(): Promise<User[]> {
   const currentUser = await requireOrganizationUser(["admin"]);
@@ -90,6 +147,14 @@ export async function createUser(input: UserCreateInput): Promise<User> {
   const passwordHash = await bcrypt.hash(data.password, BCRYPT_COST);
   const dbRole = toDbRole(data.role);
 
+  // Driver-role users are scoped through Truck/Driver, not Depot - ignore
+  // any depotId sent for them. Every other role may carry one; it is
+  // validated against this organization before use.
+  const depotId =
+    dbRole === "DRIVER"
+      ? null
+      : await resolveAssignableDepot(data.depotId, currentUser.organizationId);
+
   try {
     const user = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
@@ -103,6 +168,7 @@ export async function createUser(input: UserCreateInput): Promise<User> {
           passwordHash,
           role: dbRole,
           status: (data.actif ?? true) ? "ACTIVE" : "INACTIVE",
+          depotId,
         },
       });
 
@@ -125,6 +191,54 @@ export async function createUser(input: UserCreateInput): Promise<User> {
       });
     });
 
+    return mapUserToDto(user);
+  } catch (error) {
+    throw mapUserError(error);
+  }
+}
+
+/**
+ * Real update flow for an existing user in the admin's own organization.
+ * Currently narrow on purpose (hotfix): only (re)assigns or clears the
+ * operating depot. organizationId is never taken from the request; the
+ * target user must already belong to the admin's organization.
+ */
+export async function updateUser(
+  userId: string,
+  input: UserUpdateInput,
+): Promise<User> {
+  const currentUser = await requireOrganizationUser(["admin"]);
+
+  const parsed = updateUserSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new OperationsServiceError(
+      "Certains champs sont invalides.",
+      422,
+      Object.fromEntries(
+        parsed.error.issues.map((issue) => [issue.path.join(".") || "form", issue.message]),
+      ),
+    );
+  }
+
+  const target = await prisma.user.findFirst({
+    where: { id: userId, organizationId: currentUser.organizationId },
+    select: { id: true, role: true },
+  });
+  if (!target) {
+    throw new OperationsServiceError("Utilisateur introuvable.", 404);
+  }
+
+  const depotId =
+    target.role === "DRIVER"
+      ? null
+      : await resolveAssignableDepot(parsed.data.depotId, currentUser.organizationId);
+
+  try {
+    const user = await prisma.user.update({
+      where: { id: target.id },
+      data: { depotId },
+      include: userInclude,
+    });
     return mapUserToDto(user);
   } catch (error) {
     throw mapUserError(error);
@@ -186,6 +300,8 @@ function mapUserToDto(user: UserRecord): User {
     actif: user.status === "ACTIVE",
     organizationId: user.organizationId,
     organizationName: user.organization?.name ?? null,
+    depotId: user.depotId ?? null,
+    depotName: user.depot?.name ?? null,
     derniereConnexion: null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,

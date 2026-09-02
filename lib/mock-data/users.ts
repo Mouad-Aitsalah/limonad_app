@@ -19,6 +19,8 @@ export const users: User[] = [
     derniereConnexion: new Date("2026-07-30T08:15:00"),
     createdAt: new Date("2026-01-05"),
     updatedAt: new Date("2026-07-30"),
+    depotId: null,
+    depotName: null,
     driver: null,
   },
   {
@@ -33,6 +35,8 @@ export const users: User[] = [
     derniereConnexion: new Date("2026-07-30T07:50:00"),
     createdAt: new Date("2026-01-05"),
     updatedAt: new Date("2026-07-30"),
+    depotId: null,
+    depotName: null,
     driver: null,
   },
   {
@@ -47,6 +51,8 @@ export const users: User[] = [
     derniereConnexion: new Date("2026-06-02T09:30:00"),
     createdAt: new Date("2026-02-10"),
     updatedAt: new Date("2026-06-15"),
+    depotId: null,
+    depotName: null,
     driver: null,
   },
   {
@@ -61,6 +67,8 @@ export const users: User[] = [
     derniereConnexion: new Date("2026-07-29T18:40:00"),
     createdAt: new Date("2026-01-08"),
     updatedAt: new Date("2026-07-29"),
+    depotId: null,
+    depotName: null,
     driver: null,
   },
   {
@@ -75,6 +83,8 @@ export const users: User[] = [
     derniereConnexion: new Date("2026-07-29T17:05:00"),
     createdAt: new Date("2026-01-08"),
     updatedAt: new Date("2026-07-29"),
+    depotId: null,
+    depotName: null,
     driver: null,
   },
   {
@@ -89,6 +99,8 @@ export const users: User[] = [
     derniereConnexion: new Date("2026-07-25T16:20:00"),
     createdAt: new Date("2026-01-08"),
     updatedAt: new Date("2026-07-25"),
+    depotId: null,
+    depotName: null,
     driver: null,
   },
   {
@@ -103,6 +115,8 @@ export const users: User[] = [
     derniereConnexion: new Date("2026-07-28T14:10:00"),
     createdAt: new Date("2026-02-05"),
     updatedAt: new Date("2026-07-28"),
+    depotId: null,
+    depotName: null,
     driver: null,
   },
 ];

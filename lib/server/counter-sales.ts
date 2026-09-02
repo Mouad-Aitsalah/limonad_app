@@ -87,7 +87,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     },
   });
   if (!user?.depotId || !user.depot || !user.depot.active) {
-    throw new OperationsServiceError("Aucun depot actif n'est rattache a cet utilisateur.", 409);
+    throw new OperationsServiceError("Aucun depot actif n'est associe a votre compte. Contactez un administrateur.", 409);
   }
 
   const stockLocation = await prisma.stockLocation.findFirst({
@@ -208,7 +208,7 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       });
       if (!user?.depotId || !user.depot?.active) {
         throw new OperationsServiceError(
-          "Aucun depot actif n'est rattache a cet utilisateur.",
+          "Aucun depot actif n'est associe a votre compte. Contactez un administrateur.",
           409,
         );
       }

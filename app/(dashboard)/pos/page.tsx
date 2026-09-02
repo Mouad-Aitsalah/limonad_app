@@ -1,14 +1,24 @@
 import type { Metadata } from "next";
 
+import { DepotRequiredNotice } from "@/components/pos/depot-required-notice";
 import { PosLayout } from "@/components/pos/pos-layout";
 import { getCounterPosContext } from "@/lib/server/counter-sales";
+import { OperationsServiceError } from "@/lib/server/depots";
 
 export const metadata: Metadata = {
   title: "Point de Vente",
 };
 
 export default async function PosPage() {
-  const context = await getCounterPosContext();
+  let context;
+  try {
+    context = await getCounterPosContext();
+  } catch (error) {
+    if (error instanceof OperationsServiceError) {
+      return <DepotRequiredNotice message={error.message} />;
+    }
+    throw error;
+  }
 
   return (
     <div className="space-y-4">

@@ -17,7 +17,18 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { roleLabels, roleOptions } from "@/lib/roles";
+import type { DepotDto } from "@/types/operations-dto";
 import type { CreatableUserRole, User, UserCreateInput } from "@/types/user";
+
+// Base UI's Select needs a non-empty sentinel for "no selection".
+const NO_DEPOT = "__none__";
+
+// Roles that operate depot-scoped screens (POS, versements) and therefore
+// must be tied to a depot. "admin" may use them too but is often org-wide,
+// so a depot is offered but not required there. "driver" is scoped through
+// Truck/Driver, not Depot.
+const DEPOT_REQUIRED_ROLES: CreatableUserRole[] = ["cashier", "depot_manager"];
+const DEPOT_APPLICABLE_ROLES: CreatableUserRole[] = ["admin", "cashier", "depot_manager"];
 
 type UserFormValues = {
   nom: string;
@@ -27,6 +38,7 @@ type UserFormValues = {
   confirmPassword: string;
   role: CreatableUserRole;
   actif: boolean;
+  depotId: string;
 };
 
 const defaultValues: UserFormValues = {
@@ -37,10 +49,14 @@ const defaultValues: UserFormValues = {
   confirmPassword: "",
   role: "cashier",
   actif: true,
+  depotId: NO_DEPOT,
 };
 
 type FormErrors = Partial<
-  Record<"nom" | "email" | "telephone" | "password" | "confirmPassword" | "role" | "form", string>
+  Record<
+    "nom" | "email" | "telephone" | "password" | "confirmPassword" | "role" | "depotId" | "form",
+    string
+  >
 >;
 
 function validateClientSide(values: UserFormValues): FormErrors {
@@ -51,6 +67,12 @@ function validateClientSide(values: UserFormValues): FormErrors {
   }
   if (values.email.trim().length === 0) {
     errors.email = "L'email est obligatoire.";
+  }
+  if (
+    DEPOT_REQUIRED_ROLES.includes(values.role) &&
+    (values.depotId === NO_DEPOT || values.depotId.length === 0)
+  ) {
+    errors.depotId = "Sélectionnez le dépôt de cet utilisateur.";
   }
   // Mirrors lib/server/password-policy.ts's rule for a responsive UI - the
   // server remains the sole authority (this is a client component, it
@@ -79,10 +101,30 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
   const [values, setValues] = React.useState<UserFormValues>(defaultValues);
   const [errors, setErrors] = React.useState<FormErrors>({});
   const [saving, setSaving] = React.useState(false);
+  const [depots, setDepots] = React.useState<DepotDto[]>([]);
+  const [loadingDepots, setLoadingDepots] = React.useState(true);
   // Synchronous guard against a double-click racing two POSTs before React's
   // disabled state re-renders (same pattern used across COMDIS's other
   // creation forms - Inventaire, écritures, versements).
   const savingRef = React.useRef(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch("/api/depots")
+      .then((response) => response.json())
+      .then((data: { depots?: DepotDto[] }) => {
+        if (!cancelled) setDepots((data.depots ?? []).filter((depot) => depot.active));
+      })
+      .catch(() => {
+        if (!cancelled) setDepots([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDepots(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function handleChange<K extends keyof UserFormValues>(
     field: K,
@@ -90,6 +132,9 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
   ) {
     setValues((prev) => ({ ...prev, [field]: value }));
   }
+
+  const showDepotField = DEPOT_APPLICABLE_ROLES.includes(values.role);
+  const depotRequired = DEPOT_REQUIRED_ROLES.includes(values.role);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -106,6 +151,10 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
       password: values.password,
       role: values.role,
       actif: values.actif,
+      depotId:
+        showDepotField && values.depotId !== NO_DEPOT && values.depotId.length > 0
+          ? values.depotId
+          : null,
     };
 
     savingRef.current = true;
@@ -276,6 +325,48 @@ export function UserForm({ onCancel, onSaved }: UserFormProps) {
             onCheckedChange={(checked) => handleChange("actif", checked)}
           />
         </div>
+
+        {showDepotField && (
+          <div className="space-y-2 sm:col-span-2">
+            <Label>
+              Dépôt
+              {depotRequired ? null : (
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  (optionnel)
+                </span>
+              )}
+            </Label>
+            <Select
+              value={values.depotId}
+              onValueChange={(value) => value && handleChange("depotId", value)}
+              disabled={loadingDepots}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Sélectionner">
+                  {(value: string | null) =>
+                    !value || value === NO_DEPOT
+                      ? "Aucun dépôt"
+                      : (depots.find((depot) => depot.id === value)?.name ?? "Sélectionner")
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {!depotRequired && <SelectItem value={NO_DEPOT}>Aucun dépôt</SelectItem>}
+                {depots.map((depot) => (
+                  <SelectItem key={depot.id} value={depot.id}>
+                    {depot.name} — {depot.city}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Requis pour le point de vente et les versements.
+            </p>
+            {errors.depotId && (
+              <p className="text-xs text-destructive">{errors.depotId}</p>
+            )}
+          </div>
+        )}
       </div>
       </div>
 

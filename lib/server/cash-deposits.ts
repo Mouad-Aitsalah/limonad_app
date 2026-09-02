@@ -401,7 +401,7 @@ async function resolveUserDepot(userId: string, organizationId: string) {
     select: { depotId: true, depot: { select: { id: true, name: true, active: true } } },
   });
   if (!user?.depotId || !user.depot || !user.depot.active) {
-    throw new OperationsServiceError("Aucun depot actif n'est rattache a cet utilisateur.", 409);
+    throw new OperationsServiceError("Aucun depot actif n'est associe a votre compte. Contactez un administrateur.", 409);
   }
   return { depotId: user.depot.id, depotName: user.depot.name };
 }
