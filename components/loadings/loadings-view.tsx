@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useProductPickerSearch } from "@/components/commerce/use-product-picker-search";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -35,6 +36,8 @@ import type {
   StockLevelDto,
   TruckDto,
   TruckLoadingDto,
+  TruckLoadingHistoryPageDto,
+  TruckLoadingListItemDto,
 } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
 
@@ -42,8 +45,36 @@ type LoadingsViewProps = {
   trucks: TruckDto[];
   drivers: DriverAssignmentDto[];
   products: ProductDto[];
-  history: TruckLoadingDto[];
+  initialHistoryPage: TruckLoadingHistoryPageDto;
 };
+
+const HISTORY_PAGE_SIZE = 25;
+
+// The close-loading action gets back a full TruckLoadingDto (mapTruckLoadingToDto's
+// shape, used everywhere a single record is at stake) but the history table
+// now only ever holds the light TruckLoadingListItemDto row shape (see that
+// type's doc comment in operations-dto.ts) - this is the one place that
+// still needs to convert one into the other, for the optimistic "just closed"
+// row inserted at the top of the current page.
+function toListItem(loading: TruckLoadingDto): TruckLoadingListItemDto {
+  return {
+    id: loading.id,
+    loadingNumber: loading.loadingNumber,
+    displayNumber: loading.displayNumber,
+    loadingYear: loading.loadingYear,
+    loadingSequence: loading.loadingSequence,
+    tourCode: loading.tourCode,
+    driverName: loading.driverName,
+    date: loading.date,
+    depotName: loading.depotName,
+    truckCode: loading.truckCode,
+    status: loading.status,
+    linesCount: loading.lines.length,
+    totalQuantity: loading.lines.reduce((sum, line) => sum + line.quantity, 0),
+    createdAt: loading.createdAt,
+    closedAt: loading.closedAt ?? null,
+  };
+}
 
 const loadingStatusLabels: Record<string, string> = {
   DRAFT: "Ouvert",
@@ -69,7 +100,7 @@ type ProductSuggestion = {
   depotAvailableQuantity: number;
 };
 
-export function LoadingsView({ trucks, drivers, products, history }: LoadingsViewProps) {
+export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: LoadingsViewProps) {
   const [activeTab, setActiveTab] = React.useState("loading");
   const [trucksState] = React.useState(trucks);
   const [selectedDate, setSelectedDate] = React.useState(todayDateInput());
@@ -81,8 +112,18 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
   const [draftLines, setDraftLines] = React.useState<DraftLoadingLine[]>([]);
   const [draftSyncKeyState, setDraftSyncKey] = React.useState<string | null>(null);
 
-  const [historyState, setHistoryState] = React.useState(history);
+  const [historyState, setHistoryState] = React.useState(initialHistoryPage.items);
   const [historySearch, setHistorySearch] = React.useState("");
+  // Cursor-paginated history (see getLoadingHistoryPage). cursorStack holds
+  // the cursor that *led to* the current page at each index (null for page
+  // 1), so "Precedent" just pops back to an already-known cursor instead of
+  // needing true backward keyset pagination.
+  const [historyCursorStack, setHistoryCursorStack] = React.useState<Array<string | null>>([null]);
+  const [historyPageIndex, setHistoryPageIndex] = React.useState(0);
+  const [historyNextCursor, setHistoryNextCursor] = React.useState(initialHistoryPage.nextCursor);
+  const [historyHasMore, setHistoryHasMore] = React.useState(initialHistoryPage.hasMore);
+  const [historyTotalCount, setHistoryTotalCount] = React.useState(initialHistoryPage.totalCount);
+  const [historyLoading, setHistoryLoading] = React.useState(false);
 
   const [productSearch, setProductSearch] = React.useState("");
   const [selectedProduct, setSelectedProduct] = React.useState<ProductSuggestion | null>(null);
@@ -104,11 +145,6 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
   const initialLoadRef = React.useRef<HTMLInputElement | null>(null);
   const reloadedRef = React.useRef<HTMLInputElement | null>(null);
   const actualRemainingRef = React.useRef<HTMLInputElement | null>(null);
-
-  const productsById = React.useMemo(
-    () => new Map(products.map((product) => [product.id, product])),
-    [products],
-  );
 
   const driversState = React.useMemo(
     () =>
@@ -175,20 +211,21 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
     setDraftSyncKey(draftSyncKey);
     setDraftLines(
       openLoading
-        ? openLoading.lines.map((line) => {
-            const product = productsById.get(line.productId);
-            return {
-              productId: line.productId,
-              productName: line.productName,
-              productReference: line.productReference,
-              productBarcode: product?.barcode ?? null,
-              productUnit: product?.unit ?? "-",
-              depotAvailableQuantity: line.depotAvailableQuantity,
-              initialLoadQuantity: line.initialQuantity,
-              reloadedQuantity: line.reloadedQuantity,
-              actualRemainingQuantity: line.actualRemainingQuantity,
-            };
-          })
+        ? openLoading.lines.map((line) => ({
+            productId: line.productId,
+            productName: line.productName,
+            productReference: line.productReference,
+            // Phase 3 CRITICAL #1 fix: embedded directly on the line DTO now
+            // (see TruckLoadingLineDto's doc comment) - no longer depends on
+            // `products` (now a small preload/search result set, not the
+            // full catalog) still containing this exact product.
+            productBarcode: line.productBarcode,
+            productUnit: line.productUnit,
+            depotAvailableQuantity: line.depotAvailableQuantity,
+            initialLoadQuantity: line.initialQuantity,
+            reloadedQuantity: line.reloadedQuantity,
+            actualRemainingQuantity: line.actualRemainingQuantity,
+          }))
         : [],
     );
   }
@@ -220,25 +257,26 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
     };
   }, [selectedTruck]);
 
+  // Phase 3 CRITICAL #1 fix: `products` is now a small bounded preload
+  // (getProductPickerPreload), not the full catalog - searchProducts()
+  // already filters to ACTIVE by default, matching the old client-side
+  // filter. See use-product-picker-search.ts's doc comment.
+  const { results: productSearchResults, resolveExact } = useProductPickerSearch(
+    products,
+    deferredProductSearch,
+  );
+  const toSuggestion = React.useCallback(
+    (product: ProductDto): ProductSuggestion => ({
+      product,
+      truckCurrentQuantity: truckLevelsByProductId[product.id] ?? 0,
+      depotAvailableQuantity: depotLevelsByProductId[product.id] ?? 0,
+    }),
+    [truckLevelsByProductId, depotLevelsByProductId],
+  );
   const productSuggestions = React.useMemo(() => {
-    const query = normalizeSearch(deferredProductSearch);
-    if (!query || !selectedTruck) return [];
-
-    return products
-      .filter((product) => product.status === "ACTIVE")
-      .filter((product) => {
-        const haystack = normalizeSearch(
-          `${product.name} ${product.reference} ${product.barcode ?? ""}`,
-        );
-        return haystack.includes(query);
-      })
-      .slice(0, 8)
-      .map((product) => ({
-        product,
-        truckCurrentQuantity: truckLevelsByProductId[product.id] ?? 0,
-        depotAvailableQuantity: depotLevelsByProductId[product.id] ?? 0,
-      }));
-  }, [deferredProductSearch, depotLevelsByProductId, products, selectedTruck, truckLevelsByProductId]);
+    if (!deferredProductSearch.trim() || !selectedTruck) return [];
+    return productSearchResults.slice(0, 8).map(toSuggestion);
+  }, [deferredProductSearch, productSearchResults, selectedTruck, toSuggestion]);
 
   const activeProductSuggestionIndex = Math.min(
     activeSuggestionIndex,
@@ -265,24 +303,59 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
     [draftLines, truckLevelsByProductId],
   );
 
+  // Phase 3: historyState now holds one server-paginated page (see
+  // getLoadingHistoryPage), already sorted server-side (createdAt desc, id
+  // as tie-breaker) - no client re-sort needed. The search box filters
+  // within the CURRENT page only, not the full history: searching across
+  // every past fiche would mean fetching them all client-side again,
+  // exactly what this pagination exists to avoid. See the Phase 3 report
+  // for this trade-off.
   const filteredHistory = React.useMemo(() => {
     const query = normalizeSearch(historySearch);
-    return [...historyState]
-      .filter((loading) => {
-        if (!query) return true;
-        const haystack = normalizeSearch(
-          `${loading.displayNumber} ${loading.driverName} ${loading.truckCode} ${loading.depotName}`,
-        );
-        return haystack.includes(query);
-      })
-      .sort((a, b) => {
-        return (
-          (b.loadingYear ?? 0) - (a.loadingYear ?? 0) ||
-          (b.loadingSequence ?? 0) - (a.loadingSequence ?? 0) ||
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
-      });
+    if (!query) return historyState;
+    return historyState.filter((loading) => {
+      const haystack = normalizeSearch(
+        `${loading.displayNumber} ${loading.driverName} ${loading.truckCode} ${loading.depotName}`,
+      );
+      return haystack.includes(query);
+    });
   }, [historyState, historySearch]);
+
+  async function fetchHistoryPage(cursor: string | null) {
+    setHistoryLoading(true);
+    try {
+      const query = new URLSearchParams({ pageSize: String(HISTORY_PAGE_SIZE) });
+      if (cursor) query.set("cursor", cursor);
+      const response = await fetch(`/api/truck-loadings?${query.toString()}`);
+      const body = (await response.json()) as TruckLoadingHistoryPageDto & { message?: string };
+      if (!response.ok) {
+        toast.error(body.message ?? "Impossible de charger l'historique des chargements.");
+        return;
+      }
+      setHistoryState(body.items);
+      setHistoryNextCursor(body.nextCursor);
+      setHistoryHasMore(body.hasMore);
+      setHistoryTotalCount(body.totalCount);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function goToNextHistoryPage() {
+    if (!historyHasMore || historyLoading) return;
+    const cursor = historyNextCursor;
+    await fetchHistoryPage(cursor);
+    setHistoryCursorStack((current) => [...current, cursor]);
+    setHistoryPageIndex((current) => current + 1);
+  }
+
+  async function goToPreviousHistoryPage() {
+    if (historyPageIndex === 0 || historyLoading) return;
+    const previousIndex = historyPageIndex - 1;
+    await fetchHistoryPage(historyCursorStack[previousIndex]);
+    setHistoryCursorStack((current) => current.slice(0, previousIndex + 1));
+    setHistoryPageIndex(previousIndex);
+  }
 
   function focusAndSelectInput(ref: React.RefObject<HTMLInputElement | null>) {
     requestAnimationFrame(() => {
@@ -389,22 +462,24 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      const exactMatches = productSuggestions.filter(
-        (suggestion) =>
-          normalizeSearch(suggestion.product.reference) === normalizeSearch(productSearch) ||
-          normalizeSearch(suggestion.product.barcode ?? "") === normalizeSearch(productSearch),
-      );
-      if (exactMatches.length === 1) {
-        chooseSuggestion(exactMatches[0]);
-        return;
-      }
-      if (suggestionsOpen && productSuggestions[activeProductSuggestionIndex]) {
-        chooseSuggestion(productSuggestions[activeProductSuggestionIndex]);
-        return;
-      }
-      if (productSuggestions[0]) {
-        chooseSuggestion(productSuggestions[0]);
-      }
+      // A scanned barcode's Enter usually fires before the debounced search
+      // above has resolved - resolveExact bypasses that debounce for an
+      // immediate exact barcode/reference match, same as a real scanner
+      // needs (see use-product-picker-search.ts's doc comment).
+      const typed = productSearch;
+      void resolveExact(typed).then((exact) => {
+        if (exact) {
+          chooseSuggestion(toSuggestion(exact));
+          return;
+        }
+        if (suggestionsOpen && productSuggestions[activeProductSuggestionIndex]) {
+          chooseSuggestion(productSuggestions[activeProductSuggestionIndex]);
+          return;
+        }
+        if (productSuggestions[0]) {
+          chooseSuggestion(productSuggestions[0]);
+        }
+      });
     }
   }
 
@@ -516,7 +591,16 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
       }
 
       toast.success(`${body.loading.displayNumber} ferme.`);
-      setHistoryState((current) => upsertLoading(current, body.loading as TruckLoadingDto));
+      // The closed fiche's true position is by createdAt, i.e. always on
+      // page 1 (closing changes status, never createdAt) - only apply the
+      // optimistic insert/replace when page 1 is actually what's displayed,
+      // so a fiche never appears inserted into the wrong page.
+      if (historyPageIndex === 0) {
+        const closedItem = toListItem(body.loading as TruckLoadingDto);
+        const isNewRow = !historyState.some((item) => item.id === closedItem.id);
+        setHistoryState((current) => upsertLoading(current, closedItem));
+        if (isNewRow) setHistoryTotalCount((count) => count + 1);
+      }
       setOpenLoading(null);
       setDraftLines([]);
     } finally {
@@ -956,7 +1040,7 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
                 </h2>
               </div>
 
-              <Field label="Recherche">
+              <Field label="Recherche (page actuelle)">
                 <Input
                   value={historySearch}
                   onChange={(event) => setHistorySearch(event.target.value)}
@@ -964,10 +1048,33 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
                 />
               </Field>
 
-              <p className="text-sm text-muted-foreground">
-                {filteredHistory.length} fiche
-                {filteredHistory.length > 1 ? "s" : ""} de chargement.
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-muted-foreground">
+                  Page {historyPageIndex + 1} &middot; {filteredHistory.length} fiche
+                  {filteredHistory.length > 1 ? "s" : ""} affichee
+                  {filteredHistory.length > 1 ? "s" : ""} sur {historyTotalCount} au total.
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={historyPageIndex === 0 || historyLoading}
+                    onClick={goToPreviousHistoryPage}
+                  >
+                    Precedent
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!historyHasMore || historyLoading}
+                    onClick={goToNextHistoryPage}
+                  >
+                    Suivant
+                  </Button>
+                </div>
+              </div>
 
               <div className="overflow-x-auto rounded-2xl border border-border">
                 <Table>
@@ -1008,10 +1115,10 @@ export function LoadingsView({ trucks, drivers, products, history }: LoadingsVie
                           </TableCell>
                           <TableCell>{loading.depotName}</TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {loading.lines.length}
+                            {loading.linesCount}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {loading.lines.reduce((sum, line) => sum + line.quantity, 0)}
+                            {loading.totalQuantity}
                           </TableCell>
                           <TableCell className="text-muted-foreground">
                             {new Date(loading.createdAt).toLocaleString("fr-FR")}
@@ -1165,7 +1272,7 @@ function toAvailableQuantityMap(levels: StockLevelDto[]) {
   return Object.fromEntries(levels.map((level) => [level.productId, level.availableQuantity]));
 }
 
-function upsertLoading(loadings: TruckLoadingDto[], loading: TruckLoadingDto) {
+function upsertLoading(loadings: TruckLoadingListItemDto[], loading: TruckLoadingListItemDto) {
   const exists = loadings.some((item) => item.id === loading.id);
   return exists
     ? loadings.map((item) => (item.id === loading.id ? loading : item))

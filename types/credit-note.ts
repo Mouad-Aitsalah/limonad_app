@@ -24,6 +24,7 @@ export type CreditNoteLine = {
   productId: string;
   productName?: string;
   productReference?: string;
+  productUnit?: string;
   invoiceNumber?: string | null;
   quantityReturned: number;
   unitPrice: number;
@@ -51,6 +52,12 @@ export type CreditNote = {
   truckLabel?: string | null;
   sourceLabel?: string | null;
   tourneeClosed: boolean;
+  // F4: only set on a driver return (createDriverReturn) - the tour it was
+  // physically collected on, distinct from truckId/truckLabel above (which
+  // reflect the ORIGINAL sale's truck, if this return is linked to one).
+  driverReturnTourId?: string | null;
+  driverReturnTourCode?: string | null;
+  driverReturnDriverName?: string | null;
   stockDestinationLocationId: string | null;
   stockDestinationLocationName?: string | null;
   stockSourceLocationId: string | null;
@@ -111,6 +118,11 @@ export type CreateCreditNoteInput = {
   partyType?: CreditNotePartyType;
   customerId?: string | null;
   supplierId?: string | null;
+  // F4 finalization: required for a customer return ("client") - LINKED
+  // means every line must carry a saleLineId (capped against it); MANUAL
+  // means no line may (admin/depot_manager only, justification required).
+  // Not used for a supplier return.
+  returnMode?: "LINKED" | "MANUAL";
   reason: CreditNoteReason;
   comment?: string | null;
   returnDate: string;
@@ -122,5 +134,27 @@ export type CreateCreditNoteInput = {
     unitPrice?: number;
     discountPercent?: number;
     taxRate?: number;
+    // F4: required when returnMode is LINKED (capped against it), forbidden
+    // when MANUAL. See the F4 finalization report.
+    saleLineId?: string | null;
   }[];
+  // Client-generated, stable for one avoir creation attempt (F5) - see
+  // components/avoirs/credit-note-form.tsx. Only meaningful when `id` is not
+  // set (a fresh avoir, not an update of an existing draft).
+  idempotencyKey?: string | null;
+};
+
+export type CreateDriverReturnInput = {
+  // F4 finalization: required (was optional).
+  customerId: string;
+  reason: CreditNoteReason;
+  comment?: string | null;
+  lines: {
+    productId: string;
+    quantityReturned: number;
+    // F4 finalization: required on every line - a driver return is always
+    // LINKED, never MANUAL.
+    saleLineId: string;
+  }[];
+  idempotencyKey?: string | null;
 };

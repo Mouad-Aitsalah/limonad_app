@@ -2,15 +2,16 @@ import "server-only";
 
 import { z } from "zod";
 
+import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
 } from "@/lib/server/accounting";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { getPosCustomerPreload } from "@/lib/server/customers";
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
-import { getCustomersForCurrentDriver } from "@/lib/server/driver-customers";
 import { markCustomerDeliveredOnTour } from "@/lib/server/driver-tour";
 import {
   mapSaleToDto,
@@ -33,21 +34,43 @@ import type {
 const driverSaleSchema = z.object({
   customerId: z.string().trim().nullable().optional(),
   paymentMethod: z.enum(["CASH", "CARD", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
-  paidAmount: z.coerce.number().min(0).optional(),
+  // F8-D: input-level sanity bound only, not the real protection - a value
+  // right at this bound can still overflow once combined with other lines/
+  // tax (see assertMoneyRange calls below, the actual gate).
+  paidAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   reference: z.string().trim().nullable().optional(),
   stampAmount: z.coerce.number().min(0).optional(),
+  // Same idempotency contract as counter-sales.ts's counterSaleSchema - see
+  // the comment there.
+  idempotencyKey: z
+    .string()
+    .trim()
+    .max(120)
+    .nullable()
+    .optional()
+    .transform((value) => value || null),
   lines: z
     .array(
       z.object({
         productId: z.string().trim().min(1),
-        quantity: z.coerce.number().int().positive(),
+        // F8-D: sanity bound - a quantity this large is already absurd for
+        // one sale line, well before it could combine with a plausible unit
+        // price to overflow Decimal(12,2) (that overflow is caught on the
+        // computed amount by assertMoneyRange below regardless).
+        quantity: z.coerce.number().int().positive().max(1_000_000),
         discountRate: z.coerce.number().min(0).max(100).optional(),
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
 });
 
-export async function getDriverPosContext(): Promise<DriverPosContextDto> {
+// Phase 3: same cap/rationale as counter-sales.ts's POS_PRODUCT_LIST_LIMIT -
+// see that file's doc comment and the Phase 3 report.
+const POS_PRODUCT_LIST_LIMIT = 500;
+
+export async function getDriverPosContext(
+  initialCustomerId?: string | null,
+): Promise<DriverPosContextDto> {
   const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId) {
     return blockedContext("Aucun camion n'est affecte a votre compte.", {
@@ -132,18 +155,48 @@ export async function getDriverPosContext(): Promise<DriverPosContextDto> {
         },
       },
       orderBy: { product: { name: "asc" } },
+      // Phase 3: same POS_PRODUCT_LIST_LIMIT cap as getCounterPosContext
+      // (counter-sales.ts) - see productsTruncated below and the Phase 3
+      // report for why this is bounded now.
+      take: POS_PRODUCT_LIST_LIMIT + 1,
     }),
-    getCustomersForCurrentDriver(),
+    // Phase 3: bounded preload (recent customers this driver is allowed to
+    // see, plus initialCustomerId - e.g. a tour-visit deep link's
+    // ?customerId=... - guaranteed present even if it falls outside that
+    // recency window) instead of every customer this driver can see. See
+    // getPosCustomerPreload's doc comment and the Phase 3 report. Anything
+    // beyond this small set is reached through the customer combobox's
+    // GET /api/customers/search fallback, transparently scoped the same
+    // way for a driver session.
+    getPosCustomerPreload({
+      organizationId: user.organizationId,
+      extraWhere: {
+        OR: [{ creationOrigin: "ADMIN" }, { createdByDriverId: driver.id }],
+      },
+      guaranteeCustomerId: initialCustomerId,
+    }),
   ]);
 
+  const productsTruncated = levels.length > POS_PRODUCT_LIST_LIMIT;
+  const pageLevels = productsTruncated ? levels.slice(0, POS_PRODUCT_LIST_LIMIT) : levels;
+
+  const canSell = Boolean(activeTour) && pageLevels.length > 0;
+  const message = !activeTour
+    ? "Demarrez votre tournee avant de vendre."
+    : pageLevels.length > 0
+      ? undefined
+      : "Aucun produit n'est disponible dans votre camion.";
+
   return {
-    canSell: levels.length > 0,
-    message: levels.length > 0 ? undefined : "Aucun produit n'est disponible dans votre camion.",
+    canSell,
+    message,
     driver: { id: driver.id, name: driver.user.fullName },
     truck: driver.truck,
     tour: activeTour,
     customers: customers.filter((customer) => customer.status === "ACTIVE"),
-    products: levels.map((level) => {
+    stockLocationId: driver.truck.stockLocation.id,
+    productsTruncated,
+    products: pageLevels.map((level) => {
       const salePriceHT = level.product.salePrice.toNumber();
       const taxRate = level.product.taxRate.toNumber();
 
@@ -174,8 +227,23 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
   }
   const lines = normalizeSaleLines(parsed.data.lines);
 
-  const sale = await prisma.$transaction(
-    async (tx) => {
+  const sale = await withSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
+      // Idempotency check first, before any other read - see the identical
+      // comment in counter-sales.ts's createCounterSale. organizationId
+      // always comes from the authenticated session, never from the client.
+      if (parsed.data.idempotencyKey) {
+        const existingSale = await tx.sale.findFirst({
+          where: {
+            organizationId: user.organizationId,
+            idempotencyKey: parsed.data.idempotencyKey,
+          },
+          include: saleInclude,
+        });
+        if (existingSale) return existingSale;
+      }
+
       const driver = await tx.driver.findFirst({
         where: {
           id: user.driverId,
@@ -201,6 +269,14 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
         throw new OperationsServiceError("Profil chauffeur ou camion invalide.", 403);
       }
 
+      // F3 (Phase 2 audit): a driver sale is only ever allowed while their
+      // truck has a genuinely IN_PROGRESS tour. Scoped by driverId AND
+      // truckId AND organizationId (all session-derived, never from the
+      // client) so this can only ever match this driver's own tour in their
+      // own organization - never another driver's or another org's. Once
+      // "Fin de tournee" moves the tour to WAITING_FOR_CLOSURE (or it never
+      // started at all), this query returns nothing and the sale is refused
+      // below, before any stock is touched.
       const activeTour = await tx.tour.findFirst({
         where: {
           organizationId: user.organizationId,
@@ -215,6 +291,12 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
         },
         orderBy: { startedAt: "desc" },
       });
+      if (!activeTour) {
+        throw new OperationsServiceError(
+          "Aucune tournee active. Demarrez votre tournee avant de vendre.",
+          409,
+        );
+      }
       if (
         !driver.truck.stockLocation ||
         driver.truck.stockLocation.type !== "TRUCK" ||
@@ -266,11 +348,22 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
         const unitPriceHT = product.salePrice.toNumber();
         const discountRate = line.discountRate ?? 0;
+        // F8-D: grossHT is a raw multiplication (unitPriceHT x quantity),
+        // checked before rounding/further use - a large-but-otherwise-valid
+        // quantity times a large unit price is exactly the case a bound on
+        // quantity alone would miss (see lib/money.ts#isWithinMoneyRange).
         const grossHT = unitPriceHT * line.quantity;
+        assertMoneyRange(unitPriceHT, "line.unitPriceHT");
+        assertMoneyRange(grossHT, "line.grossHT");
         const discountAmount = roundMoney(grossHT * (discountRate / 100));
         const totalHT = roundMoney(grossHT - discountAmount);
         const taxRate = product.taxRate.toNumber();
         const taxAmount = roundMoney(totalHT * (taxRate / 100));
+        const totalTTC = roundMoney(totalHT + taxAmount);
+        assertMoneyRange(discountAmount, "line.discountAmount");
+        assertMoneyRange(totalHT, "line.totalHT");
+        assertMoneyRange(taxAmount, "line.taxAmount");
+        assertMoneyRange(totalTTC, "line.totalTTC");
         return {
           ...line,
           unitPriceHT,
@@ -279,7 +372,7 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
           taxRate,
           taxAmount,
           totalHT,
-          totalTTC: roundMoney(totalHT + taxAmount),
+          totalTTC,
         };
       });
       const subtotalHT = roundMoney(computedLines.reduce((sum, line) => sum + line.totalHT, 0));
@@ -288,13 +381,22 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
       );
       const taxAmount = roundMoney(computedLines.reduce((sum, line) => sum + line.taxAmount, 0));
       const totalTTC = roundMoney(subtotalHT + taxAmount);
+      // F8-D: aggregate totals, checked before any write in this
+      // transaction (stock decrement is the first one, further below).
+      assertMoneyRange(subtotalHT, "subtotalHT");
+      assertMoneyRange(discountAmount, "discountAmount");
+      assertMoneyRange(taxAmount, "taxAmount");
+      assertMoneyRange(totalTTC, "totalTTC");
       const stampAmount = await computeCashSaleStampAmount(tx, {
         organizationId: user.organizationId,
         totalTTC,
         paymentMethod: parsed.data.paymentMethod,
       });
+      assertMoneyRange(stampAmount.toNumber(), "stampAmount");
 
       const payment = resolvePaymentAmounts(parsed.data.paymentMethod, totalTTC, parsed.data.paidAmount);
+      assertMoneyRange(payment.paidAmount, "paidAmount");
+      assertMoneyRange(payment.creditAmount, "creditAmount");
       if (payment.creditAmount > 0 && !customer) {
         throw new OperationsServiceError("Client obligatoire pour une vente a credit.", 422);
       }
@@ -354,7 +456,9 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
           depotId: driver.truck.depotId,
           driverId: driver.id,
           truckId: driver.truck.id,
-          tourId: activeTour?.id ?? null,
+          // Always the tour found above, imposed server-side - the client
+          // never supplies tourId (driverSaleSchema has no such field).
+          tourId: activeTour.id,
           stockLocationId: driver.truck.stockLocation.id,
           subtotalHT,
           discountAmount,
@@ -366,6 +470,7 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
           paymentMethod: parsed.data.paymentMethod,
           createdByUserId: user.id,
           validatedAt: new Date(),
+          idempotencyKey: parsed.data.idempotencyKey,
           lines: {
             create: computedLines.map((line) => ({
               productId: line.productId,
@@ -445,20 +550,56 @@ export async function createDriverSale(input: DriverSaleInput): Promise<SaleDto>
         });
       }
 
-      if (customer && activeTour) {
+      if (customer) {
         await markCustomerDeliveredOnTour(tx, activeTour.id, customer.id);
       }
 
       return tx.sale.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
-    },
-    // 15s: this transaction chains several sequential lookups plus the
-    // accounting entry posting (assertAccountsExist etc.), which can exceed
-    // Prisma's 5s default interactive-transaction timeout (P2028) against
-    // Neon's serverless connection latency, even with no real conflict.
-    { isolationLevel: "Serializable", timeout: 15000 },
+      },
+      // 15s: this transaction chains several sequential lookups plus the
+      // accounting entry posting (assertAccountsExist etc.), which can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapSaleToDto(sale);
+}
+
+// Same pattern as counter-sales.ts's withSerializableRetry - see the
+// comment there for why P2002 is retried alongside P2034.
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 40): Promise<T> {
+  let attempt = 0;
+
+  while (attempt < maxAttempts) {
+    try {
+      return await operation();
+    } catch (error) {
+      const prismaError = error as { code?: string; message?: string };
+      attempt += 1;
+      const isRetryable =
+        ["P2002", "P2034"].includes(prismaError.code ?? "") ||
+        (prismaError.code === "P2010" &&
+          /40001|40P01/.test(prismaError.message ?? ""));
+      if (!isRetryable || attempt >= maxAttempts) {
+        throw error;
+      }
+      // Jittered backoff: under N-way true-simultaneous contention on the
+      // same counter row, retrying instantly just re-collides with the same
+      // herd (empirically verified: without this, 50-100-way concurrent
+      // reserveDocumentSequence() calls exhausted immediate retries - see
+      // scripts/_tmp-test-real-generators.ts in the Phase 3 numbering
+      // chantier report).
+      await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
+    }
+  }
+
+  throw new OperationsServiceError("Impossible de finaliser la vente.", 500);
 }
 
 export async function getSalesForCurrentDriver(): Promise<SaleDto[]> {
@@ -555,5 +696,15 @@ function blockedContext(
   truck?: { id: string; code: string; registration: string } | null,
   tour?: { id: string; code: string; status: string } | null,
 ): DriverPosContextDto {
-  return { canSell: false, message, driver, truck: truck ?? null, tour: tour ?? null, customers: [], products: [] };
+  return {
+    canSell: false,
+    message,
+    driver,
+    truck: truck ?? null,
+    tour: tour ?? null,
+    customers: [],
+    products: [],
+    stockLocationId: null,
+    productsTruncated: false,
+  };
 }

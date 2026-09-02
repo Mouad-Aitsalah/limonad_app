@@ -3,9 +3,11 @@ import "server-only";
 import { z } from "zod";
 
 import { Prisma } from "@/lib/generated/prisma/client";
+import { roundMoney as roundMoneyDecimal } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { postEmployeePayrollAccountingEntry } from "@/lib/server/accounting";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { UserRole } from "@/types/auth";
 import type {
@@ -159,6 +161,12 @@ export async function createEmployeeTransaction(input: EmployeeTransactionInput)
     throw new OperationsServiceError("Une operation ne peut pas etre creee directement annulee.", 422);
   }
 
+  // F8-E: EmployeeTransaction.amount is Decimal(12,2) - checked before any
+  // write (the transaction below starts with tx.employeeTransaction.create).
+  // Covers ADVANCE/REMUNERATION_PERSONNEL/TRANSFER alike, since they all
+  // share this one input field and this one creation path.
+  assertMoneyRange(parsed.data.amount, "amount");
+
   const transaction = await withSerializableRetry(() =>
     prisma.$transaction(
       async (tx) => {
@@ -222,7 +230,17 @@ export async function createEmployeeTransaction(input: EmployeeTransactionInput)
           user.id,
         );
       },
-      { isolationLevel: "Serializable" },
+      // 15s: same class of fix already applied to counter-sales.ts /
+      // credit-notes.ts / purchases.ts / inventories.ts's equivalent
+      // transactions - this one chains several sequential lookups plus
+      // accounting bootstrap/posting (ensureAccountingBootstrap,
+      // requireSettings, postEmployeePayrollAccountingEntry), which can
+      // exceed Prisma's 5s default interactive-transaction timeout (P2028)
+      // against Neon's serverless connection latency, even with no real
+      // conflict. Found live while testing F8-C (unrelated to the money
+      // engine migration itself - this transaction was already this slow
+      // before it).
+      { isolationLevel: "Serializable", timeout: 15000 },
     ),
   );
 
@@ -234,7 +252,14 @@ export async function validateEmployeeTransaction(id: string): Promise<EmployeeT
   const transaction = await withSerializableRetry(() =>
     prisma.$transaction(
       async (tx) => validateTransactionRecord(tx, user.organizationId, id, user.id),
-      { isolationLevel: "Serializable" },
+      // F10: aligned with createEmployeeTransaction's 15s above -
+      // validateTransactionRecord does the exact same expensive chain
+      // (employee lookup, aggregateValidatedPeriod, accounting
+      // bootstrap/posting) either way, so it needs the same headroom
+      // against Neon's serverless connection latency; this path was still
+      // on Prisma's 5s default, which createEmployeeTransaction was
+      // already found live to exceed.
+      { isolationLevel: "Serializable", timeout: 15000 },
     ),
   );
   return mapTransactionToDto(transaction);
@@ -243,8 +268,14 @@ export async function validateEmployeeTransaction(id: string): Promise<EmployeeT
 export async function cancelEmployeeTransaction(id: string): Promise<EmployeeTransactionDto> {
   const user = await requireOrganizationUser(employeeManagerRoles);
 
-  const transaction = await prisma.$transaction(
-    async (tx) => {
+  // F10: already idempotent by construction (a CANCELLED row is returned
+  // as-is, never re-cancelled) - a retry after a Serializable conflict
+  // (P2034) either safely cancels or cleanly returns the same already-
+  // cancelled record, never double-reverses anything. Reuses this file's
+  // own withSerializableRetry (see createEmployeeTransaction above).
+  const transaction = await withSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
       const existing = await tx.employeeTransaction.findFirst({
         where: { id, organizationId: user.organizationId },
         include: transactionInclude,
@@ -271,8 +302,9 @@ export async function cancelEmployeeTransaction(id: string): Promise<EmployeeTra
         },
         include: transactionInclude,
       });
-    },
-    { isolationLevel: "Serializable" },
+      },
+      { isolationLevel: "Serializable" },
+    ),
   );
 
   return mapTransactionToDto(transaction);
@@ -439,18 +471,14 @@ async function nextTransactionNumber(
   payrollYear: number,
   payrollMonth: number,
 ) {
-  const prefix = `SAL-${payrollYear}${String(payrollMonth).padStart(2, "0")}-`;
-  const last = await tx.employeeTransaction.findFirst({
-    where: {
-      organizationId,
-      number: { startsWith: prefix },
-    },
-    orderBy: { number: "desc" },
-    select: { number: true },
-  });
-  const lastSuffix = last?.number.match(/(\d{6})$/)?.[1];
-  const next = (lastSuffix ? Number(lastSuffix) : 0) + 1;
-  return `${prefix}${String(next).padStart(6, "0")}`;
+  const scopeMonth = `${payrollYear}${String(payrollMonth).padStart(2, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.EmployeeTransaction,
+    scopeMonth,
+  );
+  return `SAL-${scopeMonth}-${String(number).padStart(6, "0")}`;
 }
 
 function parseDate(value: string) {
@@ -541,22 +569,41 @@ function amountEquals(left: number, right: number) {
   return Math.abs(roundMoney(left) - roundMoney(right)) < 0.001;
 }
 
+// F8-C: delegates to the shared decimal-based engine (lib/money.ts) instead
+// of `Math.round(value * 100) / 100`. Kept under this same local name so
+// every call site in this file (including the nearlyEqual comparison
+// helper above) needed zero changes.
 function roundMoney(value: number) {
-  return Math.round(value * 100) / 100;
+  return roundMoneyDecimal(value);
 }
 
-function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 3): Promise<T> {
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 40): Promise<T> {
   let attempt = 0;
 
   const run = async (): Promise<T> => {
     try {
       return await operation();
     } catch (error) {
-      const prismaError = error as { code?: string };
+      const prismaError = error as { code?: string; message?: string };
       attempt += 1;
-      if (!["P2002", "P2034"].includes(prismaError.code ?? "") || attempt >= maxAttempts) {
+      const isRetryable =
+        ["P2002", "P2034"].includes(prismaError.code ?? "") ||
+        (prismaError.code === "P2010" &&
+          /40001|40P01/.test(prismaError.message ?? ""));
+      if (!isRetryable || attempt >= maxAttempts) {
         throw error;
       }
+      // Jittered backoff: under N-way true-simultaneous contention on the
+      // same counter row, retrying instantly just re-collides with the same
+      // herd (empirically verified: without this, 50-100-way concurrent
+      // reserveDocumentSequence() calls exhausted immediate retries - see
+      // scripts/_tmp-test-real-generators.ts in the Phase 3 numbering
+      // chantier report).
+      await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
       return run();
     }
   };

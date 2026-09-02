@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { createDriverSale, getSalesForCurrentDriver } from "@/lib/server/driver-sales";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function GET() {
   try {
@@ -16,6 +17,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     return NextResponse.json(
       { sale: await createDriverSale(await request.json()) },

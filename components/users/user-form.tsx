@@ -52,8 +52,16 @@ function validateClientSide(values: UserFormValues): FormErrors {
   if (values.email.trim().length === 0) {
     errors.email = "L'email est obligatoire.";
   }
-  if (values.password.length < 6) {
-    errors.password = "Le mot de passe doit contenir au moins 6 caractères.";
+  // Mirrors lib/server/password-policy.ts's rule for a responsive UI - the
+  // server remains the sole authority (this is a client component, it
+  // cannot import that server-only module) and re-validates independently
+  // on submit regardless of what this check does.
+  const hasMinLength = values.password.length >= 10;
+  const hasLetter = /[A-Za-z]/.test(values.password);
+  const hasDigit = /[0-9]/.test(values.password);
+  if (!hasMinLength || !hasLetter || !hasDigit) {
+    errors.password =
+      "Le mot de passe doit contenir au moins 10 caractères, dont une lettre et un chiffre.";
   }
   if (values.confirmPassword !== values.password) {
     errors.confirmPassword = "La confirmation ne correspond pas au mot de passe.";

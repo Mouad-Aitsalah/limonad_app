@@ -3,11 +3,14 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { markCurrentDriverNoSale } from "@/lib/server/driver-tour";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ customerId: string }> },
 ) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const { customerId } = await context.params;
     const payload = await request.json();

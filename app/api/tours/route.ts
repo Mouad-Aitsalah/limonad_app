@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AuthServiceError, requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { createTour, getTours } from "@/lib/server/tours";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function GET() {
   try {
@@ -20,6 +21,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const tour = await createTour(await request.json());
     return NextResponse.json({ tour }, { status: 201 });

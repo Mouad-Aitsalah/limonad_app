@@ -6,12 +6,15 @@ import { prisma } from "@/lib/prisma";
 import type { TruckLoadingGetPayload } from "@/lib/generated/prisma/models/TruckLoading";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { nextMovementNumber } from "@/lib/server/sales-shared";
 import type {
   TruckLoadingCreateInput,
   TruckLoadingDto,
   TruckLoadingEditInput,
+  TruckLoadingHistoryPageDto,
+  TruckLoadingListItemDto,
   TruckLoadingMutationInput,
   TruckLoadingValidationInput,
 } from "@/types/operations-dto";
@@ -26,7 +29,11 @@ const loadingInclude = {
   updatedBy: { select: { fullName: true } },
   lines: {
     include: {
-      product: { select: { id: true, reference: true, name: true } },
+      // barcode/unit (Phase 3 CRITICAL #1 fix): embedded on
+      // TruckLoadingLineDto so an already-loaded line never depends on the
+      // product picker's current preload/search results to render
+      // correctly - see that type's doc comment.
+      product: { select: { id: true, reference: true, name: true, barcode: true, unit: true } },
     },
     orderBy: { product: { name: "asc" } },
   },
@@ -187,6 +194,8 @@ export async function mapTruckLoadingToDto(
         productId: line.productId,
         productReference: line.product.reference,
         productName: line.product.name,
+        productBarcode: line.product.barcode,
+        productUnit: line.product.unit,
         quantity: line.quantity,
         initialQuantity,
         reloadedQuantity: line.reloadedQuantity,
@@ -286,14 +295,116 @@ export async function getClaimableLoadingForTruck(
   });
 }
 
-export async function getLoadingHistory(): Promise<TruckLoadingDto[]> {
+const HISTORY_DEFAULT_PAGE_SIZE = 25;
+const HISTORY_MAX_PAGE_SIZE = 100;
+
+// Exactly the fields the history table renders (see the
+// TruckLoadingListItemDto doc comment) - never a line's product join or
+// stock computation, which every row would otherwise need mapTruckLoadingToDto
+// to compute (2 stockLocation lookups + 1 stockLevel batch read PER ROW,
+// none of which the table displays). `lines: { select: { quantity: true } }`
+// is the one per-row relation still fetched, purely to derive linesCount/
+// totalQuantity in memory - a plain int per line, not the heavier lines
+// select (product join, all the stock fields) mapTruckLoadingToDto uses.
+const loadingListSelect = {
+  id: true,
+  loadingNumber: true,
+  loadingYear: true,
+  loadingSequence: true,
+  date: true,
+  status: true,
+  validatedAt: true,
+  createdAt: true,
+  tour: { select: { code: true } },
+  driver: { select: { user: { select: { fullName: true } } } },
+  truck: { select: { code: true } },
+  depot: { select: { name: true } },
+  lines: { select: { quantity: true } },
+} as const;
+
+function mapLoadingRowToListItemDto(
+  loading: TruckLoadingGetPayload<{ select: typeof loadingListSelect }>,
+): TruckLoadingListItemDto {
+  return {
+    id: loading.id,
+    loadingNumber: loading.loadingNumber,
+    displayNumber:
+      loading.loadingYear !== null && loading.loadingSequence !== null
+        ? `CHG/${loading.loadingSequence}/${loading.loadingYear}`
+        : loading.loadingNumber,
+    loadingYear: loading.loadingYear,
+    loadingSequence: loading.loadingSequence,
+    tourCode: loading.tour?.code ?? null,
+    driverName: loading.driver.user.fullName,
+    date: loading.date.toISOString(),
+    depotName: loading.depot.name,
+    truckCode: loading.truck.code,
+    status: loading.status,
+    linesCount: loading.lines.length,
+    totalQuantity: loading.lines.reduce((sum, line) => sum + line.quantity, 0),
+    createdAt: loading.createdAt.toISOString(),
+    closedAt: loading.status === "VALIDATED" ? (loading.validatedAt?.toISOString() ?? null) : null,
+  };
+}
+
+/**
+ * Phase 3 rewrite of what used to be getLoadingHistory(): the original did
+ * ONE findMany (already batched, not N+1 by itself) then
+ * Promise.all(loadings.map(mapTruckLoadingToDto)) - 3 extra queries PER
+ * ROW (2 stockLocation lookups + 1 stockLevel batch read), all spent
+ * computing per-line stock numbers the history table never displays (see
+ * the Phase 3-A audit). This version selects only what the table actually
+ * renders in one query, with server-side cursor pagination so the number
+ * of rows read never grows unbounded with history size either.
+ *
+ * Cursor: `id`, paired with `orderBy: [{ createdAt: "desc" }, { id: "desc" }]`
+ * for a fully deterministic order (ties on createdAt broken by id) - see
+ * the id tie-breaker requirement in the Phase 3 spec. loadingYear/
+ * loadingSequence (the original sort) are assigned once, at creation,
+ * strictly in createdAt order (see nextLoadingSequence) - createdAt desc
+ * alone reproduces the exact same effective order for all real data, and
+ * unlike a 3-key sort gives a single, unambiguous keyset column pair Prisma
+ * cursor pagination is known to handle correctly.
+ */
+export async function getLoadingHistoryPage(
+  params: { cursor?: string | null; pageSize?: number } = {},
+): Promise<TruckLoadingHistoryPageDto> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
-  const loadings = await prisma.truckLoading.findMany({
-    where: { organizationId: currentUser.organizationId },
-    include: loadingInclude,
-    orderBy: [{ loadingYear: "desc" }, { loadingSequence: "desc" }, { createdAt: "desc" }],
-  });
-  return Promise.all(loadings.map(mapTruckLoadingToDto));
+  const requestedPageSize = Math.trunc(params.pageSize ?? HISTORY_DEFAULT_PAGE_SIZE);
+  // Never let a caller ask for an unbounded page (see the Phase 3 spec's
+  // explicit "never pageSize=100000") - clamped both ends, invalid/absent
+  // input silently falls back to the default rather than erroring.
+  const pageSize =
+    Number.isFinite(requestedPageSize) && requestedPageSize > 0
+      ? Math.min(requestedPageSize, HISTORY_MAX_PAGE_SIZE)
+      : HISTORY_DEFAULT_PAGE_SIZE;
+
+  const [rows, totalCount] = await Promise.all([
+    prisma.truckLoading.findMany({
+      where: { organizationId: currentUser.organizationId },
+      select: loadingListSelect,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      // +1: fetched but not returned, purely to know whether a next page
+      // exists without a separate count query per request.
+      take: pageSize + 1,
+      ...(params.cursor ? { cursor: { id: params.cursor }, skip: 1 } : {}),
+    }),
+    // Scoped by the same indexed organizationId every other org-scoped
+    // count in this app uses - O(1) round trip, cost grows with matching
+    // rows (same characteristic already documented for nextMovementNumber
+    // in the Phase 3-A audit), not with page size.
+    prisma.truckLoading.count({ where: { organizationId: currentUser.organizationId } }),
+  ]);
+
+  const hasMore = rows.length > pageSize;
+  const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
+
+  return {
+    items: pageRows.map(mapLoadingRowToListItemDto),
+    nextCursor: hasMore ? pageRows[pageRows.length - 1].id : null,
+    hasMore,
+    totalCount,
+  };
 }
 
 export async function getLoadingById(id: string): Promise<TruckLoadingDto> {
@@ -409,71 +520,78 @@ export async function updateOpenLoadingLines(
   const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const lines = validateLoadingLines(input);
 
-  const loading = await prisma.$transaction(
-    async (tx) => {
-      const current = await tx.truckLoading.findFirst({
-        where: {
-          id: loadingId,
-          organizationId: user.organizationId,
-        },
-        select: {
-          id: true,
-          loadingNumber: true,
-          depotId: true,
-          truckId: true,
-          status: true,
-          stockAppliedAt: true,
-          lines: {
-            select: { productId: true, quantity: true, reloadedQuantity: true },
+  // F10: read-then-write on a single row already looked up by id inside the
+  // transaction, so a retry after a Serializable conflict (P2034) simply
+  // re-reads the fresh current state and re-applies the same delta - never
+  // a double-apply. Reuses withLoadingSerializableRetry, already defined in
+  // this file (see createOrReuseOpenLoading above).
+  const loading = await withLoadingSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
+        const current = await tx.truckLoading.findFirst({
+          where: {
+            id: loadingId,
+            organizationId: user.organizationId,
           },
-        },
-      });
-      if (!current) throw new OperationsServiceError("Chargement introuvable.", 404);
-      if (current.status !== "DRAFT") {
-        throw new OperationsServiceError("Ce chargement est ferme et n'est plus modifiable.", 409);
-      }
+          select: {
+            id: true,
+            loadingNumber: true,
+            depotId: true,
+            truckId: true,
+            status: true,
+            stockAppliedAt: true,
+            lines: {
+              select: { productId: true, quantity: true, reloadedQuantity: true },
+            },
+          },
+        });
+        if (!current) throw new OperationsServiceError("Chargement introuvable.", 404);
+        if (current.status !== "DRAFT") {
+          throw new OperationsServiceError("Ce chargement est ferme et n'est plus modifiable.", 409);
+        }
 
-      await assertProductsExist(tx, lines.map((line) => line.productId), user.organizationId);
+        await assertProductsExist(tx, lines.map((line) => line.productId), user.organizationId);
 
-      const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
-        tx,
-        user.organizationId,
-        current.depotId,
-        current.truckId,
-      );
+        const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
+          tx,
+          user.organizationId,
+          current.depotId,
+          current.truckId,
+        );
 
-      await applyLoadingStockDelta(tx, {
-        loadingId: current.id,
-        loadingNumber: current.loadingNumber,
-        depotLocationId,
-        truckLocationId,
-        previousLines: current.lines,
-        nextLines: lines,
-        stockAlreadyApplied: Boolean(current.stockAppliedAt),
-        organizationId: user.organizationId,
-        userId: user.id,
-      });
-
-      await tx.truckLoadingLine.deleteMany({ where: { loadingId: current.id } });
-      await tx.truckLoadingLine.createMany({
-        data: lines.map((line) => ({
+        await applyLoadingStockDelta(tx, {
           loadingId: current.id,
-          productId: line.productId,
-          quantity: line.quantity,
-          reloadedQuantity: line.reloadedQuantity,
-        })),
-      });
+          loadingNumber: current.loadingNumber,
+          depotLocationId,
+          truckLocationId,
+          previousLines: current.lines,
+          nextLines: lines,
+          stockAlreadyApplied: Boolean(current.stockAppliedAt),
+          organizationId: user.organizationId,
+          userId: user.id,
+        });
 
-      return tx.truckLoading.update({
-        where: { id: current.id },
-        data: { stockAppliedAt: current.stockAppliedAt ?? new Date() },
-        include: loadingInclude,
-      });
-    },
-    // 15s: several sequential round-trips per transaction can exceed
-    // Prisma's 5s default interactive-transaction timeout (P2028) against
-    // Neon's serverless connection latency, even with no real conflict.
-    { isolationLevel: "Serializable", timeout: 15000 },
+        await tx.truckLoadingLine.deleteMany({ where: { loadingId: current.id } });
+        await tx.truckLoadingLine.createMany({
+          data: lines.map((line) => ({
+            loadingId: current.id,
+            productId: line.productId,
+            quantity: line.quantity,
+            reloadedQuantity: line.reloadedQuantity,
+          })),
+        });
+
+        return tx.truckLoading.update({
+          where: { id: current.id },
+          data: { stockAppliedAt: current.stockAppliedAt ?? new Date() },
+          include: loadingInclude,
+        });
+      },
+      // 15s: several sequential round-trips per transaction can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapTruckLoadingToDto(loading);
@@ -506,8 +624,16 @@ export async function closeLoading(
     parsed.data.lines.map((line) => [line.productId, line.actualRemainingQuantity]),
   );
 
-  const loading = await prisma.$transaction(
-    async (tx) => {
+  // F10: re-checks current.status fresh on every attempt (DRAFT vs
+  // VALIDATED) before doing anything else, so a retry after a Serializable
+  // conflict either safely re-runs the same close on a still-DRAFT loading,
+  // or - if the other concurrent request's close already committed -
+  // cleanly hits the "Ce chargement est deja ferme." 409 below instead of
+  // double-applying the stock adjustment. Reuses withLoadingSerializableRetry
+  // (see createOrReuseOpenLoading above).
+  const loading = await withLoadingSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
       const current = await tx.truckLoading.findFirst({
         where: {
           id: loadingId,
@@ -616,11 +742,12 @@ export async function closeLoading(
         },
         include: loadingInclude,
       });
-    },
-    // 15s: several sequential round-trips per transaction can exceed
-    // Prisma's 5s default interactive-transaction timeout (P2028) against
-    // Neon's serverless connection latency, even with no real conflict.
-    { isolationLevel: "Serializable", timeout: 15000 },
+      },
+      // 15s: several sequential round-trips per transaction can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapTruckLoadingToDto(loading);
@@ -677,8 +804,13 @@ export async function updateLoadingLines(
     seen.add(line.productId);
   }
 
-  const loading = await prisma.$transaction(
-    async (tx) => {
+  // F10: read-then-write on a single row already looked up by id, so a
+  // retry after a Serializable conflict (P2034) simply re-reads fresh
+  // state and re-applies the same delta - reuses withLoadingSerializableRetry
+  // (see createOrReuseOpenLoading above).
+  const loading = await withLoadingSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
       const current = await tx.truckLoading.findFirst({
         where: {
           id: loadingId,
@@ -802,18 +934,19 @@ export async function updateLoadingLines(
         data: { updatedByUserId: user.id },
         include: loadingInclude,
       });
-    },
-    // 15s: several sequential round-trips per transaction can exceed
-    // Prisma's 5s default interactive-transaction timeout (P2028) against
-    // Neon's serverless connection latency, even with no real conflict.
-    { isolationLevel: "Serializable", timeout: 15000 },
+      },
+      // 15s: several sequential round-trips per transaction can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapTruckLoadingToDto(loading);
 }
 
 async function applyActualRemainingQuantitiesOnLine(
-  tx: Pick<typeof prisma, "stockLevel" | "stockMovement" | "truckLoadingLine">,
+  tx: Pick<typeof prisma, "stockLevel" | "stockMovement" | "truckLoadingLine" | "$queryRaw">,
   input: {
     loadingId: string;
     loadingNumber: string;
@@ -902,33 +1035,48 @@ async function applyActualRemainingQuantitiesOnLine(
 }
 
 async function nextLoadingSequence(
-  tx: Pick<typeof prisma, "truckLoading">,
+  tx: Pick<typeof prisma, "truckLoading" | "$queryRaw">,
   organizationId: string,
 ) {
   const year = new Date().getFullYear();
-  const count = await tx.truckLoading.count({
-    where: {
-      organizationId,
-      loadingYear: year,
-    },
-  });
-  return { year, sequence: count + 1 };
+  const sequence = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.LoadingSequence,
+    String(year),
+  );
+  return { year, sequence };
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function withLoadingSerializableRetry<T>(
   operation: () => Promise<T>,
-  maxAttempts = 3,
+  maxAttempts = 40,
 ): Promise<T> {
   let attempt = 0;
   while (attempt < maxAttempts) {
     try {
       return await operation();
     } catch (error) {
-      const prismaError = error as { code?: string };
+      const prismaError = error as { code?: string; message?: string };
       attempt += 1;
-      if (!["P2002", "P2034"].includes(prismaError.code ?? "") || attempt >= maxAttempts) {
+      const isRetryable =
+        ["P2002", "P2034"].includes(prismaError.code ?? "") ||
+        (prismaError.code === "P2010" &&
+          /40001|40P01/.test(prismaError.message ?? ""));
+      if (!isRetryable || attempt >= maxAttempts) {
         throw error;
       }
+      // Jittered backoff: under N-way true-simultaneous contention on the
+      // same counter row, retrying instantly just re-collides with the same
+      // herd (empirically verified: without this, 50-100-way concurrent
+      // reserveDocumentSequence() calls exhausted immediate retries - see
+      // scripts/_tmp-test-real-generators.ts in the Phase 3 numbering
+      // chantier report).
+      await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
     }
   }
   throw new OperationsServiceError("Impossible de creer le chargement.", 500);
@@ -941,8 +1089,15 @@ export async function createLoading(
   const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const lines = validateLoadingLines(input);
 
-  const loading = await prisma.$transaction(
-    async (tx) => {
+  // F10: idempotent by construction - tour.loading is re-checked fresh on
+  // every attempt, so a retry after a Serializable conflict either safely
+  // creates the loading (if the other request hasn't committed yet) or
+  // cleanly hits the "deja un chargement" 409 (if it has) - never a
+  // duplicate. Reuses withLoadingSerializableRetry (see
+  // createOrReuseOpenLoading above).
+  const loading = await withLoadingSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
       const tour = await tx.tour.findFirst({
         where: {
           id: tourId,
@@ -1014,11 +1169,12 @@ export async function createLoading(
         data: { stockAppliedAt: new Date() },
         include: loadingInclude,
       });
-    },
-    // 15s: several sequential round-trips per transaction can exceed
-    // Prisma's 5s default interactive-transaction timeout (P2028) against
-    // Neon's serverless connection latency, even with no real conflict.
-    { isolationLevel: "Serializable", timeout: 15000 },
+      },
+      // 15s: several sequential round-trips per transaction can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapTruckLoadingToDto(loading);
@@ -1031,8 +1187,13 @@ export async function updateDraftLoading(
   const user = await requireOrganizationUser(["admin", "depot_manager"]);
   const lines = validateLoadingLines(input);
 
-  const loading = await prisma.$transaction(
-    async (tx) => {
+  // F10: read-then-write on a single row already looked up by tourId, so a
+  // retry after a Serializable conflict (P2034) simply re-reads fresh state
+  // and re-applies the same delta - reuses withLoadingSerializableRetry
+  // (see createOrReuseOpenLoading above).
+  const loading = await withLoadingSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
       const current = await tx.truckLoading.findFirst({
         where: {
           tourId,
@@ -1097,11 +1258,12 @@ export async function updateDraftLoading(
         },
         include: loadingInclude,
       });
-    },
-    // 15s: several sequential round-trips per transaction can exceed
-    // Prisma's 5s default interactive-transaction timeout (P2028) against
-    // Neon's serverless connection latency, even with no real conflict.
-    { isolationLevel: "Serializable", timeout: 15000 },
+      },
+      // 15s: several sequential round-trips per transaction can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapTruckLoadingToDto(loading);
@@ -1109,8 +1271,14 @@ export async function updateDraftLoading(
 
 export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDto> {
   const user = await requireOrganizationUser(["admin", "depot_manager"]);
-  const loading = await prisma.$transaction(
-    async (tx) => {
+  // F10: current.status is re-checked fresh on every attempt, so a retry
+  // after a Serializable conflict either safely cancels (if still DRAFT) or
+  // cleanly hits the 409 below (if a concurrent request already cancelled
+  // or validated it) - never a double stock reversal. Reuses
+  // withLoadingSerializableRetry (see createOrReuseOpenLoading above).
+  const loading = await withLoadingSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
       const current = await tx.truckLoading.findFirst({
         where: {
           tourId,
@@ -1163,11 +1331,12 @@ export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDt
         data: { status: "CANCELLED" },
         include: loadingInclude,
       });
-    },
-    // 15s: several sequential round-trips per transaction can exceed
-    // Prisma's 5s default interactive-transaction timeout (P2028) against
-    // Neon's serverless connection latency, even with no real conflict.
-    { isolationLevel: "Serializable", timeout: 15000 },
+      },
+      // 15s: several sequential round-trips per transaction can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapTruckLoadingToDto(loading);
@@ -1192,8 +1361,15 @@ export async function validateLoading(
     parsed.data.lines.map((line) => [line.productId, line.actualRemainingQuantity]),
   );
 
-  const loading = await prisma.$transaction(
-    async (tx) => {
+  // F10: re-checks current.status fresh on every attempt (like closeLoading
+  // above, the tour-scoped equivalent of the same "fermer/valider" action),
+  // so a retry after a Serializable conflict either safely re-runs the
+  // validation or cleanly hits the "deja validee" 409 - never a double
+  // stock adjustment. Reuses withLoadingSerializableRetry (see
+  // createOrReuseOpenLoading above).
+  const loading = await withLoadingSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
       const current = await tx.truckLoading.findFirst({
         where: {
           tourId,
@@ -1322,11 +1498,12 @@ export async function validateLoading(
         },
         include: loadingInclude,
       });
-    },
-    // 15s: several sequential round-trips per transaction can exceed
-    // Prisma's 5s default interactive-transaction timeout (P2028) against
-    // Neon's serverless connection latency, even with no real conflict.
-    { isolationLevel: "Serializable", timeout: 15000 },
+      },
+      // 15s: several sequential round-trips per transaction can exceed
+      // Prisma's 5s default interactive-transaction timeout (P2028) against
+      // Neon's serverless connection latency, even with no real conflict.
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapTruckLoadingToDto(loading);
@@ -1344,7 +1521,7 @@ export async function validateLoading(
  * queryable as history via getTourStockSheet.
  */
 async function applyActualRemainingQuantities(
-  tx: Pick<typeof prisma, "stockLevel" | "stockMovement" | "tourStockCount">,
+  tx: Pick<typeof prisma, "stockLevel" | "stockMovement" | "tourStockCount" | "$queryRaw">,
   input: {
     loadingId: string;
     loadingNumber: string;
@@ -1505,11 +1682,15 @@ async function assertProductsExist(
 }
 
 async function nextLoadingNumber(
-  tx: Pick<typeof prisma, "truckLoading">,
+  tx: Pick<typeof prisma, "truckLoading" | "$queryRaw">,
   organizationId: string,
 ) {
-  const count = await tx.truckLoading.count({ where: { organizationId } });
-  return `CHG-${String(count + 1).padStart(6, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.LoadingNumber,
+  );
+  return `CHG-${String(number).padStart(6, "0")}`;
 }
 
 async function resolveLoadingLocationIds(
@@ -1549,7 +1730,7 @@ async function resolveLoadingLocationIds(
 }
 
 async function applyLoadingStockDelta(
-  tx: Pick<typeof prisma, "stockLevel" | "stockMovement">,
+  tx: Pick<typeof prisma, "stockLevel" | "stockMovement" | "$queryRaw">,
   input: {
     loadingId: string;
     loadingNumber: string;

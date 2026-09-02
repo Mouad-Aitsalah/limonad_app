@@ -4,6 +4,7 @@ import {
   calculateSegmentedGpsDistanceMeters,
   splitGpsRouteIntoSegments,
 } from "@/lib/gps/gps-utils";
+import { roundMoney as roundMoneyDecimal } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type {
@@ -561,8 +562,12 @@ function getVisitTimestamp(visit: TruckRouteVisitDto) {
   );
 }
 
+// F8-C: applied only to saleAmount (real money) - never to the
+// latitude/longitude fields elsewhere in this file, which are never
+// rounded here at all (full Decimal precision preserved). Delegates to the
+// shared decimal-based engine (lib/money.ts).
 function roundMoney(value: number) {
-  return Math.round(value * 100) / 100;
+  return roundMoneyDecimal(value);
 }
 
 function roundDistance(value: number) {

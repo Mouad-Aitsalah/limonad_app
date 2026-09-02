@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { Prisma } from "@/lib/generated/prisma/client";
+import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import {
   listAccountingAccountOptions,
@@ -16,14 +17,16 @@ import {
   nextCustomerCode,
   updateCustomer,
 } from "@/lib/server/customers";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { AccountingAccountType } from "@/types/accounting";
 import type {
   BusinessAccountFormOptions,
   BusinessAccountInput,
   BusinessAccountListItem,
-  BusinessAccountsPayload,
+  BusinessAccountsPageDto,
+  BusinessAccountsSummaryDto,
   BusinessAccountStatus,
 } from "@/types/business-account";
 
@@ -125,8 +128,12 @@ const businessAccountInputSchema = z
     address: optionalString(),
     latitude: z.coerce.number().min(-90).max(90).nullable().optional(),
     longitude: z.coerce.number().min(-180).max(180).nullable().optional(),
-    creditLimit: z.coerce.number().min(0).optional(),
-    balance: z.coerce.number().min(0).optional(),
+    // F8-F: input-level sanity bounds only - see the server-side
+    // assertMoneyRange calls in createBusinessAccount below (creditLimit is
+    // also re-checked transitively via parseCustomerInput for the CUSTOMER
+    // branch, but balance/currentBalance is unique to this file).
+    creditLimit: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
+    balance: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
     status: z.enum(businessAccountStatusValues).optional(),
     ice: optionalString(),
     taxId: optionalString(),
@@ -168,132 +175,293 @@ const businessAccountInputSchema = z
     }
   });
 
-export async function getBusinessAccounts(): Promise<BusinessAccountsPayload> {
+const ACCOUNTS_DEFAULT_PAGE_SIZE = 25;
+const ACCOUNTS_MAX_PAGE_SIZE = 100;
+
+const businessAccountListTypes = [
+  "CUSTOMER",
+  "SUPPLIER",
+  "EXPENSE",
+  "TREASURY",
+  "EMPLOYEE",
+] as const;
+
+export type BusinessAccountsPageParams = {
+  cursor?: string | null;
+  pageSize?: number;
+  /** Any other value (including "all"/undefined) means "every type". */
+  type?: string;
+  /** Any other value (including "all"/undefined) means "every status". */
+  status?: string;
+  city?: string;
+  /** name / accountNumber(code) / phone / email - same fields the old,
+   * fully-client-side AccountsView search used to match against. */
+  search?: string;
+};
+
+function clampAccountsPageSize(pageSize: number | undefined): number {
+  const requested = Math.trunc(pageSize ?? ACCOUNTS_DEFAULT_PAGE_SIZE);
+  return Number.isFinite(requested) && requested > 0
+    ? Math.min(requested, ACCOUNTS_MAX_PAGE_SIZE)
+    : ACCOUNTS_DEFAULT_PAGE_SIZE;
+}
+
+function encodeAccountsCursor(createdAt: Date, id: string): string {
+  return `${createdAt.getTime()}_${id}`;
+}
+
+function decodeAccountsCursor(cursor: string | null | undefined): { createdAt: Date; id: string } | null {
+  if (!cursor) return null;
+  const separatorIndex = cursor.indexOf("_");
+  if (separatorIndex <= 0) return null;
+  const ms = Number(cursor.slice(0, separatorIndex));
+  const id = cursor.slice(separatorIndex + 1);
+  if (!Number.isFinite(ms) || !id) return null;
+  return { createdAt: new Date(ms), id };
+}
+
+/**
+ * The "is this AccountingAccount actually an employee advance/salary
+ * account, and not already surfaced as an Expense/Treasury business
+ * account" predicate - shared between the paginated EMPLOYEE branch below
+ * and the summary count, so the two never drift apart.
+ */
+function employeeAccountFilter(organizationId: string) {
+  return Prisma.sql`
+    acc."organizationId" = ${organizationId}
+    AND (
+      EXISTS (SELECT 1 FROM "Employee" e WHERE e."advanceAccountId" = acc.id)
+      OR EXISTS (SELECT 1 FROM "Employee" e WHERE e."salaryAccountId" = acc.id)
+    )
+    AND acc.id NOT IN (
+      SELECT "accountingAccountId" FROM "ExpenseAccount"
+        WHERE "organizationId" = ${organizationId} AND "accountingAccountId" IS NOT NULL
+      UNION
+      SELECT "accountingAccountId" FROM "TreasuryAccount"
+        WHERE "organizationId" = ${organizationId} AND "accountingAccountId" IS NOT NULL
+    )
+  `;
+}
+
+function customerBranch(organizationId: string): Prisma.Sql {
+  return Prisma.sql`
+    SELECT 'customer:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
+           'CUSTOMER'::text AS type, phone, email, address, city,
+           latitude::float8 AS latitude, longitude::float8 AS longitude,
+           "creditLimit"::float8 AS "creditLimit", status::text AS status, "createdAt"
+    FROM "Customer"
+    WHERE "organizationId" = ${organizationId}
+  `;
+}
+
+function supplierBranch(organizationId: string): Prisma.Sql {
+  return Prisma.sql`
+    SELECT 'supplier:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
+           'SUPPLIER'::text AS type, phone, email, address, city,
+           NULL::float8 AS latitude, NULL::float8 AS longitude,
+           NULL::float8 AS "creditLimit",
+           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
+    FROM "Supplier"
+    WHERE "organizationId" = ${organizationId}
+  `;
+}
+
+function expenseBranch(organizationId: string): Prisma.Sql {
+  return Prisma.sql`
+    SELECT 'expense:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
+           'EXPENSE'::text AS type, NULL::text AS phone, NULL::text AS email,
+           NULL::text AS address, NULL::text AS city,
+           NULL::float8 AS latitude, NULL::float8 AS longitude,
+           NULL::float8 AS "creditLimit",
+           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
+    FROM "ExpenseAccount"
+    WHERE "organizationId" = ${organizationId}
+  `;
+}
+
+function treasuryBranch(organizationId: string): Prisma.Sql {
+  return Prisma.sql`
+    SELECT 'treasury:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
+           'TREASURY'::text AS type, NULL::text AS phone, NULL::text AS email,
+           NULL::text AS address, NULL::text AS city,
+           NULL::float8 AS latitude, NULL::float8 AS longitude,
+           NULL::float8 AS "creditLimit",
+           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
+    FROM "TreasuryAccount"
+    WHERE "organizationId" = ${organizationId}
+  `;
+}
+
+function employeeBranch(organizationId: string): Prisma.Sql {
+  return Prisma.sql`
+    SELECT 'employee-account:' || acc.id AS id, acc.id AS "sourceId", acc.code AS "accountNumber",
+           acc.name, 'EMPLOYEE'::text AS type, NULL::text AS phone, NULL::text AS email,
+           NULL::text AS address, NULL::text AS city,
+           NULL::float8 AS latitude, NULL::float8 AS longitude,
+           NULL::float8 AS "creditLimit",
+           (CASE WHEN acc."isActive" THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status,
+           acc."createdAt"
+    FROM "AccountingAccount" acc
+    WHERE ${employeeAccountFilter(organizationId)}
+  `;
+}
+
+type RawAccountRow = {
+  id: string;
+  sourceId: string;
+  accountNumber: string;
+  name: string;
+  type: BusinessAccountListItem["type"];
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  creditLimit: number | null;
+  status: BusinessAccountStatus;
+  createdAt: Date;
+};
+
+function mapRawRowToListItem(row: RawAccountRow): BusinessAccountListItem {
+  return {
+    id: row.id,
+    sourceId: row.sourceId,
+    accountNumber: row.accountNumber,
+    name: row.name,
+    type: row.type,
+    phone: row.phone,
+    creditLimit: row.creditLimit,
+    createdAt: row.createdAt.toISOString(),
+    email: row.email,
+    city: row.city,
+    address: row.address,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    status: row.status,
+  };
+}
+
+/**
+ * Phase 3: /comptes ("Clients, fournisseurs et tiers") used to load ALL
+ * rows from 4 tables (Customer/Supplier/ExpenseAccount/TreasuryAccount) plus
+ * a derived 5th pseudo-type (AccountingAccount rows linked to an employee
+ * advance/salary account) - fully unbounded, merged into one JS array, then
+ * filtered/searched/sorted 100% client-side in AccountsView. At 10k+
+ * clients that's a multi-megabyte payload and a full-table scan on every
+ * page load.
+ *
+ * Replaced by one raw-SQL keyset-paginated query: each source is a UNION ALL
+ * branch (only the branches matching the `type` filter are included, so
+ * narrowing to type=CUSTOMER skips the other 4 tables entirely), wrapped so
+ * status/city/search/cursor filters and the final ORDER BY + LIMIT apply
+ * once, across the union, instead of once per branch. Cursor is `(createdAt,
+ * id)` encoded as a single opaque string - the same keyset-pagination shape
+ * as every other Phase 3 list, just hand-rolled here since Prisma's native
+ * `cursor:{id}` only works against a single model, not a raw UNION.
+ */
+export async function getBusinessAccountsPage(
+  params: BusinessAccountsPageParams = {},
+): Promise<BusinessAccountsPageDto> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const organizationId = currentUser.organizationId;
+  const pageSize = clampAccountsPageSize(params.pageSize);
+  const cursor = decodeAccountsCursor(params.cursor);
+  const typeFilter =
+    params.type && (businessAccountListTypes as readonly string[]).includes(params.type)
+      ? (params.type as BusinessAccountListItem["type"])
+      : null;
+  const statusFilter =
+    params.status && params.status !== "all" ? (params.status as BusinessAccountStatus) : null;
+  const cityFilter = params.city && params.city !== "all" ? params.city : null;
+  const search = params.search?.trim();
 
-  const [customers, suppliers, expenses, treasuryAccounts] = await Promise.all([
-    prisma.customer.findMany({
-      where: { organizationId: currentUser.organizationId },
-      orderBy: [{ createdAt: "desc" }, { code: "asc" }],
-    }),
-    prisma.supplier.findMany({
-      where: { organizationId: currentUser.organizationId },
-      orderBy: [{ createdAt: "desc" }, { code: "asc" }],
-    }),
-    prisma.expenseAccount.findMany({
-      where: { organizationId: currentUser.organizationId },
-      orderBy: [{ createdAt: "desc" }, { code: "asc" }],
-    }),
-    prisma.treasuryAccount.findMany({
-      where: { organizationId: currentUser.organizationId },
-      orderBy: [{ createdAt: "desc" }, { code: "asc" }],
-    }),
-  ]);
-  const linkedOperationalAccountingAccountIds = [
-    ...expenses.map((expense) => expense.accountingAccountId),
-    ...treasuryAccounts.map((account) => account.accountingAccountId),
-  ].filter((accountingAccountId): accountingAccountId is string => Boolean(accountingAccountId));
+  const branches: Prisma.Sql[] = [];
+  if (!typeFilter || typeFilter === "CUSTOMER") branches.push(customerBranch(organizationId));
+  if (!typeFilter || typeFilter === "SUPPLIER") branches.push(supplierBranch(organizationId));
+  if (!typeFilter || typeFilter === "EXPENSE") branches.push(expenseBranch(organizationId));
+  if (!typeFilter || typeFilter === "TREASURY") branches.push(treasuryBranch(organizationId));
+  if (!typeFilter || typeFilter === "EMPLOYEE") branches.push(employeeBranch(organizationId));
 
-  const employeeAccounts = await prisma.accountingAccount.findMany({
-    where: {
-      organizationId: currentUser.organizationId,
-      ...(linkedOperationalAccountingAccountIds.length > 0
-        ? { id: { notIn: linkedOperationalAccountingAccountIds } }
-        : {}),
-      OR: [
-        { employeeAdvanceAccounts: { some: {} } },
-        { employeeSalaryAccounts: { some: {} } },
-      ],
-    },
-    orderBy: [{ createdAt: "desc" }, { code: "asc" }],
-  });
-
-  const items: BusinessAccountListItem[] = [
-    ...customers.map((customer) => ({
-      id: `customer:${customer.id}`,
-      sourceId: customer.id,
-      accountNumber: customer.code,
-      name: customer.name,
-      type: "CUSTOMER" as const,
-      phone: customer.phone,
-      creditLimit: customer.creditLimit.toNumber(),
-      createdAt: customer.createdAt.toISOString(),
-      email: customer.email,
-      city: customer.city,
-      address: customer.address,
-      latitude: customer.latitude?.toNumber() ?? null,
-      longitude: customer.longitude?.toNumber() ?? null,
-      status: customer.status as BusinessAccountStatus,
-    })),
-    ...suppliers.map((supplier) => ({
-      id: `supplier:${supplier.id}`,
-      sourceId: supplier.id,
-      accountNumber: supplier.code,
-      name: supplier.name,
-      type: "SUPPLIER" as const,
-      phone: supplier.phone ?? null,
-      creditLimit: null,
-      createdAt: supplier.createdAt.toISOString(),
-      email: supplier.email,
-      city: supplier.city,
-      address: supplier.address,
-      status: (supplier.active ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
-    })),
-    ...expenses.map((expense) => ({
-      id: `expense:${expense.id}`,
-      sourceId: expense.id,
-      accountNumber: expense.code,
-      name: expense.name,
-      type: "EXPENSE" as const,
-      phone: null,
-      creditLimit: null,
-      createdAt: expense.createdAt.toISOString(),
-      city: null,
-      status: (expense.active ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
-    })),
-    ...treasuryAccounts.map((account) => ({
-      id: `treasury:${account.id}`,
-      sourceId: account.id,
-      accountNumber: account.code,
-      name: account.name,
-      type: "TREASURY" as const,
-      phone: null,
-      creditLimit: null,
-      createdAt: account.createdAt.toISOString(),
-      city: null,
-      status: (account.active ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
-    })),
-    ...employeeAccounts.map((account) => ({
-      id: `employee-account:${account.id}`,
-      sourceId: account.id,
-      accountNumber: account.code,
-      name: account.name,
-      type: "EMPLOYEE" as const,
-      phone: null,
-      creditLimit: null,
-      createdAt: account.createdAt.toISOString(),
-      city: null,
-      status: (account.isActive ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
-    })),
-  ].sort((a, b) => {
-    return (
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
-      a.accountNumber.localeCompare(b.accountNumber, "fr-FR") ||
-      a.name.localeCompare(b.name, "fr-FR")
+  const filters: Prisma.Sql[] = [Prisma.sql`1 = 1`];
+  if (statusFilter) filters.push(Prisma.sql`status = ${statusFilter}`);
+  if (cityFilter) filters.push(Prisma.sql`city = ${cityFilter}`);
+  if (search) {
+    const like = `%${search}%`;
+    filters.push(
+      Prisma.sql`("accountNumber" ILIKE ${like} OR name ILIKE ${like} OR COALESCE(phone, '') ILIKE ${like} OR COALESCE(email, '') ILIKE ${like})`,
     );
-  });
+  }
+  if (cursor) {
+    filters.push(
+      Prisma.sql`("createdAt" < ${cursor.createdAt} OR ("createdAt" = ${cursor.createdAt} AND id < ${cursor.id}))`,
+    );
+  }
+
+  const [rows, summary, cities] = await Promise.all([
+    prisma.$queryRaw<RawAccountRow[]>(Prisma.sql`
+      WITH accounts AS (${Prisma.join(branches, " UNION ALL ")})
+      SELECT * FROM accounts
+      WHERE ${Prisma.join(filters, " AND ")}
+      ORDER BY "createdAt" DESC, id DESC
+      LIMIT ${pageSize + 1}
+    `),
+    fetchAccountsSummary(organizationId),
+    fetchAccountCities(organizationId),
+  ]);
+
+  const hasMore = rows.length > pageSize;
+  const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
+  const lastRow = pageRows[pageRows.length - 1];
 
   return {
-    items,
-    summary: {
-      totalCount: items.length,
-      customerCount: items.filter((item) => item.type === "CUSTOMER").length,
-      supplierCount: items.filter((item) => item.type === "SUPPLIER").length,
-      expenseCount: items.filter((item) => item.type === "EXPENSE").length,
-      treasuryCount: items.filter((item) => item.type === "TREASURY").length,
-      employeeCount: items.filter((item) => item.type === "EMPLOYEE").length,
-    },
+    items: pageRows.map(mapRawRowToListItem),
+    nextCursor: hasMore && lastRow ? encodeAccountsCursor(lastRow.createdAt, lastRow.id) : null,
+    hasMore,
+    summary,
+    cities,
   };
+}
+
+/** Global per-type counts, always unfiltered by the current search/type/
+ * status/city selection - matches the summary cards' pre-existing meaning
+ * (org-wide totals, not "how many match my current filter"). */
+async function fetchAccountsSummary(organizationId: string): Promise<BusinessAccountsSummaryDto> {
+  const [customerCount, supplierCount, expenseCount, treasuryCount, employeeRows] = await Promise.all([
+    prisma.customer.count({ where: { organizationId } }),
+    prisma.supplier.count({ where: { organizationId } }),
+    prisma.expenseAccount.count({ where: { organizationId } }),
+    prisma.treasuryAccount.count({ where: { organizationId } }),
+    prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+      SELECT COUNT(*)::int AS count FROM "AccountingAccount" acc
+      WHERE ${employeeAccountFilter(organizationId)}
+    `),
+  ]);
+  const employeeCount = employeeRows[0]?.count ?? 0;
+
+  return {
+    totalCount: customerCount + supplierCount + expenseCount + treasuryCount + employeeCount,
+    customerCount,
+    supplierCount,
+    expenseCount,
+    treasuryCount,
+    employeeCount,
+  };
+}
+
+/** Distinct cities across Customer + Supplier (the only 2 types that carry
+ * one) - used to populate the "Ville" filter dropdown without loading every
+ * row client-side just to derive its own filter options. */
+async function fetchAccountCities(organizationId: string): Promise<string[]> {
+  const rows = await prisma.$queryRaw<Array<{ city: string }>>(Prisma.sql`
+    SELECT DISTINCT city FROM (
+      SELECT city FROM "Customer" WHERE "organizationId" = ${organizationId} AND city IS NOT NULL
+      UNION
+      SELECT city FROM "Supplier" WHERE "organizationId" = ${organizationId} AND city IS NOT NULL
+    ) cities
+    ORDER BY city ASC
+  `);
+  return rows.map((row) => row.city);
 }
 
 export async function getBusinessAccountFormOptions(): Promise<BusinessAccountFormOptions> {
@@ -353,6 +521,11 @@ export async function createBusinessAccount(
     });
 
     await ensureUniquePhone(user.organizationId, customerData.phone);
+
+    // F8-F: currentBalance's initial value is unique to this file (bypasses
+    // parseCustomerInput, which has no balance/currentBalance field of its
+    // own) - checked here, before the transaction below creates the row.
+    assertMoneyRange(data.balance ?? 0, "customer.currentBalance");
 
     const customer = await withSerializableRetry(() =>
       prisma.$transaction(
@@ -456,6 +629,9 @@ export async function createBusinessAccount(
   if (data.type === "EXPENSE") {
     const code = data.code ?? (await nextExpenseAccountCode(user.organizationId));
     await ensureUniqueExpenseAccountCode(user.organizationId, code);
+    // F8-F: ExpenseAccount.balance is Decimal(12,2), checked before the
+    // transaction below creates the row.
+    assertMoneyRange(data.balance ?? 0, "expenseAccount.balance");
 
     const expense = await prisma.$transaction(async (tx) => {
       const accountingAccountId = await resolveOrCreateAccountingLink(
@@ -499,6 +675,9 @@ export async function createBusinessAccount(
 
   const code = data.code ?? (await nextTreasuryAccountCode(user.organizationId));
   await ensureUniqueTreasuryAccountCode(user.organizationId, code);
+  // F8-F: TreasuryAccount.balance is Decimal(12,2), checked before the
+  // transaction below creates the row.
+  assertMoneyRange(data.balance ?? 0, "treasuryAccount.balance");
 
   const treasury = await prisma.$transaction(async (tx) => {
     const accountingAccountId = await resolveOrCreateAccountingLink(
@@ -605,46 +784,33 @@ export async function updateBusinessAccount(
 }
 
 async function nextSupplierCode(
-  tx: Pick<typeof prisma, "supplier">,
+  tx: Pick<typeof prisma, "supplier" | "$queryRaw">,
   organizationId: string,
 ) {
-  const codes = await tx.supplier.findMany({
-    where: {
-      organizationId,
-      code: { startsWith: supplierAccountPrefix },
-    },
-    select: { code: true },
-  });
-  return buildNextAccountNumber(
-    codes.map((supplier) => supplier.code),
-    supplierAccountPrefix,
+  const number = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.SupplierCode,
   );
+  return `${supplierAccountPrefix}${number}`;
 }
 
 async function nextExpenseAccountCode(organizationId: string) {
-  const last = await prisma.expenseAccount.findFirst({
-    where: {
-      organizationId,
-      code: { startsWith: "CHG-" },
-    },
-    orderBy: { code: "desc" },
-    select: { code: true },
-  });
-  const nextNumber = Number(last?.code.replace("CHG-", "") ?? "0") + 1;
-  return `CHG-${String(nextNumber).padStart(4, "0")}`;
+  const number = await reserveDocumentSequence(
+    prisma,
+    organizationId,
+    DocumentType.ExpenseAccountCode,
+  );
+  return `CHG-${String(number).padStart(4, "0")}`;
 }
 
 async function nextTreasuryAccountCode(organizationId: string) {
-  const last = await prisma.treasuryAccount.findFirst({
-    where: {
-      organizationId,
-      code: { startsWith: "TRE-" },
-    },
-    orderBy: { code: "desc" },
-    select: { code: true },
-  });
-  const nextNumber = Number(last?.code.replace("TRE-", "") ?? "0") + 1;
-  return `TRE-${String(nextNumber).padStart(4, "0")}`;
+  const number = await reserveDocumentSequence(
+    prisma,
+    organizationId,
+    DocumentType.TreasuryAccountCode,
+  );
+  return `TRE-${String(number).padStart(4, "0")}`;
 }
 
 async function ensureUniqueExpenseAccountCode(organizationId: string, code: string) {
@@ -671,30 +837,33 @@ async function ensureUniqueTreasuryAccountCode(organizationId: string, code: str
   }
 }
 
-function buildNextAccountNumber(existingCodes: string[], prefix: string) {
-  const pattern = new RegExp(`^${prefix}(\\d+)$`);
-  const highest = existingCodes.reduce((max, code) => {
-    const match = code.match(pattern);
-    if (!match) return max;
-    return Math.max(max, Number(match[1]));
-  }, 0);
-
-  return `${prefix}${highest + 1}`;
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 3): Promise<T> {
+async function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 40): Promise<T> {
   let attempt = 0;
 
   while (attempt < maxAttempts) {
     try {
       return await operation();
     } catch (error) {
-      const prismaError = error as { code?: string };
+      const prismaError = error as { code?: string; message?: string };
       attempt += 1;
-
-      if (!["P2002", "P2034"].includes(prismaError.code ?? "") || attempt >= maxAttempts) {
+      const isRetryable =
+        ["P2002", "P2034"].includes(prismaError.code ?? "") ||
+        (prismaError.code === "P2010" &&
+          /40001|40P01/.test(prismaError.message ?? ""));
+      if (!isRetryable || attempt >= maxAttempts) {
         throw error;
       }
+      // Jittered backoff: under N-way true-simultaneous contention on the
+      // same counter row, retrying instantly just re-collides with the same
+      // herd (empirically verified: without this, 50-100-way concurrent
+      // reserveDocumentSequence() calls exhausted immediate retries - see
+      // scripts/_tmp-test-real-generators.ts in the Phase 3 numbering
+      // chantier report).
+      await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
     }
   }
 

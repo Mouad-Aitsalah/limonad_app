@@ -1,10 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, Plus, Search, Truck, TriangleAlert } from "lucide-react";
+import { Pencil, Plus, Truck, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { ProductCombobox } from "@/components/commerce/product-combobox";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -72,6 +73,13 @@ const adjustmentReasons: AdjustmentReason[] = [
 type AdjustmentDialogState = {
   open: boolean;
   productId: string;
+  // Phase 3 CRITICAL #1 fix: carried directly from the AdjustmentTarget
+  // that opened the dialog (both callers already have them - a stock row
+  // or a just-picked ProductDto) instead of re-resolving against
+  // `products`, now a small preload/search result set, not the full
+  // catalog. See the DetailField rendering below.
+  productName: string;
+  productReference: string;
   currentQuantity: number;
   targetQuantity: string;
   reason: AdjustmentReason;
@@ -85,6 +93,8 @@ type AdjustmentDialogState = {
 const defaultDialogState: AdjustmentDialogState = {
   open: false,
   productId: "",
+  productName: "",
+  productReference: "",
   currentQuantity: 0,
   targetQuantity: "0",
   reason: "Inventaire reel",
@@ -104,7 +114,6 @@ export function TruckStockPanel({
   const [selectedLocationId, setSelectedLocationId] = React.useState(
     locations[0]?.id ?? "",
   );
-  const [productSearch, setProductSearch] = React.useState("");
   const [dialogState, setDialogState] = React.useState<AdjustmentDialogState>(defaultDialogState);
 
   const selectedLocation =
@@ -123,29 +132,13 @@ export function TruckStockPanel({
     [selectedRows],
   );
 
-  const filteredProducts = React.useMemo(() => {
-    const query = normalizeSearch(productSearch);
-    if (!query) {
-      return products
-        .filter((product) => product.status === "ACTIVE")
-        .sort((left, right) => left.name.localeCompare(right.name, "fr-FR"));
-    }
-
-    return products
-      .filter((product) => product.status === "ACTIVE")
-      .filter((product) =>
-        normalizeSearch(
-          `${product.name} ${product.reference} ${product.barcode ?? ""}`,
-        ).includes(query),
-      )
-      .sort((left, right) => left.name.localeCompare(right.name, "fr-FR"));
-  }, [productSearch, products]);
-
   function openAdjustmentDialog(target: AdjustmentTarget) {
     setDialogState({
       ...defaultDialogState,
       open: true,
       productId: target.productId,
+      productName: target.productName,
+      productReference: target.productReference,
       currentQuantity: target.currentQuantity,
       targetQuantity: String(target.currentQuantity),
     });
@@ -295,23 +288,11 @@ export function TruckStockPanel({
                 <Plus className="h-4 w-4 text-emerald-700" />
                 Ajouter / ajuster un produit
               </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_180px]">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={productSearch}
-                    onChange={(event) => setProductSearch(event.target.value)}
-                    placeholder="Nom, reference ou code-barres..."
-                    className="pl-9"
-                  />
-                </div>
-                <Select
-                  value={dialogState.open ? dialogState.productId : null}
-                  onValueChange={(value) => {
-                    const product = products.find((item) => item.id === value);
-                    if (!product) {
-                      return;
-                    }
+              <div className="mt-3">
+                <ProductCombobox
+                  value={null}
+                  onChange={(product) => {
+                    if (!product) return;
                     const existingRow = selectedRowByProductId.get(product.id);
                     openAdjustmentDialog({
                       productId: product.id,
@@ -320,18 +301,10 @@ export function TruckStockPanel({
                       currentQuantity: existingRow?.quantity ?? 0,
                     });
                   }}
-                >
-                  <SelectTrigger className="h-10 w-full">
-                    <SelectValue placeholder="Choisir un produit" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {filteredProducts.map((product) => (
-                      <SelectItem key={product.id} value={product.id}>
-                        {product.reference} - {product.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  preload={products}
+                  placeholder="Nom, reference ou code-barres..."
+                  label={null}
+                />
               </div>
             </div>
           </div>
@@ -433,12 +406,8 @@ export function TruckStockPanel({
 
             <DetailField
               label="Produit"
-              value={
-                products.find((product) => product.id === dialogState.productId)?.name ?? "-"
-              }
-              secondary={
-                products.find((product) => product.id === dialogState.productId)?.reference ?? null
-              }
+              value={dialogState.productName || "-"}
+              secondary={dialogState.productReference || null}
             />
 
             <DetailField
@@ -571,12 +540,4 @@ function DetailField({
       {secondary ? <p className="mt-1 text-xs text-muted-foreground">{secondary}</p> : null}
     </div>
   );
-}
-
-function normalizeSearch(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
 }

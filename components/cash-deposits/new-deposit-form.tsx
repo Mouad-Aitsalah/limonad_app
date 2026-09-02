@@ -25,6 +25,7 @@ function emptyQuantities(): Record<number, string> {
 
 export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProps) {
   const [quantities, setQuantities] = React.useState<Record<number, string>>(emptyQuantities);
+  const [cashDepositInput, setCashDepositInput] = React.useState("");
   const [checkTotalInput, setCheckTotalInput] = React.useState("0");
   const [notes, setNotes] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -34,7 +35,7 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
   // écritures dialogs elsewhere in COMDIS.
   const savingRef = React.useRef(false);
 
-  const cashTotal = React.useMemo(
+  const countedCash = React.useMemo(
     () =>
       cashDenominations.reduce((sum, value) => {
         const quantity = Number(quantities[value] || 0);
@@ -42,11 +43,17 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
       }, 0),
     [quantities],
   );
+  const cashDepositAmount = Number(cashDepositInput || 0);
   const checkTotal = Number(checkTotalInput || 0);
-  const total = cashTotal + (Number.isFinite(checkTotal) ? checkTotal : 0);
+  const total =
+    (Number.isFinite(cashDepositAmount) ? cashDepositAmount : 0) +
+    (Number.isFinite(checkTotal) ? checkTotal : 0);
+  const cashDifference = countedCash - context.cashSummary.availableCash;
+  const cashRemaining = countedCash - (Number.isFinite(cashDepositAmount) ? cashDepositAmount : 0);
 
   function resetForm() {
     setQuantities(emptyQuantities());
+    setCashDepositInput("");
     setCheckTotalInput("0");
     setNotes("");
     setLastDeposit(null);
@@ -64,6 +71,14 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
       toast.error("Les quantites doivent etre des nombres entiers positifs ou nuls.");
       return;
     }
+    if (!Number.isFinite(cashDepositAmount) || cashDepositAmount < 0) {
+      toast.error("Le montant en especes a verser doit etre positif ou nul.");
+      return;
+    }
+    if (cashDepositAmount > countedCash) {
+      toast.error("Le versement en especes ne peut pas depasser les especes comptees.");
+      return;
+    }
     if (!Number.isFinite(checkTotal) || checkTotal < 0) {
       toast.error("Le montant des cheques doit etre positif ou nul.");
       return;
@@ -77,6 +92,7 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           denominations: lines,
+          cashDepositAmount,
           checkTotal,
           notes: notes.trim() || null,
         }),
@@ -144,8 +160,10 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
         </div>
       ) : null}
 
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+        <div className="space-y-5">
       <div className="space-y-3">
-        <p className="text-sm font-medium text-foreground">Coupures</p>
+        <p className="text-sm font-medium text-foreground">Coupures comptees en caisse</p>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {cashDenominations.map((value) => {
             const quantity = Number(quantities[value] || 0);
@@ -183,6 +201,19 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
+          <Label>Montant especes a verser</Label>
+          <Input
+            type="number"
+            min={0}
+            step={0.01}
+            disabled={validated}
+            value={cashDepositInput}
+            onFocus={(event) => event.currentTarget.select()}
+            onChange={(event) => setCashDepositInput(event.target.value)}
+            placeholder="0.00"
+          />
+        </div>
+        <div className="space-y-1.5">
           <Label>Montant cheques</Label>
           <Input
             type="number"
@@ -209,9 +240,9 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
       <div className="rounded-2xl border border-border bg-muted/50 p-4">
         <div className="grid gap-2 text-sm sm:grid-cols-3">
           <div className="flex justify-between sm:block">
-            <span className="text-muted-foreground">Total especes</span>
+            <span className="text-muted-foreground">Especes a verser</span>
             <span className="font-medium text-foreground tabular-nums sm:ml-2">
-              {formatCurrency(cashTotal)}
+              {formatCurrency(Number.isFinite(cashDepositAmount) ? cashDepositAmount : 0)}
             </span>
           </div>
           <div className="flex justify-between sm:block">
@@ -252,7 +283,57 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
         ) : null}
       </div>
 
+        </div>
+
+        <Card className="border-emerald-200/80 bg-emerald-50/40 shadow-[0_10px_30px_rgba(5,150,105,0.08)] xl:sticky xl:top-6">
+          <CardContent className="space-y-5 p-5">
+            <div>
+              <p className="text-xs font-semibold tracking-[0.14em] text-emerald-700">SITUATION DE LA CAISSE</p>
+              <p className="mt-1 text-sm text-muted-foreground">{context.depotName} - {context.userName}</p>
+            </div>
+            <SummaryLine label="Ventes especes du jour" value={context.cashSummary.cashSales} />
+            <SummaryLine label="Charges especes du jour" value={-context.cashSummary.cashExpenses} negative />
+            <div className="border-t border-emerald-200 pt-4">
+              <SummaryLine label="Disponible caisse" value={context.cashSummary.availableCash} strong />
+            </div>
+            {context.cashSummary.hasCashShortfall ? (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                Les sorties especes depassent les encaissements especes de la journee.
+              </p>
+            ) : null}
+            <div className="space-y-3 border-t border-emerald-200 pt-4">
+              <SummaryLine label="Especes comptees" value={countedCash} />
+              <SummaryLine label="Ecart" value={cashDifference} />
+            </div>
+            <div className="border-t border-emerald-200 pt-4">
+              <SummaryLine label="Reste apres versement" value={cashRemaining} strong />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       <DepositReceiptPrint deposit={lastDeposit} />
+    </div>
+  );
+}
+
+function SummaryLine({
+  label,
+  value,
+  strong = false,
+  negative = false,
+}: {
+  label: string;
+  value: number;
+  strong?: boolean;
+  negative?: boolean;
+}) {
+  return (
+    <div className="flex items-end justify-between gap-4">
+      <span className={strong ? "font-semibold text-foreground" : "text-sm text-muted-foreground"}>{label}</span>
+      <span className={strong ? "text-lg font-semibold tabular-nums text-foreground" : "font-medium tabular-nums text-foreground"}>
+        {negative ? "- " : ""}{formatCurrency(Math.abs(value))}
+      </span>
     </div>
   );
 }

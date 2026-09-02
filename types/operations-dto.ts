@@ -140,6 +140,19 @@ export interface StockMovementDto {
   status: string;
 }
 
+/**
+ * Phase 3: StockMovementDto itself was already light (no nested arrays like
+ * SaleDto's lines[]/payments[] or TruckLoadingDto's lines[]) - the fix here
+ * is pagination + server-side filters, not a lighter row shape. See
+ * getStockMovementsPage's doc comment in stock-movements.ts.
+ */
+export interface StockMovementsPageDto {
+  items: StockMovementDto[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  totalCount: number;
+}
+
 export interface StockSummaryDto {
   totalValue: number;
   productCount: number;
@@ -187,10 +200,52 @@ export interface TourDto {
   };
   loading?: TruckLoadingDto | null;
   stockSheet?: TourStockSheetDto | null;
+  closure?: TourClosureDto | null;
   createdByUserName: string;
   createdAt: string;
   updatedAt: string;
 }
+
+export interface DiscrepancyDto {
+  id: string;
+  type: string;
+  productId: string | null;
+  productReference: string | null;
+  productName: string | null;
+  quantity: number | null;
+  amount: number | null;
+  reason: string;
+  justification: string;
+  status: string;
+  declaredByUserName: string;
+  validatedByUserName: string | null;
+  validatedAt: string | null;
+  createdAt: string;
+}
+
+export interface TourClosureDto {
+  id: string;
+  tourId: string;
+  theoreticalStockValue: number | null;
+  actualStockValue: number | null;
+  expectedCash: number;
+  receivedCash: number;
+  cashDifference: number;
+  status: string;
+  controlledByUserName: string | null;
+  validatedByUserName: string | null;
+  discrepancies: DiscrepancyDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TourClosureInput = {
+  // Cash physically counted by the person closing the tour. Omitted =>
+  // assumed equal to expectedCash (no cash discrepancy declared) - COMDIS
+  // has no dedicated cash-counting UI yet, so this stays an optional
+  // override rather than a fabricated gap.
+  receivedCash?: number | null;
+};
 
 export interface TourStockSheetLineDto {
   productId: string;
@@ -201,6 +256,10 @@ export interface TourStockSheetLineDto {
   loadedQuantity: number;
   reloadedQuantity: number;
   soldQuantity: number;
+  // F4: sum of VALIDATED driver-return CreditNoteLine quantities for this
+  // product on this exact tour (see createDriverReturn) - a depot return
+  // never contributes here.
+  returnedQuantity: number;
   theoreticalQuantity: number;
   actualQuantity?: number | null;
   differenceQuantity?: number | null;
@@ -249,6 +308,40 @@ export interface DriverTourStartContextDto {
   warning?: string | null;
 }
 
+/**
+ * Phase 3: the light row shape for /chargements's history table - exactly
+ * the fields that table actually renders (see loadings-view.tsx's history
+ * TabsContent), never the per-line stock computation TruckLoadingDto's
+ * `lines[]` carries (depotAvailableQuantity/truckCurrentQuantity/etc,
+ * needed only by the single-record detail page). linesCount/totalQuantity
+ * replace `lines.length`/`lines.reduce(sum, quantity)`, which is all the
+ * history table ever derived from the full line list.
+ */
+export interface TruckLoadingListItemDto {
+  id: string;
+  loadingNumber: string;
+  displayNumber: string;
+  loadingYear: number | null;
+  loadingSequence: number | null;
+  tourCode: string | null;
+  driverName: string;
+  date: string;
+  depotName: string;
+  truckCode: string;
+  status: string;
+  linesCount: number;
+  totalQuantity: number;
+  createdAt: string;
+  closedAt: string | null;
+}
+
+export interface TruckLoadingHistoryPageDto {
+  items: TruckLoadingListItemDto[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  totalCount: number;
+}
+
 export interface TruckLoadingDto {
   id: string;
   loadingNumber: string;
@@ -282,6 +375,12 @@ export interface TruckLoadingLineDto {
   productId: string;
   productReference: string;
   productName: string;
+  /** Phase 3 CRITICAL #1 fix: embedded directly so an already-loaded line's
+   * barcode/unit render correctly even when its product isn't in the
+   * picker's current small preload/search results - see LoadingsView's
+   * draftLines sync and getProductPickerPreload's doc comment. */
+  productBarcode: string | null;
+  productUnit: string;
   quantity: number;
   initialQuantity: number;
   reloadedQuantity: number;
@@ -375,6 +474,16 @@ export interface DriverTourSummaryDto {
   stockCurrentQuantity: number;
   actualStockQuantity?: number | null;
   discrepancyQuantity?: number | null;
+  /**
+   * Phase 3 CRITICAL #2 fix: total customers this driver can access
+   * (organization-wide ADMIN-origin + their own), from a cheap count() -
+   * `customers` on CurrentDriverTourDto is now bounded to this tour's
+   * in-play visits (NEARBY/ARRIVED/DELIVERED/NO_SALE), so it can no longer
+   * be used as the "X/Y clients" denominator. This field replaces that use
+   * without re-fetching the full customer list. See buildCurrentDriverTourState's
+   * doc comment in lib/server/driver-tour.ts.
+   */
+  totalAccessibleCustomers: number;
 }
 
 export type TourMutationInput = {
@@ -434,6 +543,36 @@ export interface CustomerDto {
   updatedAt: string;
 }
 
+/**
+ * Phase 3 CRITICAL #2 follow-up: cursor-paginated + server-searched
+ * companion to getCustomersForCurrentDriver() (which stayed unbounded on
+ * purpose, per the first CRITICAL #2 report - now itself the finding being
+ * fixed here). Same shape/convention as ProductsPageDto (types/product-dto.ts)
+ * - items/nextCursor/hasMore/totalCount from a cursor query, `totalCount`
+ * reflecting the current search filter (or everything, with none). The 3
+ * metric counts are always UNFILTERED (independent of `search`), matching
+ * the "Total clients / Actifs / Bloques / Ajoutes par vous" cards' original
+ * behavior (computed from the full accessible list before this fix).
+ */
+export interface DriverCustomersPageDto {
+  items: CustomerDto[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  totalCount: number;
+  totalAccessibleCustomers: number;
+  activeCount: number;
+  blockedCount: number;
+  ownCreatedCount: number;
+  /**
+   * Resolved separately when `guaranteeCustomerId` was passed and that
+   * customer isn't on the current page - e.g. a deep link from the "client
+   * proche" banner (?customerId=...) must resolve regardless of which page
+   * it would otherwise fall on. Null if not requested, not found, or
+   * already present in `items`.
+   */
+  guaranteedCustomer: CustomerDto | null;
+}
+
 export interface SupplierPartnerDto {
   id: string;
   code: string;
@@ -490,6 +629,14 @@ export interface DriverPosContextDto {
   tour?: { id: string; code: string; status: string } | null;
   customers: CustomerDto[];
   products: DriverPosProductDto[];
+  /** Truck stock location id, when known - lets the frontend fall back to
+   * GET /api/products/search?locationId=... when productsTruncated is true. */
+  stockLocationId?: string | null;
+  /** true when `products` was capped (see POS_PRODUCT_LIST_LIMIT) and more
+   * sellable products exist at this location than were returned - the
+   * frontend must fall back to a server search instead of trusting the
+   * preloaded list to contain everything. */
+  productsTruncated: boolean;
 }
 
 export interface CounterPosContextDto {
@@ -500,6 +647,8 @@ export interface CounterPosContextDto {
   stockLocation: { id: string; code: string; name: string };
   customers: CustomerDto[];
   products: DriverPosProductDto[];
+  /** See DriverPosContextDto.productsTruncated. */
+  productsTruncated: boolean;
 }
 
 export interface SaleLineDto {
@@ -525,6 +674,40 @@ export interface PaymentDto {
   status: string;
   reference?: string | null;
   receivedAt: string;
+}
+
+/**
+ * Phase 3: the light row shape for /ventes's Commandes table (and the
+ * session/month drilldown dialogs, which reuse the same list) - exactly
+ * the fields InvoicesTable renders, never a sale's full lines[]/payments[]
+ * (see SaleDto below, still used verbatim by the detail dialog, fetched
+ * on demand for exactly one sale at a time via GET /api/sales/[id]).
+ * articleCount replaces `lines.reduce(sum, quantity)`, which is all the
+ * list ever derived from the full line list.
+ */
+export interface SaleHistoryListItemDto {
+  id: string;
+  invoiceNumber: string;
+  displayNumber: string;
+  posSessionId: string | null;
+  status: string;
+  customer: { id: string; code: string; name: string } | null;
+  driver: { id: string; name: string } | null;
+  articleCount: number;
+  totalTTC: number;
+  net: number;
+  paidAmount: number;
+  creditAmount: number;
+  paymentMethod: string;
+  createdByUserName: string;
+  createdAt: string;
+}
+
+export interface SaleHistoryOrdersPageDto {
+  items: SaleHistoryListItemDto[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  totalCount: number;
 }
 
 export interface SaleDto {

@@ -1,10 +1,10 @@
 import type { User } from "@/types/user";
 
 /**
- * L'id de chaque compte reprend volontairement celui déjà utilisé dans
- * lib/mock-data/auth-users.ts (session de connexion) et, pour les chauffeurs,
- * lib/mock-data/drivers.ts / trucks.ts (affectation camion) — même identité
- * mock partagée à travers tout COMDIS, prête à devenir une vraie table Utilisateur.
+ * L'id de chaque compte reprend volontairement celui déjà utilisé, pour les
+ * chauffeurs, dans lib/mock-data/drivers.ts / trucks.ts (affectation camion)
+ * — même identité mock partagée à travers tout COMDIS, prête à devenir une
+ * vraie table Utilisateur (déjà le cas : voir prisma/seed.ts).
  */
 export const users: User[] = [
   {

@@ -38,9 +38,21 @@ export type BusinessAccountsSummaryDto = {
   employeeCount: number;
 };
 
-export type BusinessAccountsPayload = {
+/**
+ * Phase 3: paginated replacement for the old, fully-unbounded
+ * BusinessAccountsPayload ({ items: BusinessAccountListItem[]; summary }) -
+ * see
+ * getBusinessAccountsPage's doc comment in lib/server/business-accounts.ts.
+ * summary/cities are always org-wide (unaffected by the current page's
+ * filters), bundled here since /comptes always needs all three together on
+ * every load.
+ */
+export type BusinessAccountsPageDto = {
   items: BusinessAccountListItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
   summary: BusinessAccountsSummaryDto;
+  cities: string[];
 };
 
 export type BusinessAccountInput = {

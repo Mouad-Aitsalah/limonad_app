@@ -22,10 +22,10 @@ import { InvoiceDetailDialog } from "@/components/ventes/invoice-detail-dialog";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
 import { formatCurrency } from "@/lib/utils";
-import type { SaleDto } from "@/types/operations-dto";
+import type { SaleHistoryListItemDto } from "@/types/operations-dto";
 
 type InvoicesTableProps = {
-  invoices: SaleDto[];
+  invoices: SaleHistoryListItemDto[];
 };
 
 function formatDateTime(value: string) {
@@ -39,9 +39,7 @@ function formatDateTime(value: string) {
 }
 
 export function InvoicesTable({ invoices }: InvoicesTableProps) {
-  const [viewingInvoiceId, setViewingInvoiceId] = React.useState<string | null>(null);
-
-  const viewingInvoice = invoices.find((invoice) => invoice.id === viewingInvoiceId) ?? null;
+  const [viewingInvoice, setViewingInvoice] = React.useState<SaleHistoryListItemDto | null>(null);
 
   if (invoices.length === 0) {
     return (
@@ -73,9 +71,6 @@ export function InvoicesTable({ invoices }: InvoicesTableProps) {
         </TableHeader>
         <TableBody>
           {invoices.map((invoice) => {
-            const articleCount = invoice.lines.reduce((sum, line) => sum + line.quantity, 0);
-            const net = invoice.net ?? invoice.totalTTC;
-
             return (
               <TableRow key={invoice.id}>
                 <TableCell className="font-medium text-foreground">
@@ -90,12 +85,12 @@ export function InvoicesTable({ invoices }: InvoicesTableProps) {
                 <TableCell className="text-muted-foreground">
                   {invoice.driver?.name ?? invoice.createdByUserName}
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{articleCount}</TableCell>
+                <TableCell className="text-right tabular-nums">{invoice.articleCount}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   {formatCurrency(invoice.totalTTC)}
                 </TableCell>
                 <TableCell className="text-right font-medium tabular-nums">
-                  {formatCurrency(net)}
+                  {formatCurrency(invoice.net)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {paymentMethodLabels[invoice.paymentMethod] ?? invoice.paymentMethod}
@@ -118,7 +113,7 @@ export function InvoicesTable({ invoices }: InvoicesTableProps) {
                       <MoreHorizontal className="h-4 w-4" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setViewingInvoiceId(invoice.id)}>
+                      <DropdownMenuItem onClick={() => setViewingInvoice(invoice)}>
                         <Eye aria-hidden="true" />
                         Voir détails
                       </DropdownMenuItem>
@@ -132,10 +127,10 @@ export function InvoicesTable({ invoices }: InvoicesTableProps) {
       </Table>
 
       <InvoiceDetailDialog
-        invoice={viewingInvoice}
-        open={viewingInvoiceId !== null}
+        listItem={viewingInvoice}
+        open={viewingInvoice !== null}
         onOpenChange={(open) => {
-          if (!open) setViewingInvoiceId(null);
+          if (!open) setViewingInvoice(null);
         }}
       />
     </>

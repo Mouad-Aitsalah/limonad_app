@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { AuthServiceError } from "@/lib/server/auth";
 import { getStockLevels, getStockSummary } from "@/lib/server/stock-levels";
 
 export async function GET() {
@@ -9,7 +10,11 @@ export async function GET() {
       getStockSummary(),
     ]);
     return NextResponse.json({ levels, summary });
-  } catch {
+  } catch (error) {
+    if (error instanceof AuthServiceError) {
+      return NextResponse.json({ message: error.message }, { status: error.status });
+    }
+
     return NextResponse.json(
       { message: "Impossible de charger le stock." },
       { status: 500 },

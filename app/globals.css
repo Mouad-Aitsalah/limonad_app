@@ -518,15 +518,20 @@ body {
     border-top: 1px dashed #000;
   }
 
+  /* Product columns, left to right: Qte / Designation / Prix TTC / Montant
+     (see components/pos/receipt-print.tsx - shared by POS admin and POS
+     chauffeur). Designation gets the flexible remainder; Qte stays a small
+     fixed column so a long product name never pushes into the price
+     columns - it clips instead (see .receipt-print-product below). */
   .receipt-print-grid {
     display: grid;
-    grid-template-columns: 16mm 15mm minmax(0, 1fr) 7mm;
+    grid-template-columns: 7mm minmax(0, 1fr) 15mm 16mm;
     gap: 1mm;
     align-items: start;
   }
 
   .receipt-print-area[data-paper="58"] .receipt-print-grid {
-    grid-template-columns: 13mm 13mm minmax(0, 1fr) 5mm;
+    grid-template-columns: 5mm minmax(0, 1fr) 13mm 13mm;
     gap: 0.7mm;
   }
 
@@ -545,6 +550,11 @@ body {
     font-variant-numeric: tabular-nums;
   }
 
+  .receipt-print-qty {
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
   .receipt-print-product {
     max-height: 2.5em;
     overflow: hidden;
@@ -552,12 +562,12 @@ body {
   }
 
   .receipt-print-discount {
-    margin-left: 32mm;
+    margin-left: 8mm;
     font-size: 9px;
   }
 
   .receipt-print-area[data-paper="58"] .receipt-print-discount {
-    margin-left: 27mm;
+    margin-left: 5.7mm;
   }
 
   .receipt-print-total {

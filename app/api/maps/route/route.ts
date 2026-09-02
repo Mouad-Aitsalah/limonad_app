@@ -4,8 +4,11 @@ import { ZodError } from "zod";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getDrivingRouteForCurrentDriver } from "@/lib/server/google-routes";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const payload = await request.json();
     return NextResponse.json({

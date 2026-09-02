@@ -8,6 +8,7 @@ import {
 } from "@/lib/server/cash-deposits";
 import { OperationsServiceError } from "@/lib/server/depots";
 import type { CashDepositHistoryFilters, CashDepositStatus } from "@/types/cash-deposits";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function GET(request: Request) {
   try {
@@ -27,6 +28,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const body = await request.json();
     return NextResponse.json(await createCashDeposit(body), { status: 201 });

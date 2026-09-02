@@ -7,10 +7,13 @@ import {
   validateEmployeeTransaction,
 } from "@/lib/server/employee-transactions";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   try {
     const body = (await request.json()) as { action?: "validate" | "cancel" };

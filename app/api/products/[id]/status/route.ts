@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { ProductServiceError, setProductStatus } from "@/lib/server/products";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 type ProductStatusRouteContext = {
   params: Promise<{ id: string }>;
@@ -12,6 +13,8 @@ const statusSchema = z.object({
 });
 
 export async function PATCH(request: Request, context: ProductStatusRouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   const parsed = statusSchema.safeParse(await request.json());
 

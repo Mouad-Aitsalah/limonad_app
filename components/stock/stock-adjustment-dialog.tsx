@@ -4,6 +4,7 @@ import * as React from "react";
 import { SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ProductCombobox } from "@/components/commerce/product-combobox";
 import {
   Dialog,
   DialogContent,
@@ -53,6 +54,10 @@ export function StockAdjustmentDialog({
 }: StockAdjustmentDialogProps) {
   const [open, setOpen] = React.useState(false);
   const [values, setValues] = React.useState(defaultValues);
+  // Phase 3 CRITICAL #1 fix: ProductCombobox needs the full ProductDto (for
+  // display), not just the id `values.productId` already tracks - kept in
+  // sync with it below, cleared together on close/submit.
+  const [selectedProduct, setSelectedProduct] = React.useState<ProductDto | null>(null);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [saving, setSaving] = React.useState(false);
 
@@ -86,6 +91,7 @@ export function StockAdjustmentDialog({
 
     onAdjusted(payload.level);
     setValues(defaultValues);
+    setSelectedProduct(null);
     setErrors({});
     setOpen(false);
   }
@@ -106,23 +112,15 @@ export function StockAdjustmentDialog({
         <form onSubmit={submit} className="space-y-4">
           {errors.form && <p className="text-sm text-destructive">{errors.form}</p>}
           <Field label="Produit" error={errors.productId}>
-            <Select value={values.productId || null} onValueChange={(value) => update("productId", value ?? "")}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Selectionner un produit">
-                  {(value: string | null) =>
-                    products.find((product) => product.id === value)?.name ??
-                    "Selectionner un produit"
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {products.map((product) => (
-                  <SelectItem key={product.id} value={product.id}>
-                    {product.reference} - {product.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <ProductCombobox
+              value={selectedProduct}
+              onChange={(product) => {
+                setSelectedProduct(product);
+                update("productId", product?.id ?? "");
+              }}
+              preload={products}
+              label={null}
+            />
           </Field>
           <Field label="Emplacement" error={errors.locationId}>
             <Select value={values.locationId || null} onValueChange={(value) => update("locationId", value ?? "")}>

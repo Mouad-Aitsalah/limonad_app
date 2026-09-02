@@ -6,7 +6,37 @@ import { MapPin, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { DriverTourCustomerDto } from "@/types/operations-dto";
+import type { CustomerDto, DriverTourCustomerDto } from "@/types/operations-dto";
+
+const SEARCH_DEBOUNCE_MS = 300;
+
+/**
+ * Phase 3 CRITICAL #2 fix: `customers` is now a small, tour-scoped preload
+ * (see buildCurrentDriverTourState's doc comment) instead of every customer
+ * this driver can access - a customer not yet approached on this tour
+ * ("PENDING", the common case) no longer appears in it. This debounced
+ * search (GET /api/customers/search, already driver-scoped - see
+ * searchCustomers's doc comment in lib/server/customers.ts) lets the driver
+ * still find and pick any of them, exactly like section 5 of the chantier
+ * asks: reuse the existing POS search endpoint, never preload the full
+ * catalog just to make this picker work.
+ */
+function projectCustomerAsPending(customer: CustomerDto): DriverTourCustomerDto {
+  return {
+    id: customer.id,
+    code: customer.code,
+    name: customer.name,
+    phone: customer.phone,
+    address: customer.address,
+    city: customer.city,
+    latitude: customer.latitude ?? null,
+    longitude: customer.longitude ?? null,
+    distanceMeters: null,
+    visitStatus: "PENDING",
+    lastEventAt: null,
+    noSaleReason: null,
+  };
+}
 
 const statusLabels: Record<DriverTourCustomerDto["visitStatus"], string> = {
   PENDING: "A visiter",
@@ -32,6 +62,7 @@ export function TourCustomersSheet({
   completedCount,
   onClose,
   onSelectCustomer,
+  onSelectRemoteCustomer,
 }: {
   open: boolean;
   customers: DriverTourCustomerDto[];
@@ -40,8 +71,39 @@ export function TourCustomersSheet({
   completedCount: number;
   onClose: () => void;
   onSelectCustomer: (customerId: string) => void;
+  /** Called instead of onSelectCustomer when the chosen customer came from
+   * search and isn't part of `customers` yet - the caller is responsible for
+   * merging it into the tour's local state (see DriverRuntime's upsertCustomer,
+   * which already does exactly this for a created/edited customer). */
+  onSelectRemoteCustomer: (customer: CustomerDto) => void;
 }) {
   const [search, setSearch] = React.useState("");
+  const [remoteResults, setRemoteResults] = React.useState<{
+    forQuery: string;
+    customers: CustomerDto[];
+  } | null>(null);
+  const trimmedQuery = search.trim();
+
+  React.useEffect(() => {
+    if (!open || !trimmedQuery) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetch(`/api/customers/search?q=${encodeURIComponent(trimmedQuery)}`)
+        .then((response) => (response.ok ? response.json() : { customers: [] }))
+        .then((body: { customers?: CustomerDto[] }) => {
+          if (!cancelled) {
+            setRemoteResults({ forQuery: trimmedQuery, customers: body.customers ?? [] });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setRemoteResults({ forQuery: trimmedQuery, customers: [] });
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [open, trimmedQuery]);
 
   if (!open) {
     return null;
@@ -49,11 +111,12 @@ export function TourCustomersSheet({
 
   function handleClose() {
     setSearch("");
+    setRemoteResults(null);
     onClose();
   }
 
   const normalizedQuery = normalize(search);
-  const filteredCustomers = customers.filter((customer) => {
+  const localMatches = customers.filter((customer) => {
     if (!normalizedQuery) {
       return true;
     }
@@ -62,6 +125,26 @@ export function TourCustomersSheet({
       `${customer.name} ${customer.code} ${customer.phone} ${customer.city} ${customer.address}`,
     ).includes(normalizedQuery);
   });
+  const localIds = new Set(customers.map((customer) => customer.id));
+  const remoteMatches =
+    trimmedQuery && remoteResults?.forQuery === trimmedQuery
+      ? remoteResults.customers.filter((customer) => !localIds.has(customer.id))
+      : [];
+  const searching = Boolean(trimmedQuery) && remoteResults?.forQuery !== trimmedQuery;
+  const filteredCustomers: DriverTourCustomerDto[] = [
+    ...localMatches,
+    ...remoteMatches.map(projectCustomerAsPending),
+  ];
+  const remoteById = new Map(remoteMatches.map((customer) => [customer.id, customer]));
+
+  function selectCustomer(customerId: string) {
+    const remote = remoteById.get(customerId);
+    if (remote) {
+      onSelectRemoteCustomer(remote);
+    } else {
+      onSelectCustomer(customerId);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-[900]">
@@ -99,10 +182,13 @@ export function TourCustomersSheet({
         </div>
 
         <div className="max-h-[60svh] space-y-2 overflow-y-auto">
-          {filteredCustomers.length === 0 ? (
+          {filteredCustomers.length === 0 && !searching ? (
             <div className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
               Aucun client ne correspond a votre recherche.
             </div>
+          ) : null}
+          {searching ? (
+            <p className="px-1 text-xs text-muted-foreground">Recherche en cours...</p>
           ) : null}
 
           {filteredCustomers.map((customer) => {
@@ -178,7 +264,7 @@ export function TourCustomersSheet({
                     size="sm"
                     className="rounded-xl"
                     onClick={() => {
-                      onSelectCustomer(customer.id);
+                      selectCustomer(customer.id);
                       handleClose();
                     }}
                   >

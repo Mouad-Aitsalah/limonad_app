@@ -35,8 +35,18 @@ export async function getCurrentDriverTruck(): Promise<TruckDto | null> {
   return driver?.truck ? mapTruckToDto(driver.truck) : null;
 }
 
+/**
+ * Same allowed roles as the sibling getTrucks() call on the /chargements
+ * page that is this function's only caller today (lib/server/trucks.ts) -
+ * kept identical so this fix does not change who can load that page.
+ * organizationId always comes from the session, never the client, and is
+ * always applied - a driver from another organization can never be
+ * returned here.
+ */
 export async function getDrivers(): Promise<DriverAssignmentDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   return prisma.driver.findMany({
+    where: { organizationId: currentUser.organizationId },
     select: {
       id: true,
       employeeCode: true,

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { ProductOptionDto } from "@/types/product-dto";
 import type {
@@ -205,26 +206,15 @@ function mapCategoryToListItem(category: {
 }
 
 async function nextCategoryCode(
-  tx: Pick<typeof prisma, "category">,
+  tx: Pick<typeof prisma, "category" | "$queryRaw">,
   organizationId: string,
 ) {
-  const categories = await tx.category.findMany({
-    where: {
-      organizationId,
-      code: {
-        startsWith: categoryCodePrefix,
-      },
-    },
-    select: { code: true },
-  });
-
-  const max = categories.reduce((highest, category) => {
-    const match = category.code?.match(/^CAT-(\d+)$/);
-    if (!match) return highest;
-    return Math.max(highest, Number(match[1]));
-  }, 0);
-
-  return `${categoryCodePrefix}${String(max + 1).padStart(3, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.CategoryCode,
+  );
+  return `${categoryCodePrefix}${String(number).padStart(3, "0")}`;
 }
 
 async function ensureUniqueCategoryCode(
@@ -271,19 +261,33 @@ async function ensureUniqueCategoryName(
   }
 }
 
-async function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 3): Promise<T> {
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 40): Promise<T> {
   let attempt = 0;
 
   while (attempt < maxAttempts) {
     try {
       return await operation();
     } catch (error) {
-      const prismaError = error as { code?: string };
+      const prismaError = error as { code?: string; message?: string };
       attempt += 1;
-
-      if (!["P2002", "P2034"].includes(prismaError.code ?? "") || attempt >= maxAttempts) {
+      const isRetryable =
+        ["P2002", "P2034"].includes(prismaError.code ?? "") ||
+        (prismaError.code === "P2010" &&
+          /40001|40P01/.test(prismaError.message ?? ""));
+      if (!isRetryable || attempt >= maxAttempts) {
         throw error;
       }
+      // Jittered backoff: under N-way true-simultaneous contention on the
+      // same counter row, retrying instantly just re-collides with the same
+      // herd (empirically verified: without this, 50-100-way concurrent
+      // reserveDocumentSequence() calls exhausted immediate retries - see
+      // scripts/_tmp-test-real-generators.ts in the Phase 3 numbering
+      // chantier report).
+      await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
     }
   }
 

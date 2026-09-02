@@ -68,6 +68,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
     markCustomerHandled,
     refreshCurrentTour,
     replaceCurrentTour,
+    upsertCustomer,
   } = useDriverRuntime();
   const [returnedTourState, setReturnedTourState] =
     React.useState<CurrentDriverTourDto | null>(null);
@@ -172,7 +173,13 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
     (customer) =>
       customer.visitStatus === "DELIVERED" || customer.visitStatus === "NO_SALE",
   ).length;
-  const remainingCustomersCount = Math.max(0, customers.length - completedCount);
+  // Phase 3 CRITICAL #2 fix: `customers`/`state.customers` is now bounded to
+  // this tour's in-play visits (see buildCurrentDriverTourState's doc
+  // comment) so it can no longer stand in for "every customer this driver
+  // can access" - totalAccessibleCustomers (a cheap server-side count) is
+  // the correct denominator for the "X/Y clients" progress indicators below.
+  const totalAccessibleCustomers = state.summary?.totalAccessibleCustomers ?? customers.length;
+  const remainingCustomersCount = Math.max(0, totalAccessibleCustomers - completedCount);
 
   async function refreshTour(options?: { syncLocalState?: boolean }) {
     const nextTour = await refreshCurrentTour();
@@ -488,7 +495,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
 
             <div className="pointer-events-none absolute left-3 right-3 top-3 z-[600] flex justify-between gap-3 sm:left-4 sm:right-4">
               <div className="pointer-events-auto rounded-full bg-background/92 px-3 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur">
-                {completedCount}/{state.customers.length || 0} clients •{" "}
+                {completedCount}/{totalAccessibleCustomers || 0} clients •{" "}
                 {formatCurrency(state.summary?.totalSalesTTC ?? 0)}
               </div>
               {selectedCustomer ? (
@@ -519,7 +526,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
                 <div className="order-1 self-end md:order-2">
                   <TourMapActions
                     completedCount={completedCount}
-                    totalCount={customers.length}
+                    totalCount={totalAccessibleCustomers}
                     salesCount={state.summary?.salesCount ?? 0}
                     totalSalesTTC={state.summary?.totalSalesTTC ?? 0}
                     canStart={state.canStart}
@@ -663,7 +670,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
                   <MetricRow
                     icon={Clock3}
                     label="Clients"
-                    value={`${completedCount}/${customers.length || 0}`}
+                    value={`${completedCount}/${totalAccessibleCustomers || 0}`}
                   />
                   <MetricRow
                     icon={Clock3}
@@ -764,6 +771,15 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
         completedCount={completedCount}
         onClose={() => setCustomersSheetOpen(false)}
         onSelectCustomer={setUserSelectedCustomerId}
+        onSelectRemoteCustomer={(customer) => {
+          // Found via search, outside the tour's small bounded preload -
+          // merge it into the runtime's current-tour state (same helper
+          // already used when a customer is created/edited from
+          // /driver/clients) so it renders/selects exactly like any other
+          // tour customer from here on.
+          upsertCustomer(customer);
+          setUserSelectedCustomerId(customer.id);
+        }}
       />
 
       <Dialog open={showReturnConfirmation} onOpenChange={setShowReturnConfirmation}>
@@ -792,7 +808,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
             />
             <StartInfoCard
               label="Clients"
-              value={`${completedCount}/${customers.length || 0}`}
+              value={`${completedCount}/${totalAccessibleCustomers || 0}`}
               hint={
                 remainingCustomersCount > 0
                   ? `${remainingCustomersCount} non visite${remainingCustomersCount > 1 ? "s" : ""}`

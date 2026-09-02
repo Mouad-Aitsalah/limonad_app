@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { CommerceProductGrid } from "@/components/commerce/product-grid";
 import { CommerceProductSearch } from "@/components/commerce/product-search";
+import { useProductPickerSearch } from "@/components/commerce/use-product-picker-search";
 import { CreditNoteCart } from "@/components/credit-notes/credit-note-cart";
 import { CreditNoteSummary } from "@/components/credit-notes/credit-note-summary";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { creditNoteReasonLabels } from "@/lib/credit-note-calculations";
+import { roundMoney } from "@/lib/money";
 import type { CurrentUser } from "@/types/auth";
 import type { CreditNote, CreditNoteReason, CreateCreditNoteInput } from "@/types/credit-note";
 import type { CustomerDto, StockLocationDto } from "@/types/operations-dto";
@@ -27,6 +29,14 @@ import type { ProductDto } from "@/types/product-dto";
 
 type CartLine = {
   productId: string;
+  // Phase 3 CRITICAL #1 fix: captured once, from the full ProductDto
+  // available at the moment a product is picked (addProduct) or from the
+  // draft's own already-saved line (editing mode) - cartLines below no
+  // longer needs to re-resolve these against `products`, which is now a
+  // small bounded preload/search result set, not the full catalog.
+  productName: string;
+  productReference: string;
+  productUnit: string;
   quantityReturned: number;
   unitPrice: number;
   discountPercent: number;
@@ -63,14 +73,6 @@ export function CreditNotePosView({
   onSaved,
   onClearEditing,
 }: CreditNotePosViewProps) {
-  const activeProducts = React.useMemo(
-    () =>
-      [...products]
-        .filter((product) => product.status === "ACTIVE")
-        .sort((a, b) => a.name.localeCompare(b.name, "fr-FR")),
-    [products],
-  );
-
   const activeLocations = React.useMemo(
     () =>
       [...locations]
@@ -120,11 +122,6 @@ export function CreditNotePosView({
   const [cart, setCart] = React.useState<CartLine[]>(initialFormState.cart);
   const [busy, setBusy] = React.useState(false);
 
-  const productMap = React.useMemo(
-    () => new Map(activeProducts.map((product) => [product.id, product])),
-    [activeProducts],
-  );
-
   const selectedCustomer = customers.find((customer) => customer.id === customerId) ?? null;
   const selectedDestination =
     activeLocations.find((location) => location.id === destinationId) ?? null;
@@ -139,42 +136,32 @@ export function CreditNotePosView({
       .slice(0, 25);
   }, [customerSearch, customers]);
 
-  const filteredProducts = React.useMemo(() => {
-    const query = normalizeSearch(search);
-    if (!query) return activeProducts;
+  // Phase 3 CRITICAL #1 fix: `products` is now a small bounded preload
+  // (getProductPickerPreload, already ACTIVE-only) - anything beyond it
+  // comes from GET /api/products/search instead. See
+  // use-product-picker-search.ts's doc comment.
+  const { results: filteredProducts } = useProductPickerSearch(products, search);
 
-    return activeProducts.filter((product) =>
-      normalizeSearch(`${product.name} ${product.reference} ${product.barcode ?? ""}`).includes(
-        query,
-      ),
-    );
-  }, [activeProducts, search]);
-
+  // No product lookup needed here anymore - every CartLine already carries
+  // its own display fields, captured once at addProduct() time or from the
+  // draft's own saved line (see CartLine's doc comment).
   const cartLines = React.useMemo(() => {
-    return cart.flatMap((line) => {
-      const product = productMap.get(line.productId);
-      if (!product) return [];
-
+    return cart.map((line) => {
       const baseHT = line.unitPrice * line.quantityReturned;
       const discountAmount = baseHT * (line.discountPercent / 100);
       const totalHT = roundMoney(baseHT - discountAmount);
       const taxAmount = roundMoney(totalHT * (line.taxRate / 100));
       const totalTTC = roundMoney(totalHT + taxAmount);
 
-      return [
-        {
-          ...line,
-          productName: product.name,
-          productReference: product.reference,
-          productUnit: product.unit,
-          totalHT,
-          discountAmount: roundMoney(discountAmount),
-          taxAmount,
-          totalTTC,
-        },
-      ];
+      return {
+        ...line,
+        totalHT,
+        discountAmount: roundMoney(discountAmount),
+        taxAmount,
+        totalTTC,
+      };
     });
-  }, [cart, productMap]);
+  }, [cart]);
 
   const totals = React.useMemo(() => {
     return cartLines.reduce(
@@ -218,6 +205,9 @@ export function CreditNotePosView({
         ...current,
         {
           productId: product.id,
+          productName: product.name,
+          productReference: product.reference,
+          productUnit: product.unit,
           quantityReturned: 1,
           unitPrice: product.salePrice,
           discountPercent: 0,
@@ -556,9 +546,6 @@ function normalizeSearch(value: string) {
     .replace(/\s+/g, " ");
 }
 
-function roundMoney(value: number) {
-  return Math.round(value * 100) / 100;
-}
 
 function createFormState(
   editingCreditNote: CreditNote | null | undefined,
@@ -588,6 +575,13 @@ function createFormState(
     comment: editingCreditNote.comment,
     cart: editingCreditNote.lines.map((line) => ({
       productId: line.productId,
+      // Phase 3 CRITICAL #1 fix: embedded directly from the draft's own
+      // saved line (see CreditNoteLine's doc comment) - no longer depends
+      // on `products` (now a small preload/search result set) still
+      // containing this exact product.
+      productName: line.productName ?? "",
+      productReference: line.productReference ?? "",
+      productUnit: line.productUnit ?? "",
       quantityReturned: line.quantityReturned,
       unitPrice: line.unitPrice,
       discountPercent: line.discountPercent,

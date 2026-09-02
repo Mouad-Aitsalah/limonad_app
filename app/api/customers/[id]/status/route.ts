@@ -4,12 +4,15 @@ import { z } from "zod";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { setCustomerStatus } from "@/lib/server/customers";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 const schema = z.object({ status: z.enum(["ACTIVE", "INACTIVE", "BLOCKED"]) });
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   const parsed = schema.safeParse(await request.json());
   if (!parsed.success) {

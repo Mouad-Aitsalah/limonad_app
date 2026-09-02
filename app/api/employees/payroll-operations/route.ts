@@ -7,6 +7,7 @@ import {
   mapEmployeeTransactionError,
 } from "@/lib/server/employee-transactions";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -37,6 +38,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const body = await request.json();
     return NextResponse.json(

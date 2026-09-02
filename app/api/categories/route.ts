@@ -7,6 +7,7 @@ import {
   getCategoryOptions,
 } from "@/lib/server/categories";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function GET() {
   try {
@@ -31,6 +32,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     return NextResponse.json(
       { category: await createCategory(await request.json()) },

@@ -4,7 +4,7 @@ import { ProductsView } from "@/components/produits/products-view";
 import {
   getBrands,
   getCategories,
-  getProducts,
+  getProductsPage,
   getSuppliers,
 } from "@/lib/server/products";
 
@@ -13,8 +13,8 @@ export const metadata: Metadata = {
 };
 
 export default async function ProduitsPage() {
-  const [products, categories, brands, suppliers] = await Promise.all([
-    getProducts(),
+  const [initialPage, categories, brands, suppliers] = await Promise.all([
+    getProductsPage(),
     getCategories(),
     getBrands(),
     getSuppliers(),
@@ -22,7 +22,7 @@ export default async function ProduitsPage() {
 
   return (
     <ProductsView
-      initialProducts={products}
+      initialPage={initialPage}
       categories={categories}
       brands={brands}
       suppliers={suppliers}

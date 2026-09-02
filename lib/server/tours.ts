@@ -2,13 +2,18 @@ import "server-only";
 
 import { z } from "zod";
 
+import { roundMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import type { TourGetPayload } from "@/lib/generated/prisma/models/Tour";
 import { AuthServiceError } from "@/lib/server/auth";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { getClaimableLoadingForTruck, getLoadingByTourId } from "@/lib/server/truck-loadings";
 import type {
+  DiscrepancyDto,
+  TourClosureDto,
+  TourClosureInput,
   TourDto,
   TourMutationInput,
   TourStockCountMutationInput,
@@ -40,9 +45,25 @@ const tourInclude = {
       updatedAt: true,
     },
   },
+  closure: {
+    include: {
+      controlledBy: { select: { fullName: true } },
+      validatedBy: { select: { fullName: true } },
+      discrepancies: {
+        include: {
+          product: { select: { reference: true, name: true } },
+          declaredBy: { select: { fullName: true } },
+          validatedBy: { select: { fullName: true } },
+        },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  },
 } as const;
 
 type TourWithRelations = TourGetPayload<{ include: typeof tourInclude }>;
+type TourClosureWithRelations = NonNullable<TourWithRelations["closure"]>;
+type DiscrepancyWithRelations = TourClosureWithRelations["discrepancies"][number];
 
 export const tourMutationSchema = z.object({
   date: z.coerce.date({ error: "La date est obligatoire." }),
@@ -61,6 +82,47 @@ const tourStockCountMutationSchema = z.object({
     }),
   ),
 });
+
+const tourClosureInputSchema = z.object({
+  receivedCash: z.coerce.number().min(0, "Le montant recu ne peut pas etre negatif.").nullable().optional(),
+});
+
+function mapDiscrepancyToDto(discrepancy: DiscrepancyWithRelations): DiscrepancyDto {
+  return {
+    id: discrepancy.id,
+    type: discrepancy.type,
+    productId: discrepancy.productId,
+    productReference: discrepancy.product?.reference ?? null,
+    productName: discrepancy.product?.name ?? null,
+    quantity: discrepancy.quantity,
+    amount: discrepancy.amount?.toNumber() ?? null,
+    reason: discrepancy.reason,
+    justification: discrepancy.justification,
+    status: discrepancy.status,
+    declaredByUserName: discrepancy.declaredBy.fullName,
+    validatedByUserName: discrepancy.validatedBy?.fullName ?? null,
+    validatedAt: discrepancy.validatedAt?.toISOString() ?? null,
+    createdAt: discrepancy.createdAt.toISOString(),
+  };
+}
+
+function mapClosureToDto(closure: TourClosureWithRelations): TourClosureDto {
+  return {
+    id: closure.id,
+    tourId: closure.tourId,
+    theoreticalStockValue: closure.theoreticalStockValue?.toNumber() ?? null,
+    actualStockValue: closure.actualStockValue?.toNumber() ?? null,
+    expectedCash: closure.expectedCash.toNumber(),
+    receivedCash: closure.receivedCash.toNumber(),
+    cashDifference: closure.cashDifference.toNumber(),
+    status: closure.status,
+    controlledByUserName: closure.controlledBy?.fullName ?? null,
+    validatedByUserName: closure.validatedBy?.fullName ?? null,
+    discrepancies: closure.discrepancies.map(mapDiscrepancyToDto),
+    createdAt: closure.createdAt.toISOString(),
+    updatedAt: closure.updatedAt.toISOString(),
+  };
+}
 
 export async function mapTourToDto(tour: TourWithRelations): Promise<TourDto> {
   const [loading, stockSheet] = await Promise.all([
@@ -85,6 +147,7 @@ export async function mapTourToDto(tour: TourWithRelations): Promise<TourDto> {
     },
     loading,
     stockSheet,
+    closure: tour.closure ? mapClosureToDto(tour.closure) : null,
     createdByUserName: tour.createdBy.fullName,
     createdAt: tour.createdAt.toISOString(),
     updatedAt: tour.updatedAt.toISOString(),
@@ -647,6 +710,272 @@ export async function markCurrentDriverTourReturned(): Promise<TourDto> {
   return getTourById(latestClosedTour.id);
 }
 
+/**
+ * "Cloturer la tournee" - the missing half of F1 (Phase 2 audit). Before
+ * this, markTourReturned only ever parked a tour at WAITING_FOR_CLOSURE
+ * forever: no TourClosure/Discrepancy was ever created and no tour ever
+ * reached CLOSED, despite the schema fully supporting it.
+ *
+ * Reuses the existing models exactly as they are - no second, competing
+ * stock-counting or closure model is introduced:
+ *  - getTourStockSheet (unchanged) already computes, per product, exactly
+ *    theoreticalQuantity = initial + loaded + reloaded - sold and
+ *    differenceQuantity = actualQuantity - theoreticalQuantity - the same
+ *    numbers already shown on the tour detail page. This function does not
+ *    recompute that math, it consumes it.
+ *  - "actualQuantity" (the "reel" side) still comes exclusively from
+ *    TourStockCount, still entered exclusively via the existing
+ *    updateTourStockCounts - no new counting input is introduced here.
+ *  - TourClosure / Discrepancy (schema already had them, both were simply
+ *    never written by any code path) are populated with real, computed
+ *    values instead of staying permanently empty.
+ *
+ * "Retours valides" are deliberately NOT added as a term: verified (Phase 2
+ * audit + reconfirmed here) that no code path currently credits a truck's
+ * stock back via CreditNote during a tour - manual credit notes are
+ * admin/depot_manager/cashier-only and, in practice, target a depot
+ * location. getTourStockSheet's own formula has the same omission, so this
+ * stays consistent with what the tour detail page already shows. If a
+ * driver-return-to-truck flow is ever built, both this and
+ * getTourStockSheet must be revisited together.
+ *
+ * StockLevel/StockMovement are NEVER written here: a discrepancy is
+ * recorded for a human to review, never silently auto-corrected. The only
+ * project precedent for auto-adjusting StockLevel from a count is
+ * closeLoading/finalizeInventory's "quantite reelle" flows, which are
+ * separate, explicit, user-triggered actions - closing a tour is not one of
+ * them unless a future decision says otherwise.
+ */
+export async function closeTour(
+  tourId: string,
+  input: TourClosureInput = {},
+): Promise<TourDto> {
+  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const parsed = tourClosureInputSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new OperationsServiceError(
+      "Certains champs sont invalides.",
+      422,
+      Object.fromEntries(
+        parsed.error.issues.map((issue) => [issue.path.join(".") || "form", issue.message]),
+      ),
+    );
+  }
+
+  try {
+    await withTourSerializableRetry(() =>
+      prisma.$transaction(
+        async (tx) => {
+          const current = await tx.tour.findFirst({
+            where: { id: tourId, organizationId: user.organizationId },
+            include: tourInclude,
+          });
+          if (!current) throw new OperationsServiceError("Fiche journaliere introuvable.", 404);
+
+          // Idempotence: a retried/duplicate "Cloturer" click, or two admins
+          // racing each other, must never produce two closures. The status
+          // guard handles the common case; if two transactions somehow both
+          // pass it (a genuine simultaneous race), Serializable isolation
+          // aborts one with P2034 on the Tour row itself (both write it),
+          // and TourClosure.tourId's existing @unique index is the last-line
+          // defense if it ever got past that (P2002). withTourSerializableRetry
+          // retries both codes, and the retried attempt re-reads status here
+          // - by then CLOSED - and returns cleanly instead of erroring.
+          if (current.status === "CLOSED") {
+            return;
+          }
+          if (current.status !== "WAITING_FOR_CLOSURE") {
+            throw new OperationsServiceError(
+              "Seule une tournee en attente de cloture peut etre cloturee.",
+              409,
+            );
+          }
+
+          const stockSheet = await getTourStockSheet(current);
+          // Every product the tour theoretically still carries must have
+          // been counted (via updateTourStockCounts) before closing - same
+          // "every product with truck stock must be counted" convention
+          // already enforced by closeLoading (truck-loadings.ts).
+          const requiredLines = stockSheet.lines.filter((line) => line.theoreticalQuantity !== 0);
+          const uncounted = requiredLines.filter((line) => line.actualQuantity === null);
+          if (uncounted.length > 0) {
+            throw new OperationsServiceError(
+              "Veuillez saisir la quantite reelle pour tous les produits avant de cloturer la tournee.",
+              422,
+              Object.fromEntries(
+                uncounted.map((line) => [line.productId, "Quantite reelle manquante."]),
+              ),
+            );
+          }
+
+          const productIds = requiredLines.map((line) => line.productId);
+          const products = productIds.length
+            ? await tx.product.findMany({
+                where: { id: { in: productIds }, organizationId: user.organizationId },
+                select: { id: true, purchasePrice: true },
+              })
+            : [];
+          const unitCostByProductId = new Map(
+            products.map((product) => [product.id, product.purchasePrice.toNumber()]),
+          );
+
+          let theoreticalStockValue = 0;
+          let actualStockValue = 0;
+          const stockDiscrepancies: {
+            productId: string;
+            quantity: number;
+            amount: number;
+            justification: string;
+          }[] = [];
+
+          for (const line of requiredLines) {
+            const unitCost = unitCostByProductId.get(line.productId) ?? 0;
+            const theoreticalQuantity = line.theoreticalQuantity;
+            // Guaranteed non-null by the uncounted check above.
+            const actualQuantity = line.actualQuantity as number;
+            const differenceQuantity = actualQuantity - theoreticalQuantity;
+
+            theoreticalStockValue += theoreticalQuantity * unitCost;
+            actualStockValue += actualQuantity * unitCost;
+
+            if (differenceQuantity !== 0) {
+              const discrepancyAmount = roundMoney(differenceQuantity * unitCost);
+              // F8-D: a large-but-plausible stock difference times a large
+              // unit cost is exactly the case a bound on quantity alone
+              // would miss (see lib/money.ts#isWithinMoneyRange).
+              assertMoneyRange(discrepancyAmount, "discrepancy.amount");
+              stockDiscrepancies.push({
+                productId: line.productId,
+                quantity: differenceQuantity,
+                amount: discrepancyAmount,
+                justification:
+                  `Theorique ${theoreticalQuantity}, reel ${actualQuantity}, ` +
+                  `ecart ${differenceQuantity > 0 ? "+" : ""}${differenceQuantity} ${line.productUnit}.`,
+              });
+            }
+          }
+
+          // Cash side: expectedCash is a real, derived figure (sum of CASH
+          // payments actually collected on this tour's sales) - never
+          // guessed. receivedCash defaults to expectedCash (no cash
+          // discrepancy) when not provided: COMDIS has no dedicated
+          // cash-counting UI yet, so this never fabricates a gap that wasn't
+          // actually reported.
+          const cashAggregate = await tx.payment.aggregate({
+            where: {
+              method: "CASH",
+              sale: { tourId: current.id, organizationId: user.organizationId },
+            },
+            _sum: { amount: true },
+          });
+          const expectedCash = roundMoney(cashAggregate._sum.amount?.toNumber() ?? 0);
+          const receivedCash = roundMoney(parsed.data.receivedCash ?? expectedCash);
+          const cashDifference = roundMoney(receivedCash - expectedCash);
+
+          const hasStockDiscrepancy = stockDiscrepancies.length > 0;
+          const hasCashDiscrepancy = cashDifference !== 0;
+          const needsReview = hasStockDiscrepancy || hasCashDiscrepancy;
+          const now = new Date();
+
+          // F8-D: valorisations persisted as Decimal(12,2), checked before
+          // the first write in this block (tourClosure.create just below).
+          // theoreticalStockValue/actualStockValue are raw sums of
+          // quantity x unitCost across every line - each line's own
+          // grossHT-equivalent is never checked individually before this
+          // point, so the aggregate is the right (and sufficient) place.
+          const roundedTheoreticalStockValue = roundMoney(theoreticalStockValue);
+          const roundedActualStockValue = roundMoney(actualStockValue);
+          assertMoneyRange(roundedTheoreticalStockValue, "tourClosure.theoreticalStockValue");
+          assertMoneyRange(roundedActualStockValue, "tourClosure.actualStockValue");
+          assertMoneyRange(expectedCash, "tourClosure.expectedCash");
+          assertMoneyRange(receivedCash, "tourClosure.receivedCash");
+          assertMoneyRange(cashDifference, "tourClosure.cashDifference");
+
+          const closure = await tx.tourClosure.create({
+            data: {
+              organizationId: user.organizationId,
+              tourId: current.id,
+              theoreticalStockValue: roundedTheoreticalStockValue,
+              actualStockValue: roundedActualStockValue,
+              expectedCash,
+              receivedCash,
+              cashDifference,
+              // Nothing to review => straight to VALIDATED (matches
+              // "reel = theorique => aucun ecart, comportement attendu").
+              // Otherwise WAITING_FOR_DIFFERENCE_VALIDATION until a human
+              // reviews the declared Discrepancy rows below - that review
+              // step is not part of this action.
+              status: needsReview ? "WAITING_FOR_DIFFERENCE_VALIDATION" : "VALIDATED",
+              controlledByUserId: user.id,
+              validatedByUserId: needsReview ? null : user.id,
+            },
+          });
+
+          const discrepancyRows = [
+            ...stockDiscrepancies.map((row) => ({
+              organizationId: user.organizationId,
+              tourId: current.id,
+              tourClosureId: closure.id,
+              // Best-effort default classification pending human review:
+              // a shortfall reads as MISSING_GOODS, a surplus as INPUT_ERROR
+              // (closest fit among the existing enum values for "extra
+              // count, cause not yet known") - both stay DECLARED, not a
+              // final diagnosis.
+              type: row.quantity < 0 ? ("MISSING_GOODS" as const) : ("INPUT_ERROR" as const),
+              productId: row.productId,
+              quantity: row.quantity,
+              amount: row.amount,
+              reason: "Ecart de stock detecte a la cloture de tournee",
+              justification: row.justification,
+              status: "DECLARED" as const,
+              declaredByUserId: user.id,
+              driverId: current.driverId,
+            })),
+            ...(hasCashDiscrepancy
+              ? [
+                  {
+                    organizationId: user.organizationId,
+                    tourId: current.id,
+                    tourClosureId: closure.id,
+                    type: "CASH_ERROR" as const,
+                    productId: null,
+                    quantity: null,
+                    amount: cashDifference,
+                    reason: "Ecart de caisse detecte a la cloture de tournee",
+                    justification:
+                      `Especes attendues ${expectedCash}, especes recues ${receivedCash}, ` +
+                      `ecart ${cashDifference > 0 ? "+" : ""}${cashDifference}.`,
+                    status: "DECLARED" as const,
+                    declaredByUserId: user.id,
+                    driverId: current.driverId,
+                  },
+                ]
+              : []),
+          ];
+
+          if (discrepancyRows.length > 0) {
+            await tx.discrepancy.createMany({ data: discrepancyRows });
+          }
+
+          // Truck status was already moved to AVAILABLE by markTourReturned
+          // when the tour left IN_PROGRESS - not repeated here.
+          await tx.tour.update({
+            where: { id: current.id },
+            data: { status: "CLOSED", closedAt: now },
+          });
+        },
+        { isolationLevel: "Serializable", timeout: 15000 },
+      ),
+    );
+  } catch (error) {
+    throw mapTourError(error);
+  }
+
+  const updated = await getTourRecordById(tourId, user.organizationId);
+  if (!updated) throw new OperationsServiceError("Fiche journaliere introuvable.", 404);
+  return mapTourToDto(updated);
+}
+
 export async function getActiveTourForDriver(
   driverId: string,
   organizationId: string,
@@ -882,7 +1211,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
   const tourStartedAt = tour.createdAt;
   const ownLoadingId = tour.loading?.id ?? null;
 
-  const [loadingLines, openingMovements, reloadingMovements, saleLines, stockCounts, currentLevels] =
+  const [loadingLines, openingMovements, reloadingMovements, saleLines, driverReturnLines, stockCounts, currentLevels] =
     await Promise.all([
       tour.loading?.id
         ? prisma.truckLoadingLine.findMany({
@@ -939,6 +1268,25 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
             select: { id: true, reference: true, name: true, unit: true },
           },
         },
+      }),
+      // F4: a customer return the driver physically took back onto THIS
+      // truck during THIS tour - CreditNote.tourId is a direct, authoritative
+      // FK (see createDriverReturn in lib/server/credit-notes.ts), never a
+      // time-window heuristic, so this can never pick up a depot return, a
+      // return from another tour, or one made after this tour ended (that
+      // path structurally requires an IN_PROGRESS tour to even be created).
+      // status: VALIDATED only - a reversed driver return gives the
+      // quantity back, so it must stop counting here too, same rule as
+      // computeAlreadyReturnedValidated in credit-notes.ts.
+      prisma.creditNoteLine.findMany({
+        where: {
+          creditNote: {
+            tourId: tour.id,
+            organizationId: tour.organizationId,
+            status: "VALIDATED",
+          },
+        },
+        select: { productId: true, quantity: true },
       }),
       prisma.tourStockCount.findMany({
         where: { tourId: tour.id },
@@ -999,6 +1347,14 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
     soldQuantities.set(line.productId, (soldQuantities.get(line.productId) ?? 0) + line.quantity);
   }
 
+  const returnedQuantities = new Map<string, number>();
+  for (const line of driverReturnLines) {
+    returnedQuantities.set(
+      line.productId,
+      (returnedQuantities.get(line.productId) ?? 0) + line.quantity,
+    );
+  }
+
   const countsByProductId = new Map(
     stockCounts.map((count) => [
       count.productId,
@@ -1015,6 +1371,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
   for (const productId of loadedQuantities.keys()) productIds.add(productId);
   for (const productId of reloadedQuantities.keys()) productIds.add(productId);
   for (const productId of soldQuantities.keys()) productIds.add(productId);
+  for (const productId of returnedQuantities.keys()) productIds.add(productId);
   for (const productId of countsByProductId.keys()) productIds.add(productId);
   for (const level of currentLevels) productIds.add(level.productId);
 
@@ -1050,8 +1407,9 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
       const loadedQuantity = loadedQuantities.get(productId) ?? 0;
       const reloadedQuantity = reloadedQuantities.get(productId) ?? 0;
       const soldQuantity = soldQuantities.get(productId) ?? 0;
+      const returnedQuantity = returnedQuantities.get(productId) ?? 0;
       const theoreticalQuantity =
-        initialQuantity + loadedQuantity + reloadedQuantity - soldQuantity;
+        initialQuantity + loadedQuantity + reloadedQuantity - soldQuantity + returnedQuantity;
       const stockCount = countsByProductId.get(productId);
       const actualQuantity = stockCount?.actualQuantity ?? null;
 
@@ -1064,6 +1422,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
         loadedQuantity,
         reloadedQuantity,
         soldQuantity,
+        returnedQuantity,
         theoreticalQuantity,
         actualQuantity,
         differenceQuantity:
@@ -1091,31 +1450,19 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
  * backdated/forward-dated admin tour still gets a code matching its date.
  */
 async function nextTourCode(
-  tx: Pick<typeof prisma, "tour">,
+  tx: Pick<typeof prisma, "tour" | "$queryRaw">,
   organizationId: string,
   date: Date,
 ) {
   const datePart = formatTourCodeDate(date);
   const prefix = `TOUR-${datePart}-`;
-  const tours = await tx.tour.findMany({
-    where: {
-      organizationId,
-      code: {
-        startsWith: prefix,
-      },
-    },
-    select: { code: true },
-  });
-
-  const codePattern = new RegExp(`^${prefix}(\\d+)$`);
-  const highestSequence = tours.reduce((highest, tour) => {
-    const sequence = tour.code.match(codePattern)?.[1];
-    if (!sequence) return highest;
-    return Math.max(highest, Number.parseInt(sequence, 10));
-  }, 0);
-  const nextSequence = highestSequence + 1;
-
-  return `${prefix}${String(nextSequence).padStart(3, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.TourCode,
+    datePart,
+  );
+  return `${prefix}${String(number).padStart(3, "0")}`;
 }
 
 function formatTourCodeDate(date: Date) {
@@ -1140,6 +1487,17 @@ function mapTourError(error: unknown) {
       );
     }
 
+    if (targetText.includes("tourclosure") || targetText.includes("tourid")) {
+      // TourClosure.tourId is @unique - last-line defense (see closeTour's
+      // comment) if withTourSerializableRetry's retries are ever exhausted
+      // under extreme same-tour contention. Genuinely not an error from the
+      // caller's point of view: the tour IS closed.
+      return new OperationsServiceError(
+        "Cette tournee est deja cloturee.",
+        409,
+      );
+    }
+
     return new OperationsServiceError(
       "Une fiche journaliere existe deja pour ce camion a cette date.",
       409,
@@ -1151,9 +1509,13 @@ function mapTourError(error: unknown) {
   return new OperationsServiceError("Une erreur est survenue.", 500);
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function withTourSerializableRetry<T>(
   operation: () => Promise<T>,
-  maxAttempts = 3,
+  maxAttempts = 40,
 ): Promise<T> {
   let attempt = 0;
 
@@ -1161,12 +1523,22 @@ async function withTourSerializableRetry<T>(
     try {
       return await operation();
     } catch (error) {
-      const prismaError = error as { code?: string };
+      const prismaError = error as { code?: string; message?: string };
       attempt += 1;
-
-      if (!["P2002", "P2034"].includes(prismaError.code ?? "") || attempt >= maxAttempts) {
+      const isRetryable =
+        ["P2002", "P2034"].includes(prismaError.code ?? "") ||
+        (prismaError.code === "P2010" &&
+          /40001|40P01/.test(prismaError.message ?? ""));
+      if (!isRetryable || attempt >= maxAttempts) {
         throw error;
       }
+      // Jittered backoff: under N-way true-simultaneous contention on the
+      // same counter row, retrying instantly just re-collides with the same
+      // herd (empirically verified: without this, 50-100-way concurrent
+      // reserveDocumentSequence() calls exhausted immediate retries - see
+      // scripts/_tmp-test-real-generators.ts in the Phase 3 numbering
+      // chantier report).
+      await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
     }
   }
 

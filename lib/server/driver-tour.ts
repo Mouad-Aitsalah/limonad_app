@@ -5,12 +5,14 @@ import { z } from "zod";
 import { GPS_GAP_MS, GPS_MAX_FUTURE_DRIFT_MS, GPS_MAX_TRUCK_SPEED_KMH } from "@/lib/gps/gps-config";
 import { detectGpsStops } from "@/lib/gps/gps-stop-detection";
 import {
+  boundingBoxAround,
   calculateDistanceMeters,
   calculateSegmentedGpsDistanceMeters,
   hasAcceptableAccuracy,
   isGpsPointReliable,
   splitGpsRouteIntoSegments,
 } from "@/lib/gps/gps-utils";
+import { roundMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
@@ -453,6 +455,23 @@ export async function markCustomerDeliveredOnTour(
   });
 }
 
+const driverCustomerAccessScope = (organizationId: string, driverId: string) => ({
+  organizationId,
+  status: "ACTIVE" as const,
+  OR: [{ creationOrigin: "ADMIN" as const }, { createdByDriverId: driverId }],
+});
+
+const driverCustomerSelect = {
+  id: true,
+  code: true,
+  name: true,
+  phone: true,
+  address: true,
+  city: true,
+  latitude: true,
+  longitude: true,
+} as const;
+
 async function buildCurrentDriverTourState(
   organizationId: string,
   driverId: string,
@@ -472,26 +491,25 @@ async function buildCurrentDriverTourState(
 ): Promise<CurrentDriverTourDto> {
   const tour = await hydrateTourLoading(organizationId, baseTour);
   const skipRouteHistory = options?.skipRouteHistory ?? false;
+  const accessScope = driverCustomerAccessScope(organizationId, driverId);
 
-  const [customers, visits, pingsOrCount, sales] = await Promise.all([
-    prisma.customer.findMany({
-      where: {
-        organizationId,
-        status: "ACTIVE",
-        OR: [{ creationOrigin: "ADMIN" }, { createdByDriverId: driverId }],
-      },
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        phone: true,
-        address: true,
-        city: true,
-        latitude: true,
-        longitude: true,
-      },
-      orderBy: { name: "asc" },
-    }),
+  // Phase 3 CRITICAL #2 fix: this used to fetch EVERY customer this driver
+  // can access (org-wide ADMIN-origin + their own) on every call - including
+  // every GPS ping (via recordDriverLocationForDriver, below) - measured
+  // 7.4s/17.6MB at 100k customers. A tour has no fixed, pre-planned stop
+  // list (see TourCustomerVisit's doc comment): a customer only becomes
+  // relevant to THIS tour once a visit row exists for them (created by
+  // upsertNearbyVisit on GPS proximity, or by confirmCurrentDriverArrival/
+  // markCurrentDriverNoSale/a driver sale) - so `customers` below is now
+  // bounded to exactly that "in play" set, which stays naturally small
+  // (a handful to a few dozen stops a day) regardless of catalog size.
+  // `totalAccessibleCustomers` (a cheap count(), not a row fetch) replaces
+  // `customers.length` as the "X/Y clients" progress denominator the UI
+  // used to compute from the full list - see DriverTourSummaryDto. A
+  // customer not yet "in play" is still fully reachable: the "Choisir un
+  // client" sheet falls back to GET /api/customers/search (searchCustomers,
+  // already driver-scoped) for anyone outside this bounded set.
+  const [visits, pingsOrCount, sales, totalAccessibleCustomers] = await Promise.all([
     prisma.tourCustomerVisit.findMany({
       where: { tourId: tour.id },
       orderBy: { updatedAt: "desc" },
@@ -514,7 +532,20 @@ async function buildCurrentDriverTourState(
         totalTTC: true,
       },
     }),
+    prisma.customer.count({ where: accessScope }),
   ]);
+
+  const inPlayCustomerIds = new Set<string>();
+  for (const visit of visits) inPlayCustomerIds.add(visit.customerId);
+  for (const sale of sales) if (sale.customerId) inPlayCustomerIds.add(sale.customerId);
+
+  const customers = inPlayCustomerIds.size > 0
+    ? await prisma.customer.findMany({
+        where: { ...accessScope, id: { in: [...inPlayCustomerIds] } },
+        select: driverCustomerSelect,
+        orderBy: { name: "asc" },
+      })
+    : [];
 
   const pointCount = typeof pingsOrCount === "number" ? pingsOrCount : pingsOrCount.length;
   const rawRoute: DriverTourPositionDto[] = typeof pingsOrCount === "number"
@@ -582,7 +613,14 @@ async function buildCurrentDriverTourState(
 
   const stops = skipRouteHistory ? [] : detectGpsStops(route);
   const proximity = resolveProximity(driverCustomers);
-  const summary = buildTourSummary(tour, route, driverCustomers, sales, pointCount);
+  const summary = buildTourSummary(
+    tour,
+    route,
+    driverCustomers,
+    sales,
+    pointCount,
+    totalAccessibleCustomers,
+  );
 
   return {
     tour,
@@ -613,12 +651,22 @@ async function upsertNearbyVisit(
   latitude: number,
   longitude: number,
 ) {
+  // Phase 3 CRITICAL #2 fix: this used to scan every geolocated customer
+  // this driver can access on every single GPS ping to find the nearest one
+  // - same unbounded-at-scale problem as buildCurrentDriverTourState, just
+  // one call earlier in the same request (recordDriverLocationForDriver
+  // calls this, then buildCurrentDriverTourState). Only a customer within
+  // proximityThresholdMeters can ever become "nearest and close enough"
+  // below, so pre-filtering to a bounding box around the ping's own
+  // position first is a pure, always-safe optimization - see
+  // boundingBoxAround's doc comment.
+  const box = boundingBoxAround(latitude, longitude, proximityThresholdMeters);
   const customers = await prisma.customer.findMany({
     where: {
       organizationId,
       status: "ACTIVE",
-      latitude: { not: null },
-      longitude: { not: null },
+      latitude: { not: null, gte: box.minLat, lte: box.maxLat },
+      longitude: { not: null, gte: box.minLng, lte: box.maxLng },
       OR: [{ creationOrigin: "ADMIN" }, { createdByDriverId: driverId }],
     },
     select: {
@@ -868,7 +916,8 @@ function buildTourSummary(
   route: DriverTourPositionDto[],
   customers: DriverTourCustomerDto[],
   sales: Array<{ id: string; customerId: string | null; totalTTC: { toNumber(): number } }>,
-  routePointCountOverride?: number,
+  routePointCountOverride: number | undefined,
+  totalAccessibleCustomers: number,
 ): DriverTourSummaryDto {
   const distanceMeters = calculateSegmentedGpsDistanceMeters(route);
 
@@ -892,13 +941,20 @@ function buildTourSummary(
     customersDelivered: customers.filter((customer) => customer.visitStatus === "DELIVERED").length,
     customersNoSale: customers.filter((customer) => customer.visitStatus === "NO_SALE").length,
     salesCount: sales.length,
-    totalSalesTTC: roundMetric(
+    // F8-C: this one field is real money (sum of Sale.totalTTC), unlike every
+    // other roundMetric() call in this file (distanceMeters, GPS-only) - so
+    // it's split out to the shared decimal-based engine (lib/money.ts)
+    // instead. roundMetric()/Math.round(x*100)/100 itself is left untouched
+    // here and everywhere else in this file: it stays the correct tool for
+    // rounding a plain distance-in-meters float, which is not currency.
+    totalSalesTTC: roundMoney(
       sales.reduce((sum, sale) => sum + sale.totalTTC.toNumber(), 0),
     ),
     theoreticalStockQuantity,
     stockCurrentQuantity: tour.stockSheet?.truckCurrentQuantity ?? 0,
     actualStockQuantity,
     discrepancyQuantity,
+    totalAccessibleCustomers,
   };
 }
 

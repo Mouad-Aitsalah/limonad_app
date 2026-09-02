@@ -85,10 +85,10 @@ export function ReceiptPrint({
         <div className="receipt-print-separator" />
 
         <div className="receipt-print-grid receipt-print-head">
-          <span>Montant</span>
-          <span>Prix TTC</span>
+          <span className="receipt-print-qty">Qté</span>
           <span>Désignation</span>
-          <span className="receipt-print-right">Qté</span>
+          <span className="receipt-print-number">Prix TTC</span>
+          <span className="receipt-print-number">Montant</span>
         </div>
 
         <div className="receipt-print-separator" />
@@ -100,16 +100,16 @@ export function ReceiptPrint({
             return (
               <div key={line.id} className="receipt-print-line">
                 <div className="receipt-print-grid">
-                  <span className="receipt-print-number">
-                    {formatReceiptAmount(line.totalTTC)}
+                  <span className="receipt-print-qty">{line.quantity}</span>
+                  <span className="receipt-print-product">
+                    {line.productName}
                   </span>
                   <span className="receipt-print-number">
                     {formatReceiptAmount(unitPriceTTC)}
                   </span>
-                  <span className="receipt-print-product">
-                    {line.productName}
+                  <span className="receipt-print-number">
+                    {formatReceiptAmount(line.totalTTC)}
                   </span>
-                  <span className="receipt-print-right">{line.quantity}</span>
                 </div>
                 {line.discountRate > 0 ? (
                   <p className="receipt-print-discount">

@@ -1,14 +1,22 @@
 import type { Metadata } from "next";
 
 import { SalesView } from "@/components/ventes/sales-view";
-import { getSalesHistory } from "@/lib/server/sales-history";
+import {
+  getSalesMonthsSummary,
+  getSalesOrdersPage,
+  getSalesSessionsSummary,
+} from "@/lib/server/sales-history";
 
 export const metadata: Metadata = {
   title: "Ventes",
 };
 
 export default async function VentesPage() {
-  const history = await getSalesHistory();
+  const [ordersPage, sessions, months] = await Promise.all([
+    getSalesOrdersPage(),
+    getSalesSessionsSummary(),
+    getSalesMonthsSummary(),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -21,7 +29,7 @@ export default async function VentesPage() {
         </p>
       </div>
 
-      <SalesView history={history} />
+      <SalesView initialOrdersPage={ordersPage} sessions={sessions} months={months} />
     </div>
   );
 }

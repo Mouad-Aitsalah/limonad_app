@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { AuthServiceError, requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import {
   createLoading,
   getLoadingByTourId,
@@ -23,6 +24,8 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 export async function POST(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   try {
     return NextResponse.json(
@@ -40,6 +43,8 @@ export async function POST(request: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   try {
     return NextResponse.json({

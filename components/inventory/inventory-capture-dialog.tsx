@@ -5,6 +5,7 @@ import { CheckCircle2, Lock } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useProductPickerSearch } from "@/components/commerce/use-product-picker-search";
 import {
   Dialog,
   DialogContent,
@@ -23,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { InventoryStatusBadge } from "@/components/inventory/inventory-status-badge";
+import { roundMoney as roundMoneyDecimal } from "@/lib/money";
 import { formatCurrency } from "@/lib/utils";
 import type { InventoryDto, InventoryLineDto, StockLevelDto } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
@@ -142,18 +144,12 @@ export function InventoryCaptureDialog({
     [lines],
   );
 
-  const suggestions = React.useMemo(() => {
-    const query = normalizeSearch(productQuery);
-    if (!query) return [];
-    return products
-      .filter((product) => {
-        const haystack = normalizeSearch(
-          `${product.name} ${product.reference} ${product.barcode ?? ""}`,
-        );
-        return haystack.includes(query);
-      })
-      .slice(0, 8);
-  }, [productQuery, products]);
+  // Phase 3 CRITICAL #1 fix: `products` is now a small bounded preload
+  // (getProductPickerPreload), not the full catalog - suggestions beyond it
+  // come from GET /api/products/search instead. See
+  // use-product-picker-search.ts's doc comment.
+  const { results: productSearchResults, resolveExact } = useProductPickerSearch(products, productQuery);
+  const suggestions = React.useMemo(() => productSearchResults.slice(0, 8), [productSearchResults]);
 
   const activeIndex = Math.min(activeSuggestionIndex, Math.max(suggestions.length - 1, 0));
 
@@ -191,17 +187,7 @@ export function InventoryCaptureDialog({
     }
   }
 
-  function resolveExactMatch(query: string) {
-    const normalized = normalizeSearch(query);
-    if (!normalized) return null;
-    return (
-      products.find((product) => normalizeSearch(product.barcode ?? "") === normalized) ??
-      products.find((product) => normalizeSearch(product.reference) === normalized) ??
-      null
-    );
-  }
-
-  function handleProductKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+  async function handleProductKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       if (suggestions.length === 0) return;
@@ -221,7 +207,9 @@ export function InventoryCaptureDialog({
 
     // Exact barcode/reference match wins outright - this is what makes a USB
     // scanner (types the code, then sends Enter) work with zero extra logic.
-    const exactMatch = resolveExactMatch(productQuery);
+    // resolveExact bypasses the debounce above for this immediate lookup
+    // (see use-product-picker-search.ts's doc comment).
+    const exactMatch = await resolveExact(productQuery);
     if (exactMatch) {
       selectProduct(exactMatch);
       return;
@@ -532,14 +520,7 @@ function MetricBlock({ label, value }: { label: string; value: string }) {
   );
 }
 
-function normalizeSearch(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .trim()
-    .toLowerCase();
-}
-
+// F8-C: delegates to the shared decimal-based engine (lib/money.ts).
 function roundMoney(value: number) {
-  return Math.round(value * 100) / 100;
+  return roundMoneyDecimal(value);
 }

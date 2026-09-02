@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { AccountsView } from "@/components/comptes/accounts-view";
 import {
   getBusinessAccountFormOptions,
-  getBusinessAccounts,
+  getBusinessAccountsPage,
 } from "@/lib/server/business-accounts";
 
 export const metadata: Metadata = {
@@ -11,15 +11,14 @@ export const metadata: Metadata = {
 };
 
 export default async function ComptesPage() {
-  const [accountsPayload, formOptions] = await Promise.all([
-    getBusinessAccounts(),
+  const [initialPage, formOptions] = await Promise.all([
+    getBusinessAccountsPage(),
     getBusinessAccountFormOptions(),
   ]);
 
   return (
     <AccountsView
-      initialAccounts={accountsPayload.items}
-      initialSummary={accountsPayload.summary}
+      initialPage={initialPage}
       accountingAccounts={formOptions.accountingAccounts}
     />
   );

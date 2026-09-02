@@ -73,8 +73,17 @@ export function mapStockLevelToDto(level: NonNullable<StockLevelRecord>): StockL
   };
 }
 
+/**
+ * The organization-wide stock overview (every depot and every truck) that
+ * backs the admin /stock page and dashboard KPIs - deliberately restricted
+ * to admin/depot_manager/cashier. A driver has their own dedicated,
+ * truck-scoped stock view (lib/server/driver-stock.ts, via
+ * getStockLevelsByLocation - NOT this function) and must never be able to
+ * read every other truck's and the depot's stock by calling this one
+ * directly.
+ */
 export async function getStockLevels(): Promise<StockLevelDto[]> {
-  const currentUser = await requireOrganizationUser();
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const levels = await prisma.stockLevel.findMany({
     where: { organizationId: currentUser.organizationId },
     include: stockLevelInclude,

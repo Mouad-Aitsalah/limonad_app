@@ -4,9 +4,11 @@ import { z } from "zod";
 
 import { Prisma } from "@/lib/generated/prisma/client";
 import type { PurchaseGetPayload } from "@/lib/generated/prisma/models/Purchase";
+import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { postPurchaseAccountingEntry } from "@/lib/server/accounting";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { nextMovementNumber, roundMoney } from "@/lib/server/sales-shared";
 import type { Purchase, PurchasePaymentMethod, PurchaseStatus } from "@/types/purchase";
@@ -31,8 +33,19 @@ const purchaseSchema = z.object({
     .array(
       z.object({
         productId: z.string().trim().min(1, "Le produit est obligatoire."),
-        quantite: z.coerce.number().int().positive("La quantite doit etre positive."),
-        prixAchat: z.coerce.number().positive("Le prix d'achat doit etre positif."),
+        // F8-D: input-level sanity bounds only, not the real protection - a
+        // plausible quantity times a plausible price can still overflow
+        // once multiplied together (see assertMoneyRange calls below, the
+        // actual gate on the computed amount).
+        quantite: z.coerce
+          .number()
+          .int()
+          .positive("La quantite doit etre positive.")
+          .max(1_000_000),
+        prixAchat: z.coerce
+          .number()
+          .positive("Le prix d'achat doit etre positif.")
+          .max(MONEY_RANGE_MAX_NUMBER),
         remisePercent: z.coerce.number().min(0).max(100).optional().default(0),
       }),
     )
@@ -85,8 +98,13 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
     ? parsePurchaseDate(parsed.data.datePaiement)
     : null;
 
-  const created = await prisma.$transaction(
-    async (tx) => {
+  // F10: read-then-write (nextPurchaseNumber counts existing rows, stock
+  // levels are read fresh) - a retry after a Serializable conflict (P2034)
+  // or a numbering race (P2002) simply re-reads current state and recomputes
+  // a fresh number, never a duplicate purchase.
+  const created = await withSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
       const user = await tx.user.findFirst({
         where: {
           id: sessionUser.id,
@@ -143,18 +161,29 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
         const product = productById.get(line.productId);
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
 
+        // F8-D: grossHT is a raw multiplication (prixAchat x quantite),
+        // checked before rounding/further use - a large-but-otherwise-valid
+        // quantity times a large purchase price is exactly the case a bound
+        // on quantity alone would miss (see lib/money.ts#isWithinMoneyRange).
         const grossHT = line.prixAchat * line.quantite;
+        assertMoneyRange(line.prixAchat, "line.prixAchat");
+        assertMoneyRange(grossHT, "line.grossHT");
         const discountAmount = roundMoney(grossHT * (line.remisePercent / 100));
         const totalHT = roundMoney(grossHT - discountAmount);
         const taxRate = product.taxRate.toNumber();
         const taxAmount = roundMoney(totalHT * (taxRate / 100));
+        const totalTTC = roundMoney(totalHT + taxAmount);
+        assertMoneyRange(discountAmount, "line.discountAmount");
+        assertMoneyRange(totalHT, "line.totalHT");
+        assertMoneyRange(taxAmount, "line.taxAmount");
+        assertMoneyRange(totalTTC, "line.totalTTC");
 
         return {
           ...line,
           taxRate,
           taxAmount,
           totalHT,
-          totalTTC: roundMoney(totalHT + taxAmount),
+          totalTTC,
         };
       });
       const subtotalHT = roundMoney(
@@ -164,6 +193,11 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
         computedLines.reduce((sum, line) => sum + line.taxAmount, 0),
       );
       const totalTTC = roundMoney(subtotalHT + taxAmount);
+      // F8-D: aggregate totals, checked before any write in this
+      // transaction (purchase.create is the first one, just below).
+      assertMoneyRange(subtotalHT, "subtotalHT");
+      assertMoneyRange(taxAmount, "taxAmount");
+      assertMoneyRange(totalTTC, "totalTTC");
       const purchaseNumber = await nextPurchaseNumber(tx, sessionUser.organizationId);
 
       const purchase = await tx.purchase.create({
@@ -268,11 +302,59 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
       });
 
       return purchase;
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      },
+      // 15s: same fix already applied to counter-sales.ts / driver-sales.ts /
+      // credit-notes.ts / tours.ts / inventories.ts's equivalent transactions
+      // - this one chains several sequential lookups plus accounting
+      // bootstrap/posting (ensureAccountingBootstrap, requireSettings, the
+      // invoice-entry and settlement-entry lookups in
+      // postPurchaseAccountingEntry), which can exceed Prisma's 5s default
+      // interactive-transaction timeout (P2028) against Neon's serverless
+      // connection latency, even with no real conflict. Found live while
+      // testing F8 fix #1 (unrelated to that fix itself - this transaction
+      // was already this slow before it, the VAT-line change just happened
+      // to be what first exercised the purchase flow end-to-end in this
+      // session).
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 15000 },
+    ),
   );
 
   return mapPurchaseToDto(created);
+}
+
+// F10: same shape as every other file's local withSerializableRetry in
+// this codebase (counter-sales.ts, credit-notes.ts, tours.ts, etc.).
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 40): Promise<T> {
+  let attempt = 0;
+
+  while (attempt < maxAttempts) {
+    try {
+      return await operation();
+    } catch (error) {
+      const prismaError = error as { code?: string; message?: string };
+      attempt += 1;
+      const isRetryable =
+        ["P2002", "P2034"].includes(prismaError.code ?? "") ||
+        (prismaError.code === "P2010" &&
+          /40001|40P01/.test(prismaError.message ?? ""));
+      if (!isRetryable || attempt >= maxAttempts) {
+        throw error;
+      }
+      // Jittered backoff: under N-way true-simultaneous contention on the
+      // same counter row, retrying instantly just re-collides with the same
+      // herd (empirically verified: without this, 50-100-way concurrent
+      // reserveDocumentSequence() calls exhausted immediate retries - see
+      // scripts/_tmp-test-real-generators.ts in the Phase 3 numbering
+      // chantier report).
+      await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
+    }
+  }
+
+  throw new OperationsServiceError("Impossible d'enregistrer l'achat.", 500);
 }
 
 function mapPurchaseToDto(purchase: PurchaseWithRelations): Purchase {
@@ -324,17 +406,12 @@ async function nextPurchaseNumber(
   tx: Prisma.TransactionClient,
   organizationId: string,
 ) {
-  const last = await tx.purchase.findFirst({
-    where: {
-      organizationId,
-      purchaseNumber: { startsWith: "A-" },
-    },
-    orderBy: { purchaseNumber: "desc" },
-    select: { purchaseNumber: true },
-  });
-  const lastSuffix = last?.purchaseNumber.match(/A-(\d{6})$/)?.[1];
-  const next = (lastSuffix ? Number(lastSuffix) : 0) + 1;
-  return `A-${String(next).padStart(6, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.Purchase,
+  );
+  return `A-${String(number).padStart(6, "0")}`;
 }
 
 function parsePurchaseDate(value: string) {

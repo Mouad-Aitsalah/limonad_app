@@ -5,9 +5,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { OrdersTab } from "@/components/ventes/orders-tab";
 import { SessionsTab } from "@/components/ventes/sessions-tab";
 import { MonthsTab } from "@/components/ventes/months-tab";
-import type { SalesHistoryDto } from "@/types/operations-dto";
+import type { PosSessionDto, SaleHistoryOrdersPageDto, SalesMonthDto } from "@/types/operations-dto";
 
-export function SalesView({ history }: { history: SalesHistoryDto }) {
+type SalesViewProps = {
+  initialOrdersPage: SaleHistoryOrdersPageDto;
+  sessions: PosSessionDto[];
+  months: SalesMonthDto[];
+};
+
+export function SalesView({ initialOrdersPage, sessions, months }: SalesViewProps) {
   return (
     <Tabs defaultValue="orders" className="space-y-6">
       <TabsList variant="line" className="rounded-2xl border border-border bg-muted/30 p-1">
@@ -26,7 +32,7 @@ export function SalesView({ history }: { history: SalesHistoryDto }) {
                 remboursements, paiements partiels et crédits.
               </p>
             </div>
-            <OrdersTab invoices={history.orders} />
+            <OrdersTab initialPage={initialOrdersPage} />
           </CardContent>
         </Card>
       </TabsContent>
@@ -41,7 +47,7 @@ export function SalesView({ history }: { history: SalesHistoryDto }) {
                 POS/2, POS/3...
               </p>
             </div>
-            <SessionsTab sessions={history.sessions} invoices={history.orders} />
+            <SessionsTab sessions={sessions} />
           </CardContent>
         </Card>
       </TabsContent>
@@ -56,7 +62,7 @@ export function SalesView({ history }: { history: SalesHistoryDto }) {
                 remboursements et total net.
               </p>
             </div>
-            <MonthsTab months={history.months} invoices={history.orders} />
+            <MonthsTab months={months} />
           </CardContent>
         </Card>
       </TabsContent>

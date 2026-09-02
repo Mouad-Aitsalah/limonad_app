@@ -6,29 +6,39 @@ import { toast } from "sonner";
 import { ProductDialog } from "@/components/produits/product-dialog";
 import { ProductsToolbar } from "@/components/produits/products-toolbar";
 import { ProductsTable } from "@/components/produits/products-table";
+import { useProductsPage } from "@/components/produits/use-products-page";
 import { AppPageHeader } from "@/components/ui/app-page-header";
+import { Button } from "@/components/ui/button";
 import { DataTableShell } from "@/components/ui/data-table-shell";
 import type {
   ProductDto,
   ProductMutationInput,
   ProductOptionDto,
+  ProductsPageDto,
 } from "@/types/product-dto";
 
+const PRODUCTS_SEARCH_DEBOUNCE_MS = 400;
+
 type ProductsViewProps = {
-  initialProducts: ProductDto[];
+  initialPage: ProductsPageDto;
   categories: ProductOptionDto[];
   brands: ProductOptionDto[];
   suppliers: ProductOptionDto[];
 };
 
 export function ProductsView({
-  initialProducts,
+  initialPage,
   categories,
   brands,
   suppliers,
 }: ProductsViewProps) {
-  const [products, setProducts] = React.useState(initialProducts);
   const [search, setSearch] = React.useState("");
+  const [debouncedSearch, setDebouncedSearch] = React.useState("");
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), PRODUCTS_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const [categorie, setCategorie] = React.useState("all");
   const [disponibilite, setDisponibilite] = React.useState("all");
   const [editingProduct, setEditingProduct] = React.useState<ProductDto | null>(
@@ -38,36 +48,28 @@ export function ProductsView({
     null,
   );
 
-  const filteredProducts = React.useMemo(() => {
-    const query = search.trim().toLowerCase();
-
-    return products.filter((product) => {
-      const matchesSearch =
-        query.length === 0 ||
-        product.name.toLowerCase().includes(query) ||
-        product.reference.toLowerCase().includes(query) ||
-        (product.barcode?.includes(query) ?? false);
-
-      const matchesCategorie =
-        categorie === "all" || product.category.id === categorie;
-
-      const matchesDisponibilite =
-        disponibilite === "all" ||
-        (disponibilite === "disponible" && product.status === "ACTIVE") ||
-        (disponibilite === "indisponible" && product.status !== "ACTIVE");
-
-      return matchesSearch && matchesCategorie && matchesDisponibilite;
-    });
-  }, [products, search, categorie, disponibilite]);
+  const {
+    items: products,
+    totalCount,
+    pageIndex,
+    hasMore,
+    hasPrevious,
+    loading,
+    goToNextPage,
+    goToPreviousPage,
+    refetchCurrentPage,
+    resetToFirstPage,
+  } = useProductsPage(
+    {
+      search: debouncedSearch,
+      categoryId: categorie,
+      status: disponibilite === "disponible" ? "ACTIVE" : disponibilite === "indisponible" ? "INACTIVE" : "all",
+    },
+    initialPage,
+  );
 
   async function refreshProducts() {
-    const response = await fetch("/api/products", { cache: "no-store" });
-    if (!response.ok) {
-      toast.error("Impossible de recharger les produits.");
-      return;
-    }
-    const payload = (await response.json()) as { products: ProductDto[] };
-    setProducts(payload.products);
+    await refetchCurrentPage();
   }
 
   async function saveProduct(
@@ -93,16 +95,15 @@ export function ProductsView({
       return payload.fieldErrors ?? { form: payload.message ?? "Erreur inconnue." };
     }
 
-    const savedProduct = payload.product;
-    setProducts((current) =>
-      productId
-        ? current.map((product) =>
-            product.id === savedProduct.id ? savedProduct : product,
-          )
-        : [savedProduct, ...current],
-    );
     toast.success(productId ? "Produit modifie avec succes." : "Produit cree avec succes.");
     setEditingProduct(null);
+    // A new product sorts first (createdAt desc) - jump back to page 1 so it
+    // is immediately visible. An edit only needs the current page refreshed.
+    if (productId) {
+      await refetchCurrentPage();
+    } else {
+      await resetToFirstPage();
+    }
     return null;
   }
 
@@ -123,10 +124,7 @@ export function ProductsView({
       return;
     }
 
-    const updatedProduct = payload.product;
-    setProducts((current) =>
-      current.map((item) => (item.id === updatedProduct.id ? updatedProduct : item)),
-    );
+    await refetchCurrentPage();
     toast.success(active ? "Produit active." : "Produit desactive.");
   }
 
@@ -150,24 +148,46 @@ export function ProductsView({
       <DataTableShell
         title="Catalogue produits"
         description="Recherche, filtres et actions rapides sur l'ensemble des references."
-        countLabel={`${filteredProducts.length} produit${filteredProducts.length > 1 ? "s" : ""}`}
+        countLabel={`Page ${pageIndex + 1} · ${products.length} sur cette page · ${totalCount} au total`}
         toolbar={
-          <ProductsToolbar
-            search={search}
-            onSearchChange={setSearch}
-            categorie={categorie}
-            onCategorieChange={setCategorie}
-            categories={categories.map((category) => ({
-              value: category.id,
-              label: category.name,
-            }))}
-            disponibilite={disponibilite}
-            onDisponibiliteChange={setDisponibilite}
-          />
+          <div className="space-y-3">
+            <ProductsToolbar
+              search={search}
+              onSearchChange={setSearch}
+              categorie={categorie}
+              onCategorieChange={setCategorie}
+              categories={categories.map((category) => ({
+                value: category.id,
+                label: category.name,
+              }))}
+              disponibilite={disponibilite}
+              onDisponibiliteChange={setDisponibilite}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasPrevious || loading}
+                onClick={goToPreviousPage}
+              >
+                Precedent
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasMore || loading}
+                onClick={goToNextPage}
+              >
+                Suivant
+              </Button>
+            </div>
+          </div>
         }
       >
         <ProductsTable
-          products={filteredProducts}
+          products={products}
           onView={setViewingProduct}
           onEdit={setEditingProduct}
           onToggleStatus={toggleStatus}

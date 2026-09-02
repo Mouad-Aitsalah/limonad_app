@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { cookies } from "next/headers";
 import bcrypt from "bcryptjs";
 
@@ -9,11 +9,37 @@ import type { CurrentUser, UserRole } from "@/types/auth";
 
 const SESSION_COOKIE = "comdis.session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8;
+// Raw token size in bytes - >= the 32-byte minimum required. base64url keeps
+// it compact and cookie/URL-safe (43 chars for 32 bytes, no padding).
+const SESSION_TOKEN_BYTES = 32;
+// getCurrentSessionUser() runs on every authenticated request; writing
+// lastUsedAt on every single one would double the DB round trips on the
+// hottest path in the app for a field that only needs rough freshness.
+// Throttled instead: only touched if it is stale by more than this.
+const LAST_USED_UPDATE_THRESHOLD_MS = 5 * 60 * 1000;
 
-type SessionPayload = {
-  user: CurrentUser;
-  exp: number;
-};
+const userForSessionSelect = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  fullName: true,
+  email: true,
+  role: true,
+  status: true,
+  organizationId: true,
+  organization: {
+    select: {
+      id: true,
+      status: true,
+    },
+  },
+  driverProfile: {
+    select: {
+      id: true,
+      truckId: true,
+    },
+  },
+} as const;
 
 export class AuthServiceError extends Error {
   constructor(
@@ -24,32 +50,18 @@ export class AuthServiceError extends Error {
   }
 }
 
+/**
+ * Server-side, revocable sessions (see the Session model in schema.prisma).
+ * The cookie only ever carries an opaque random token - never a user id,
+ * role, or organization, and never anything derived from client input.
+ * Every authenticated request re-reads the session AND the user fresh from
+ * the database; nothing about identity or authorization is ever trusted
+ * from the client itself, here or anywhere downstream.
+ */
 export async function loginWithPassword(email: string, password: string) {
   const user = await prisma.user.findUnique({
     where: { email: email.trim().toLowerCase() },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      fullName: true,
-      email: true,
-      passwordHash: true,
-      role: true,
-      status: true,
-      organizationId: true,
-      organization: {
-        select: {
-          id: true,
-          status: true,
-        },
-      },
-      driverProfile: {
-        select: {
-          id: true,
-          truckId: true,
-        },
-      },
-    },
+    select: { ...userForSessionSelect, passwordHash: true },
   });
 
   if (!user) {
@@ -70,9 +82,16 @@ export async function loginWithPassword(email: string, password: string) {
     throw new AuthServiceError("Email ou mot de passe incorrect.", 401);
   }
 
-  const sessionUser = mapUserToSession(user);
-  await setSessionCookie(sessionUser);
-  return sessionUser;
+  // A brand new random token/session is minted on every successful login,
+  // never reused or extended from a prior one (prevents session fixation:
+  // nothing an attacker could have pre-set - e.g. a token planted before
+  // authentication - ever becomes the authenticated session, since this
+  // token did not exist until this exact moment). Existing sessions for
+  // this user (other devices/browsers) are intentionally left untouched -
+  // logging in on a new device must not sign the user out elsewhere.
+  await createSessionCookie(user.id);
+
+  return mapUserToSession(user);
 }
 
 export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
@@ -80,38 +99,41 @@ export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const payload = verifySessionToken(token);
-  if (!payload || payload.exp < Date.now()) return null;
+  const tokenHash = hashSessionToken(token);
+  // A unique-index lookup by hash, not an in-memory string compare - there
+  // is no secret being compared here for a timing attack to target (unlike
+  // the password check below, which the more security-relevant timing risk,
+  // and which already goes through bcrypt.compare's own constant-time
+  // comparison).
+  const session = await prisma.session.findUnique({
+    where: { tokenHash },
+    select: { id: true, userId: true, expiresAt: true, revokedAt: true, lastUsedAt: true },
+  });
+
+  if (!session) return null;
+  if (session.revokedAt) return null;
+  if (session.expiresAt.getTime() <= Date.now()) return null;
 
   const user = await prisma.user.findUnique({
-    where: { id: payload.user.id },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      fullName: true,
-      email: true,
-      role: true,
-      status: true,
-      organizationId: true,
-      organization: {
-        select: {
-          id: true,
-          status: true,
-        },
-      },
-      driverProfile: {
-        select: {
-          id: true,
-          truckId: true,
-        },
-      },
-    },
+    where: { id: session.userId },
+    select: userForSessionSelect,
   });
 
   if (!user || user.status !== "ACTIVE") return null;
   if (user.role !== "SUPER_ADMIN" && !user.organizationId) return null;
   if (user.organization && user.organization.status !== "ACTIVE") return null;
+
+  const isStale =
+    !session.lastUsedAt ||
+    Date.now() - session.lastUsedAt.getTime() > LAST_USED_UPDATE_THRESHOLD_MS;
+  if (isStale) {
+    // Best-effort only: lastUsedAt is observability, not a security check -
+    // a failed write here must never break authentication itself.
+    await prisma.session
+      .update({ where: { id: session.id }, data: { lastUsedAt: new Date() } })
+      .catch(() => undefined);
+  }
+
   return mapUserToSession(user);
 }
 
@@ -137,8 +159,34 @@ export function assertUserRole(
   return user;
 }
 
+/**
+ * Revokes the current browser's session (if any) and clears its cookie.
+ * The token becomes unusable immediately - even someone holding a copy of
+ * the cookie cannot use it after this, since the next lookup finds
+ * revokedAt set (see getCurrentSessionUser) - not merely "cookie removed
+ * from this one browser" the way the previous signed-token scheme worked.
+ * Sessions on other devices/browsers for the same user are untouched.
+ */
 export async function clearSessionCookie() {
   const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+
+  if (token) {
+    const tokenHash = hashSessionToken(token);
+    await prisma.session
+      .updateMany({
+        where: { tokenHash, revokedAt: null },
+        data: { revokedAt: new Date() },
+      })
+      .catch((error: unknown) => {
+        // Never let a DB hiccup block logout from clearing the cookie below
+        // - but this is worth knowing about operationally, since it means
+        // the token technically remains valid server-side until it expires
+        // naturally. Never logs the token itself.
+        console.error("[auth] echec de la revocation de session au logout:", error);
+      });
+  }
+
   cookieStore.set(SESSION_COOKIE, "", {
     httpOnly: true,
     sameSite: "lax",
@@ -148,15 +196,46 @@ export async function clearSessionCookie() {
   });
 }
 
-async function setSessionCookie(user: CurrentUser) {
+/**
+ * Revokes every active session belonging to a user - e.g. for a future
+ * "compromised account" response, or to call after a future password-change
+ * feature updates passwordHash (see this task's report for why that call
+ * does not exist yet: there is no password-change endpoint in COMDIS today
+ * to wire it into). Not currently called from anywhere; exported so it is
+ * ready to be. No UI wired to it.
+ */
+export async function revokeAllUserSessions(userId: string): Promise<number> {
+  const result = await prisma.session.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  return result.count;
+}
+
+async function createSessionCookie(userId: string) {
+  const token = randomBytes(SESSION_TOKEN_BYTES).toString("base64url");
+  const tokenHash = hashSessionToken(token);
+  const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000);
+
+  // The raw token is never persisted - only its hash. Even a full database
+  // read/leak never yields a usable token, the same way a leaked
+  // passwordHash never yields a usable password.
+  await prisma.session.create({
+    data: { userId, tokenHash, expiresAt },
+  });
+
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, signSessionPayload({ user, exp: Date.now() + SESSION_MAX_AGE_SECONDS * 1000 }), {
+  cookieStore.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
+}
+
+function hashSessionToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 function mapUserToSession(user: {
@@ -188,37 +267,4 @@ function mapRole(role: string): UserRole {
   if (role === "DEPOT_MANAGER") return "depot_manager";
   if (role === "DRIVER") return "driver";
   return "cashier";
-}
-
-function signSessionPayload(payload: SessionPayload) {
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${body}.${signature(body)}`;
-}
-
-function verifySessionToken(token: string): SessionPayload | null {
-  const [body, sig] = token.split(".");
-  if (!body || !sig) return null;
-  const expected = signature(body);
-  const actualBuffer = Buffer.from(sig);
-  const expectedBuffer = Buffer.from(expected);
-  if (
-    actualBuffer.length !== expectedBuffer.length ||
-    !timingSafeEqual(actualBuffer, expectedBuffer)
-  ) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as SessionPayload;
-  } catch {
-    return null;
-  }
-}
-
-function signature(value: string) {
-  return createHmac("sha256", sessionSecret()).update(value).digest("base64url");
-}
-
-function sessionSecret() {
-  return process.env.AUTH_SECRET ?? process.env.DATABASE_URL ?? "comdis-local-dev-secret";
 }

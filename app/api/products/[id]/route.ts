@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 import {
   getProductById,
@@ -28,6 +29,8 @@ export async function GET(_request: Request, context: ProductRouteContext) {
 }
 
 export async function PATCH(request: Request, context: ProductRouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
 
   try {

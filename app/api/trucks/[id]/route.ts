@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getTruckById, updateTruck } from "@/lib/server/trucks";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -21,6 +22,8 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   try {
     const truck = await updateTruck(id, await request.json());

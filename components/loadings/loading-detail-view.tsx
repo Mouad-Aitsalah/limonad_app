@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useProductPickerSearch } from "@/components/commerce/use-product-picker-search";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -77,19 +78,15 @@ export function LoadingDetailView({
   const deferredProductSearch = React.useDeferredValue(productSearch);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
 
-  const suggestions = React.useMemo<ProductSuggestion[]>(() => {
-    const query = normalizeSearch(deferredProductSearch);
-    if (!query) return [];
-    return products
-      .filter((product) => {
-        const haystack = normalizeSearch(
-          `${product.name} ${product.reference} ${product.barcode ?? ""}`,
-        );
-        return haystack.includes(query);
-      })
-      .slice(0, 8)
-      .map((product) => ({ product }));
-  }, [deferredProductSearch, products]);
+  // Phase 3 CRITICAL #1 fix: `products` is now a small bounded preload
+  // (getProductPickerPreload), not the full catalog - suggestions beyond it
+  // come from GET /api/products/search instead. See
+  // use-product-picker-search.ts's doc comment.
+  const { results: searchResults, resolveExact } = useProductPickerSearch(products, deferredProductSearch);
+  const suggestions = React.useMemo<ProductSuggestion[]>(
+    () => searchResults.slice(0, 8).map((product) => ({ product })),
+    [searchResults],
+  );
 
   const activeIndex = Math.min(activeSuggestionIndex, Math.max(suggestions.length - 1, 0));
 
@@ -178,7 +175,18 @@ export function LoadingDetailView({
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      if (suggestions[activeIndex]) addProduct(suggestions[activeIndex].product);
+      // A scanned barcode's Enter usually fires before the debounced search
+      // above has resolved - resolveExact bypasses that debounce for an
+      // immediate exact barcode/reference match, same as a real scanner
+      // needs (see use-product-picker-search.ts's doc comment).
+      const typed = productSearch;
+      void resolveExact(typed).then((exact) => {
+        if (exact) {
+          addProduct(exact);
+          return;
+        }
+        if (suggestions[activeIndex]) addProduct(suggestions[activeIndex].product);
+      });
     }
   }
 
@@ -488,14 +496,6 @@ function InfoItem({ label, value }: { label: string; value: string }) {
 function LoadingStatusBadge({ status }: { status: string }) {
   const variant = status === "CANCELLED" ? "destructive" : status === "VALIDATED" ? "secondary" : "default";
   return <Badge variant={variant}>{loadingStatusLabels[status] ?? status}</Badge>;
-}
-
-function normalizeSearch(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .trim()
-    .toLowerCase();
 }
 
 function parseInteger(value: string | undefined, fallback: number) {

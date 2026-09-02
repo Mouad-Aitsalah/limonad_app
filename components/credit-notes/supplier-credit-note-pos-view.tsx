@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { CommerceProductGrid } from "@/components/commerce/product-grid";
 import { CommerceProductSearch } from "@/components/commerce/product-search";
+import { useProductPickerSearch } from "@/components/commerce/use-product-picker-search";
 import { CreditNoteCart } from "@/components/credit-notes/credit-note-cart";
 import { CreditNoteSummary } from "@/components/credit-notes/credit-note-summary";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { creditNoteReasonLabels } from "@/lib/credit-note-calculations";
+import { roundMoney } from "@/lib/money";
 import type { CurrentUser } from "@/types/auth";
 import type {
   CreditNote,
@@ -31,6 +33,13 @@ import type { ProductDto } from "@/types/product-dto";
 
 type CartLine = {
   productId: string;
+  // Phase 3 CRITICAL #1 fix: captured once, from the full ProductDto
+  // available at the moment a product is picked (addProduct) or from the
+  // draft's own already-saved line (editing mode) - see
+  // credit-note-pos-view.tsx's identical fix for the full rationale.
+  productName: string;
+  productReference: string;
+  productUnit: string;
   quantityReturned: number;
   unitPrice: number;
   discountPercent: number;
@@ -107,23 +116,37 @@ export function SupplierCreditNotePosView({
   const selectedSource =
     activeLocations.find((location) => location.id === sourceLocationId) ?? null;
 
-  const activeProducts = React.useMemo(() => {
-    const baseProducts = [...products]
-      .filter((product) => product.status === "ACTIVE")
-      .sort((a, b) => a.name.localeCompare(b.name, "fr-FR"));
+  // Phase 3 CRITICAL #1 fix: `products` (the server-rendered preload) is
+  // org-wide, not supplier-scoped - re-fetch a small supplier-scoped
+  // preload the instant a supplier is picked, same fallback rule
+  // (unscoped if that supplier has zero products) the old client-side
+  // filter used over the full catalog. See GET /api/products/preload's
+  // doc comment.
+  const [supplierPreload, setSupplierPreload] = React.useState<{
+    supplierId: string;
+    products: ProductDto[];
+  } | null>(null);
 
-    if (!selectedSupplier) return baseProducts;
+  React.useEffect(() => {
+    if (!selectedSupplier) return;
+    let cancelled = false;
+    fetch(`/api/products/preload?supplierId=${encodeURIComponent(selectedSupplier.id)}`)
+      .then((response) => (response.ok ? response.json() : { products: [] }))
+      .then((body: { products?: ProductDto[] }) => {
+        if (!cancelled) setSupplierPreload({ supplierId: selectedSupplier.id, products: body.products ?? [] });
+      })
+      .catch(() => {
+        if (!cancelled) setSupplierPreload({ supplierId: selectedSupplier.id, products: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSupplier]);
 
-    const supplierProducts = baseProducts.filter(
-      (product) => product.supplier?.id === selectedSupplier.id,
-    );
-    return supplierProducts.length > 0 ? supplierProducts : baseProducts;
-  }, [products, selectedSupplier]);
-
-  const productMap = React.useMemo(
-    () => new Map(activeProducts.map((product) => [product.id, product])),
-    [activeProducts],
-  );
+  const activeProducts =
+    selectedSupplier && supplierPreload?.supplierId === selectedSupplier.id
+      ? supplierPreload.products
+      : products;
 
   const filteredSuppliers = React.useMemo(() => {
     const query = normalizeSearch(supplierSearch);
@@ -137,42 +160,33 @@ export function SupplierCreditNotePosView({
       .slice(0, 25);
   }, [supplierSearch, suppliers]);
 
-  const filteredProducts = React.useMemo(() => {
-    const query = normalizeSearch(search);
-    if (!query) return activeProducts;
+  // Phase 3 CRITICAL #1 fix: server-side search (scoped to the selected
+  // supplier, same fallback rule as the preload above) replaces the old
+  // client-side filter over the full catalog.
+  const { results: filteredProducts } = useProductPickerSearch(activeProducts, search, {
+    supplierId: selectedSupplier?.id,
+  });
 
-    return activeProducts.filter((product) =>
-      normalizeSearch(`${product.name} ${product.reference} ${product.barcode ?? ""}`).includes(
-        query,
-      ),
-    );
-  }, [activeProducts, search]);
-
+  // No product lookup needed here anymore - every CartLine already carries
+  // its own display fields, captured once at addProduct() time or from the
+  // draft's own saved line (see CartLine's doc comment).
   const cartLines = React.useMemo(() => {
-    return cart.flatMap((line) => {
-      const product = productMap.get(line.productId);
-      if (!product) return [];
-
+    return cart.map((line) => {
       const baseHT = line.unitPrice * line.quantityReturned;
       const discountAmount = baseHT * (line.discountPercent / 100);
       const totalHT = roundMoney(baseHT - discountAmount);
       const taxAmount = roundMoney(totalHT * (line.taxRate / 100));
       const totalTTC = roundMoney(totalHT + taxAmount);
 
-      return [
-        {
-          ...line,
-          productName: product.name,
-          productReference: product.reference,
-          productUnit: product.unit,
-          totalHT,
-          discountAmount: roundMoney(discountAmount),
-          taxAmount,
-          totalTTC,
-        },
-      ];
+      return {
+        ...line,
+        totalHT,
+        discountAmount: roundMoney(discountAmount),
+        taxAmount,
+        totalTTC,
+      };
     });
-  }, [cart, productMap]);
+  }, [cart]);
 
   const totals = React.useMemo(() => {
     return cartLines.reduce(
@@ -213,6 +227,9 @@ export function SupplierCreditNotePosView({
         ...current,
         {
           productId: product.id,
+          productName: product.name,
+          productReference: product.reference,
+          productUnit: product.unit,
           quantityReturned: 1,
           unitPrice: product.purchasePrice,
           discountPercent: 0,
@@ -564,9 +581,6 @@ function normalizeSearch(value: string) {
     .replace(/\s+/g, " ");
 }
 
-function roundMoney(value: number) {
-  return Math.round(value * 100) / 100;
-}
 
 function createFormState(editingCreditNote: CreditNote | null | undefined, defaultSourceId: string) {
   if (!editingCreditNote) {
@@ -592,6 +606,11 @@ function createFormState(editingCreditNote: CreditNote | null | undefined, defau
     comment: editingCreditNote.comment,
     cart: editingCreditNote.lines.map((line) => ({
       productId: line.productId,
+      // Phase 3 CRITICAL #1 fix: embedded directly from the draft's own
+      // saved line - see CartLine's doc comment.
+      productName: line.productName ?? "",
+      productReference: line.productReference ?? "",
+      productUnit: line.productUnit ?? "",
       quantityReturned: line.quantityReturned,
       unitPrice: line.unitPrice,
       discountPercent: line.discountPercent,

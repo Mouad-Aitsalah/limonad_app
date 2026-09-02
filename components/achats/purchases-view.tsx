@@ -82,8 +82,11 @@ export function PurchasesView() {
       }
     });
 
+    // Phase 3 CRITICAL #1 fix: small bounded preload instead of
+    // GET /api/products (getProducts(), measured 12.5s/56MB at 100k
+    // products) - already ACTIVE-only. See PurchaseForm's product search.
     async function loadProducts() {
-      const response = await fetch("/api/products", { cache: "no-store" });
+      const response = await fetch("/api/products/preload", { cache: "no-store" });
       const payload = (await response.json()) as {
         products?: ProductDto[];
       };
@@ -93,9 +96,7 @@ export function PurchasesView() {
       }
 
       if (!cancelled) {
-        setProductOptions(
-          payload.products.filter((product) => product.status === "ACTIVE"),
-        );
+        setProductOptions(payload.products);
       }
     }
 

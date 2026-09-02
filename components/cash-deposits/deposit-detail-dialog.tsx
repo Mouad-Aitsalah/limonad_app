@@ -122,6 +122,27 @@ export function DepositDetailDialog({ depositId, onOpenChange }: DepositDetailDi
               ) : null}
             </div>
 
+            {displayedDeposit.cashSummary ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">
+                <p className="text-xs font-semibold tracking-[0.14em] text-emerald-700">
+                  SNAPSHOT CAISSE AU MOMENT DU VERSEMENT
+                </p>
+                <div className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                  <DetailMetric label="Ventes especes" value={displayedDeposit.cashSummary.cashSales} />
+                  <DetailMetric label="Charges especes" value={displayedDeposit.cashSummary.cashExpenses} negative />
+                  <DetailMetric label="Disponible" value={displayedDeposit.cashSummary.availableCash} />
+                  <DetailMetric label="Montant compte" value={displayedDeposit.cashSummary.countedCash} />
+                  <DetailMetric label="Versement realise" value={displayedDeposit.cashTotal} />
+                  <DetailMetric label="Reste caisse" value={displayedDeposit.cashSummary.cashRemaining} />
+                  <DetailMetric label="Ecart" value={displayedDeposit.cashSummary.cashDifference} />
+                </div>
+              </div>
+            ) : (
+              <p className="rounded-xl border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                Ce versement historique ne comporte pas de snapshot de caisse.
+              </p>
+            )}
+
             <div className="overflow-x-auto rounded-2xl border border-border">
               <Table>
                 <TableHeader>
@@ -187,5 +208,14 @@ export function DepositDetailDialog({ depositId, onOpenChange }: DepositDetailDi
 
       <DepositReceiptPrint deposit={displayedDeposit} />
     </Dialog>
+  );
+}
+
+function DetailMetric({ label, value, negative = false }: { label: string; value: number; negative?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium tabular-nums">{negative ? "- " : ""}{formatCurrency(Math.abs(value))}</span>
+    </div>
   );
 }

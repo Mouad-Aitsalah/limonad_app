@@ -18,11 +18,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
+import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { ProductMedia } from "@/components/products/product-media";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
+import { roundMoney } from "@/lib/money";
 import { formatCurrency } from "@/lib/utils";
 import type {
+  CustomerDto,
   DriverPosContextDto,
   DriverPosProductDto,
   SaleDto,
@@ -62,32 +66,44 @@ export function DriverPosView({
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
-  const [customerId, setCustomerId] = React.useState(() =>
-    resolveInitialCustomerId(initialContext, initialCustomerId),
+  // Phase 3: the fully-resolved customer object (or null for "Client
+  // comptoir") - kept as its own state, not derived from
+  // context.customers.find(...), because context.customers is now only a
+  // small preload (see getPosCustomerPreload); a customer found via the
+  // combobox's search fallback must stay selected even though it was never
+  // in that preloaded list. The server guarantees initialCustomerId (e.g. a
+  // tour-visit deep link) is present in the initial preload either way.
+  const [selectedCustomer, setSelectedCustomer] = React.useState<CustomerDto | null>(() =>
+    resolveInitialCustomer(initialContext, initialCustomerId),
   );
   const [paymentMethod, setPaymentMethod] = React.useState("CASH");
   const [paidAmount, setPaidAmount] = React.useState("");
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // Stable for one sale attempt (F5): kept identical across a network retry
+  // of validateSale, only replaced once a sale has actually gone through and
+  // the cart is cleared for the next one. A ref so it is synchronously
+  // current the instant validateSale reads it, and never triggers a
+  // re-render on its own.
+  const idempotencyKeyRef = React.useRef<string>(crypto.randomUUID());
+
+  // Phase 3: same fallback as the counter POS (usePosProductSearch) - falls
+  // back to a truck-scoped server search when the preloaded product list
+  // was truncated, instead of only ever searching an incomplete list.
+  const { products: filteredProducts, allKnownProducts } = usePosProductSearch(
+    context.products,
+    search,
+    {
+      truncated: context.productsTruncated,
+      locationId: context.stockLocationId,
+      normalize,
+    },
+  );
 
   const productById = React.useMemo(
-    () => new Map(context.products.map((product) => [product.id, product])),
-    [context.products],
+    () => new Map(allKnownProducts.map((product) => [product.id, product])),
+    [allKnownProducts],
   );
-
-  const selectedCustomerId = React.useMemo(
-    () =>
-      context.customers.some((customer) => customer.id === customerId) ? customerId : "",
-    [context.customers, customerId],
-  );
-
-  const filteredProducts = React.useMemo(() => {
-    const query = normalize(search);
-    if (!query) return context.products;
-    return context.products.filter((product) =>
-      normalize(`${product.name} ${product.reference} ${product.barcode ?? ""}`).includes(query),
-    );
-  }, [context.products, search]);
 
   const cartRows = React.useMemo(
     () =>
@@ -147,23 +163,28 @@ export function DriverPosView({
   }
 
   async function refreshContext() {
-    const refreshed = await fetch("/api/driver/pos", { cache: "no-store" });
+    // Pass the current selection so the server-bounded preload guarantees
+    // it stays present (same reasoning as the initial load) - a refresh
+    // must never silently drop who's selected.
+    const query = selectedCustomer ? `?customerId=${encodeURIComponent(selectedCustomer.id)}` : "";
+    const refreshed = await fetch(`/api/driver/pos${query}`, { cache: "no-store" });
     const refreshedPayload = (await refreshed.json()) as { context?: DriverPosContextDto };
     if (refreshedPayload.context) setContext(refreshedPayload.context);
   }
 
   async function validateSale() {
-    const handledCustomerId = selectedCustomerId || null;
+    const handledCustomerId = selectedCustomer?.id ?? null;
     setBusy(true);
     try {
       const response = await fetch("/api/driver/sales", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          customerId: selectedCustomerId || null,
+          customerId: handledCustomerId,
           paymentMethod,
           paidAmount: paidAmount ? Number(paidAmount) : undefined,
           lines: cart,
+          idempotencyKey: idempotencyKeyRef.current,
         }),
       });
       const payload = (await response.json()) as { sale?: SaleDto; message?: string };
@@ -176,6 +197,8 @@ export function DriverPosView({
       setCart([]);
       setPaidAmount("");
       setPaymentMethod("CASH");
+      // A new sale starts here - mint a fresh key for it.
+      idempotencyKeyRef.current = crypto.randomUUID();
       if (handledCustomerId) {
         driverRuntime.markCustomerHandled(handledCustomerId);
       }
@@ -342,20 +365,12 @@ export function DriverPosView({
               </div>
 
               <div className="grid gap-3">
-                <Field label="Client">
-                  <select
-                    value={selectedCustomerId}
-                    onChange={(event) => setCustomerId(event.target.value)}
-                    className="h-10 rounded-2xl border border-input bg-background px-3 text-sm"
-                  >
-                    <option value="">Client comptoir</option>
-                    {context.customers.map((customer) => (
-                      <option key={customer.id} value={customer.id}>
-                        {customer.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                <CustomerCombobox
+                  value={selectedCustomer}
+                  onChange={setSelectedCustomer}
+                  initialSuggestions={context.customers}
+                  placeholder="Client comptoir"
+                />
 
                 <Field label="Paiement">
                   <select
@@ -590,19 +605,20 @@ function computeLine(product: DriverPosProductDto, line: CartLine) {
   return { totalHT, taxAmount, totalTTC: round(totalHT + taxAmount) };
 }
 
-function resolveInitialCustomerId(
+function resolveInitialCustomer(
   context: DriverPosContextDto,
   initialCustomerId?: string | null,
-) {
+): CustomerDto | null {
   if (!initialCustomerId) {
-    return "";
+    return null;
   }
 
-  return context.customers.some((customer) => customer.id === initialCustomerId)
-    ? initialCustomerId
-    : "";
+  return context.customers.find((customer) => customer.id === initialCustomerId) ?? null;
 }
 
+// F8-B: delegates to the shared decimal-based engine (lib/money.ts) instead
+// of `Math.round(value * 100) / 100`. Kept under this same local name so
+// every call site in this file needed zero changes.
 function round(value: number) {
-  return Math.round(value * 100) / 100;
+  return roundMoney(value);
 }

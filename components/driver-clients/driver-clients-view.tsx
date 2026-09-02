@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { driverCustomerTypes as customerTypes } from "@/components/driver-clients/driver-customer-form";
 import { DriverCustomerForm } from "@/components/driver-clients/driver-customer-form";
 import { Input } from "@/components/ui/input";
+import { useDriverCustomersPage } from "@/components/driver-clients/use-driver-customers-page";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
 import { cn, formatCurrency } from "@/lib/utils";
 import {
@@ -21,38 +22,67 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { CustomerDto, CustomerMutationInput } from "@/types/operations-dto";
+import type {
+  CustomerDto,
+  CustomerMutationInput,
+  DriverCustomersPageDto,
+} from "@/types/operations-dto";
+
+const SEARCH_DEBOUNCE_MS = 400;
 
 export function DriverClientsView({
-  initialCustomers,
+  initialPage,
   initialSelectedCustomerId,
 }: {
-  initialCustomers: CustomerDto[];
+  initialPage: DriverCustomersPageDto;
   initialSelectedCustomerId?: string | null;
 }) {
   const router = useRouter();
   const driverRuntime = useDriverRuntime();
-  const [customers, setCustomers] = React.useState(initialCustomers);
   const [search, setSearch] = React.useState("");
+  const [debouncedSearch, setDebouncedSearch] = React.useState("");
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const {
+    items: customers,
+    totalAccessibleCustomers,
+    activeCount,
+    blockedCount,
+    ownCreatedCount,
+    guaranteedCustomer,
+    pageIndex,
+    hasMore,
+    hasPrevious,
+    loading,
+    goToNextPage,
+    goToPreviousPage,
+    refetchCurrentPage,
+    resetToFirstPage,
+  } = useDriverCustomersPage({ search: debouncedSearch }, initialPage);
+
   const [editing, setEditing] = React.useState<CustomerDto | null>(null);
   const [showForm, setShowForm] = React.useState(false);
   const [focusLocation, setFocusLocation] = React.useState(false);
-  const [selectedCustomerId, setSelectedCustomerId] = React.useState<string | null>(() =>
-    resolveInitialSelectedCustomerId(initialCustomers, initialSelectedCustomerId),
+  const [selectedCustomerId, setSelectedCustomerId] = React.useState<string | null>(
+    initialSelectedCustomerId ?? null,
   );
 
-  const filtered = React.useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return customers.filter((customer) =>
-      `${customer.name} ${customer.code} ${customer.phone} ${customer.city}`
-        .toLowerCase()
-        .includes(query),
+  // CRITICAL #2 follow-up: `customers` is now one bounded page, not every
+  // accessible customer - a selection can point at a row on another page
+  // (row click) or outside pagination entirely (the ?customerId= deep link,
+  // resolved server-side as guaranteedCustomer - see getDriverCustomersPage's
+  // doc comment). Both are checked so the detail card above the table never
+  // silently disappears just because its row scrolled off the current page.
+  const selectedCustomer = React.useMemo(() => {
+    if (!selectedCustomerId) return null;
+    return (
+      customers.find((customer) => customer.id === selectedCustomerId) ??
+      (guaranteedCustomer?.id === selectedCustomerId ? guaranteedCustomer : null)
     );
-  }, [customers, search]);
-  const selectedCustomer = React.useMemo(
-    () => customers.find((customer) => customer.id === selectedCustomerId) ?? null,
-    [customers, selectedCustomerId],
-  );
+  }, [customers, guaranteedCustomer, selectedCustomerId]);
 
   async function saveCustomer(input: CustomerMutationInput, id?: string) {
     const response = await fetch("/api/driver/customers", {
@@ -70,9 +100,16 @@ export function DriverClientsView({
       return payload.fieldErrors ?? { form: payload.message ?? "Erreur inconnue." };
     }
     const savedCustomer = payload.customer;
-    setCustomers((current) => upsertCustomer(current, savedCustomer));
     setSelectedCustomerId(savedCustomer.id);
     driverRuntime.upsertCustomer(savedCustomer);
+    // A new customer sorts first (createdAt desc) - jump back to page 1 so
+    // it's immediately visible. An edit's row is already on the current
+    // page - just refresh it in place.
+    if (id) {
+      await refetchCurrentPage();
+    } else {
+      await resetToFirstPage();
+    }
     setEditing(null);
     setShowForm(false);
     setFocusLocation(false);
@@ -193,19 +230,47 @@ export function DriverClientsView({
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-4">
-        <Metric label="Total clients" value={customers.length} />
-        <Metric label="Actifs" value={customers.filter((c) => c.status === "ACTIVE").length} />
-        <Metric label="Bloques" value={customers.filter((c) => c.status === "BLOCKED").length} />
-        <Metric label="Ajoutes par vous" value={customers.filter((c) => c.creationOrigin === "DRIVER").length} />
+        <Metric label="Total clients" value={totalAccessibleCustomers} />
+        <Metric label="Actifs" value={activeCount} />
+        <Metric label="Bloques" value={blockedCount} />
+        <Metric label="Ajoutes par vous" value={ownCreatedCount} />
       </div>
 
       <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
         <CardContent className="space-y-4">
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Rechercher un client"
-          />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Rechercher par nom, code, telephone..."
+              className="sm:max-w-sm"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasPrevious || loading}
+                onClick={goToPreviousPage}
+              >
+                Precedent
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasMore || loading}
+                onClick={goToNextPage}
+              >
+                Suivant
+              </Button>
+            </div>
+          </div>
+
+          <p className="text-sm text-muted-foreground">
+            Page {pageIndex + 1} - {customers.length} sur cette page
+          </p>
+
           <Table>
             <TableHeader>
               <TableRow>
@@ -221,7 +286,7 @@ export function DriverClientsView({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((customer) => (
+              {customers.map((customer) => (
                 <TableRow
                   key={customer.id}
                   className={cn(
@@ -279,35 +344,4 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function typeLabel(value: string) {
   return customerTypes.find(([type]) => type === value)?.[1] ?? value;
-}
-
-function upsertCustomer(customers: CustomerDto[], customer: CustomerDto) {
-  const existingIndex = customers.findIndex((item) => item.id === customer.id);
-
-  if (existingIndex === -1) {
-    return sortCustomersByName([customer, ...customers]);
-  }
-
-  const nextCustomers = [...customers];
-  nextCustomers[existingIndex] = customer;
-  return sortCustomersByName(nextCustomers);
-}
-
-function sortCustomersByName(customers: CustomerDto[]) {
-  return [...customers].sort((left, right) =>
-    left.name.localeCompare(right.name, "fr-FR"),
-  );
-}
-
-function resolveInitialSelectedCustomerId(
-  customers: CustomerDto[],
-  initialSelectedCustomerId?: string | null,
-) {
-  if (!initialSelectedCustomerId) {
-    return null;
-  }
-
-  return customers.some((customer) => customer.id === initialSelectedCustomerId)
-    ? initialSelectedCustomerId
-    : null;
 }

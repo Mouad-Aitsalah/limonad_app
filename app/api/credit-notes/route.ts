@@ -7,6 +7,7 @@ import {
 } from "@/lib/server/credit-notes";
 import { OperationsServiceError } from "@/lib/server/depots";
 import type { CreditNoteStatus } from "@/types/credit-note";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 const acceptedStatuses: CreditNoteStatus[] = ["BROUILLON", "VALIDE", "CONTREPASSE"];
 
@@ -22,6 +23,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const body = await request.json();
     const requestedStatus = body.status as CreditNoteStatus | undefined;

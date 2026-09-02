@@ -1,3 +1,4 @@
+import { roundMoney } from "@/lib/money";
 import { computeInvoiceTotals, computeLineTotals } from "@/lib/sales-calculations";
 import type { CreditNote, CreditNoteLine, CreditNoteReason } from "@/types/credit-note";
 import type { SaleInvoice, SaleInvoiceLine } from "@/types/sale";
@@ -59,9 +60,12 @@ export function computeCreditNoteTotals(lines: CreditNoteLine[]): CreditNoteTota
   );
 
   return {
-    totalHT: Math.round(totals.totalHT * 100) / 100,
-    totalTVA: Math.round(totals.totalTVA * 100) / 100,
-    totalTTC: Math.round(totals.totalTTC * 100) / 100,
+    // F8-B: same rounding points as before (only the final accumulated
+    // totals, never the per-line intermediates) - just via the shared
+    // decimal-based engine instead of `Math.round(x * 100) / 100`.
+    totalHT: roundMoney(totals.totalHT),
+    totalTVA: roundMoney(totals.totalTVA),
+    totalTTC: roundMoney(totals.totalTTC),
     itemCount: totals.itemCount,
   };
 }

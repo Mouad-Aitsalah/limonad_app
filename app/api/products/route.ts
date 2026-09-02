@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
+import { AuthServiceError } from "@/lib/server/auth";
 import {
   createProduct,
   getProducts,
@@ -9,7 +11,11 @@ import {
 export async function GET() {
   try {
     return NextResponse.json({ products: await getProducts() });
-  } catch {
+  } catch (error) {
+    if (error instanceof AuthServiceError) {
+      return NextResponse.json({ message: error.message }, { status: error.status });
+    }
+
     return NextResponse.json(
       { message: "Impossible de charger les produits." },
       { status: 500 },
@@ -18,6 +24,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const product = await createProduct(await request.json());
     return NextResponse.json({ product }, { status: 201 });

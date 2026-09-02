@@ -9,8 +9,10 @@ import {
   defaultAccountingAccounts,
   defaultAccountingSettingsByCode,
 } from "@/lib/accounting";
+import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { getCurrentSessionUser, requireSessionUser } from "@/lib/server/auth";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type {
   AccountingAccountDto,
@@ -79,7 +81,9 @@ const settingsUpdateSchema = z.object({
       ...AccountingStampCalculationMethod[],
     ])
     .optional(),
-  stampValue: z.coerce.number().min(0).optional(),
+  // F8-F: input-level sanity bound only - see the server-side
+  // assertMoneyRange call in updateAccountingSettings below.
+  stampValue: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   stampExpenseAccountId: z.string().trim().nullable().optional(),
   stampPayableAccountId: z.string().trim().nullable().optional(),
 });
@@ -431,6 +435,12 @@ export async function updateAccountingSettings(
     }
   }
 
+  // F8-F: AccountingSettings.stampValue is Decimal(12,2), checked before
+  // the write below regardless of how small it is in practice.
+  if (parsed.data.stampValue !== undefined) {
+    assertMoneyRange(parsed.data.stampValue, "stampValue");
+  }
+
   const settings = await prisma.accountingSettings.upsert({
     where: { organizationId: user.organizationId },
     create: {
@@ -660,12 +670,20 @@ export async function postSaleAccountingEntry(
           debit: 0,
           credit: subtotalHT,
         },
-        {
-          accountId: settings.salesVatAccountId,
-          label: buildSaleVatLabel(),
-          debit: 0,
-          credit: taxAmount,
-        },
+        // F8 fix #1: a line with debit=0 AND credit=0 (a 0%-VAT sale) is
+        // rejected by assertBalancedEntry ("either a debit or a credit",
+        // never neither) - omit the VAT line entirely when there is no VAT
+        // to post, same guard already used for stampAmount just below.
+        ...(taxAmount.gt(0)
+          ? [
+              {
+                accountId: settings.salesVatAccountId,
+                label: buildSaleVatLabel(),
+                debit: 0,
+                credit: taxAmount,
+              },
+            ]
+          : []),
         ...(stampAmount.gt(0)
           ? [
               {
@@ -786,12 +804,19 @@ export async function postPurchaseAccountingEntry(
           debit: subtotalHT,
           credit: 0,
         },
-        {
-          accountId: settings.purchaseVatAccountId,
-          label: buildPurchaseVatLabel(),
-          debit: taxAmount,
-          credit: 0,
-        },
+        // F8 fix #1: same guard as postSaleAccountingEntry - omit the VAT
+        // line entirely for a 0%-VAT purchase, rather than posting a
+        // debit=0/credit=0 line that assertBalancedEntry would reject.
+        ...(taxAmount.gt(0)
+          ? [
+              {
+                accountId: settings.purchaseVatAccountId,
+                label: buildPurchaseVatLabel(),
+                debit: taxAmount,
+                credit: 0,
+              },
+            ]
+          : []),
         {
           accountId: supplierAccountId,
           label: buildPurchaseSupplierLabel(payload.purchaseNumber),
@@ -942,12 +967,18 @@ export async function postValidatedCreditNoteAccountingEntry(
           debit: 0,
           credit: subtotalHT,
         },
-        {
-          accountId: settings.purchaseVatAccountId,
-          label: `TVA avoir fournisseur ${payload.creditNoteNumber}`,
-          debit: 0,
-          credit: taxAmount,
-        },
+        // F8 fix #1: same guard as the CASH branch just above (which
+        // already had it) - omit the VAT line for a 0%-VAT credit note.
+        ...(taxAmount.gt(0)
+          ? [
+              {
+                accountId: settings.purchaseVatAccountId,
+                label: `TVA avoir fournisseur ${payload.creditNoteNumber}`,
+                debit: 0,
+                credit: taxAmount,
+              },
+            ]
+          : []),
       ];
       description = `Avoir fournisseur ${payload.creditNoteNumber}`;
     }
@@ -993,12 +1024,18 @@ export async function postValidatedCreditNoteAccountingEntry(
           debit: subtotalHT,
           credit: 0,
         },
-        {
-          accountId: settings.salesVatAccountId,
-          label: `TVA avoir client ${payload.creditNoteNumber}`,
-          debit: taxAmount,
-          credit: 0,
-        },
+        // F8 fix #1: same guard as the two branches above - omit the VAT
+        // line for a 0%-VAT credit note.
+        ...(taxAmount.gt(0)
+          ? [
+              {
+                accountId: settings.salesVatAccountId,
+                label: `TVA avoir client ${payload.creditNoteNumber}`,
+                debit: taxAmount,
+                credit: 0,
+              },
+            ]
+          : []),
         {
           accountId: settings.customerAccountId,
           label: `Client ${payload.creditNoteNumber}`,
@@ -1185,6 +1222,14 @@ export async function postEmployeePayrollAccountingEntry(
         );
       }
 
+      // F8-F: amount and advanceToOffset can each individually be within
+      // range yet their SUM overflow Decimal(12,2) - checked here, before
+      // any accounting line is built, since this is the one place that sum
+      // is computed (every other line elsewhere in this function only ever
+      // writes amount or advanceToOffset alone, never combined).
+      const transferDebit = amount.plus(advanceToOffset);
+      assertMoneyRange(transferDebit.toNumber(), "employeeTransfer.debit");
+
       const settings = await requireSettings(db, organizationId, ["cashAccountId"]);
       return createPostedEntry(db, {
         organizationId,
@@ -1199,7 +1244,7 @@ export async function postEmployeePayrollAccountingEntry(
           {
             accountId: payload.salaryAccountId,
             label: buildEmployeeTransferSalaryLabel(payload.employeeName),
-            debit: amount.plus(advanceToOffset),
+            debit: transferDebit,
             credit: 0,
           },
           ...(advanceToOffset.gt(0)
@@ -1589,6 +1634,18 @@ async function resolveOrganizationId(input: {
   throw new OperationsServiceError("Aucune organisation n'est associee a cette operation.", 403);
 }
 
+// F8-F: the single choke point every AccountingEntryLine ever created in
+// this app funnels through (called both directly by createManualAccountingEntry
+// and, universally, by createPostedEntry - which every post*AccountingEntry
+// function in this file goes through). debit/credit are Decimal(12,2), so
+// each is range-checked right after being parsed by toMoneyDecimal (which
+// already rejects a non-finite/non-numeric value, e.g. "abc" - the range
+// check here is what was missing for a value that parses fine but is too
+// large, e.g. the string "10000000000"). Every other caller in this file
+// already passes an amount checked upstream (F8-D/F8-E/F8-F), so this is
+// pure defense-in-depth for them and the actual new gate for manual entries
+// (manualEntrySchema's debit/credit accept `number | string` with no bound
+// of their own).
 function normalizeEntryLines(
   lines: Array<{
     accountId: string;
@@ -1597,13 +1654,19 @@ function normalizeEntryLines(
     credit: DecimalInput;
   }>,
 ): NormalizedEntryLine[] {
-  return lines.map((line, index) => ({
-    accountId: line.accountId,
-    label: line.label.trim(),
-    debit: toMoneyDecimal(line.debit),
-    credit: toMoneyDecimal(line.credit),
-    position: index,
-  }));
+  return lines.map((line, index) => {
+    const debit = toMoneyDecimal(line.debit);
+    const credit = toMoneyDecimal(line.credit);
+    assertMoneyRange(debit.toNumber(), "entryLine.debit");
+    assertMoneyRange(credit.toNumber(), "entryLine.credit");
+    return {
+      accountId: line.accountId,
+      label: line.label.trim(),
+      debit,
+      credit,
+      position: index,
+    };
+  });
 }
 
 function assertBalancedEntry(lines: NormalizedEntryLine[]) {
@@ -1906,18 +1969,15 @@ async function nextAccountingEntryNumber(
   organizationId: string,
   date: Date,
 ) {
-  const prefix = `EC-${formatSequenceDate(date)}-`;
-  const last = await db.accountingEntry.findFirst({
-    where: {
-      organizationId,
-      entryNumber: { startsWith: prefix },
-    },
-    orderBy: { entryNumber: "desc" },
-    select: { entryNumber: true },
-  });
-  const lastSuffix = last?.entryNumber.match(/(\d{6})$/)?.[1];
-  const next = (lastSuffix ? Number(lastSuffix) : 0) + 1;
-  return `${prefix}${String(next).padStart(6, "0")}`;
+  const scopeDate = formatSequenceDate(date);
+  const prefix = `EC-${scopeDate}-`;
+  const number = await reserveDocumentSequence(
+    db,
+    organizationId,
+    DocumentType.AccountingEntry,
+    scopeDate,
+  );
+  return `${prefix}${String(number).padStart(6, "0")}`;
 }
 
 function parseAccountingDate(value: string) {

@@ -7,6 +7,7 @@ import {
   mapEmployeeError,
 } from "@/lib/server/employees";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function GET() {
   try {
@@ -17,6 +18,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const body = await request.json();
     return NextResponse.json({ employee: await createEmployee(body) }, { status: 201 });

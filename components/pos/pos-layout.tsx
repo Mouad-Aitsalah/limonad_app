@@ -4,7 +4,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { roundCurrency } from "@/lib/utils";
-import type { CounterPosContextDto, SaleDto } from "@/types/operations-dto";
+import type { CounterPosContextDto, CustomerDto, SaleDto } from "@/types/operations-dto";
 import {
   defaultPaymentMethod,
   posPaymentMethods,
@@ -14,8 +14,9 @@ import {
 } from "@/types/pos";
 import { ProductSearch } from "@/components/pos/product-search";
 import { ProductGrid } from "@/components/pos/product-grid";
+import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { InvoiceHeader } from "@/components/pos/invoice-header";
-import { CustomerSelector } from "@/components/pos/customer-selector";
+import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { PaymentSelector } from "@/components/pos/payment-selector";
 import { CartTable } from "@/components/pos/cart-table";
 import { CartSummary } from "@/components/pos/cart-summary";
@@ -68,6 +69,10 @@ function normalizeSearch(value: string) {
     .replace(/\s+/g, " ");
 }
 
+function resolveDefaultCustomer(customers: CustomerDto[]): CustomerDto | null {
+  return customers.find((customer) => customer.type === "COUNTER") ?? customers[0] ?? null;
+}
+
 function mapContextProductsToPosProducts(
   products: CounterPosContextDto["products"],
 ): PosProduct[] {
@@ -88,10 +93,14 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
-  const [customerId, setCustomerId] = React.useState(
-    initialContext.customers.find((customer) => customer.type === "COUNTER")?.id ??
-      initialContext.customers[0]?.id ??
-      "",
+  // Phase 3: the fully-resolved customer object, not just an id - kept as
+  // its own state (not derived from context.customers.find(...)) because
+  // context.customers is now only a small preload (see
+  // getPosCustomerPreload); a customer found via the combobox's search
+  // fallback must stay selected/resolvable even though it was never in
+  // that preloaded list.
+  const [selectedCustomer, setSelectedCustomer] = React.useState<CustomerDto | null>(
+    resolveDefaultCustomer(initialContext.customers),
   );
   const [paymentMethod, setPaymentMethod] =
     React.useState<PosPaymentMethodValue>(defaultPaymentMethod);
@@ -99,38 +108,43 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [banque, setBanque] = React.useState("");
   const [dateEcheance, setDateEcheance] = React.useState("");
   const [checkoutOpen, setCheckoutOpen] = React.useState(false);
+  // Stable for one sale attempt (F5): kept identical across a network retry
+  // of confirmOperation, only ever replaced in resetOperation() once a sale
+  // has actually gone through and a new one starts. A ref (not state) so it
+  // never triggers a re-render and is guaranteed synchronously current the
+  // instant confirmOperation reads it.
+  const idempotencyKeyRef = React.useRef<string>(crypto.randomUUID());
   const [submitting, setSubmitting] = React.useState(false);
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
 
   const operationType: PosOperationType = "sale";
+  // Phase 3: when the depot has more sellable products than the POS context
+  // preloads (context.productsTruncated), fall back to a server search
+  // scoped to this depot's stock location instead of only ever searching
+  // the (possibly incomplete) preloaded list. allKnownProducts accumulates
+  // every product ever found this way so a remotely-found item stays
+  // resolvable in the cart even after the search term changes.
+  const { products: matchedProducts, allKnownProducts } = usePosProductSearch(
+    context.products,
+    search,
+    {
+      truncated: context.productsTruncated,
+      locationId: context.stockLocation.id,
+      normalize: normalizeSearch,
+    },
+  );
   const sellableProducts = React.useMemo(
-    () => mapContextProductsToPosProducts(context.products),
-    [context.products],
+    () => mapContextProductsToPosProducts(allKnownProducts),
+    [allKnownProducts],
   );
   const productById = React.useMemo(() => {
     return new Map(sellableProducts.map((product) => [product.id, product]));
   }, [sellableProducts]);
-  const selectedCustomer = React.useMemo(
-    () => context.customers.find((customer) => customer.id === customerId) ?? null,
-    [context.customers, customerId],
+
+  const filteredProducts = React.useMemo(
+    () => mapContextProductsToPosProducts(matchedProducts),
+    [matchedProducts],
   );
-
-  const filteredProducts = React.useMemo(() => {
-    const query = normalizeSearch(search);
-    if (query.length === 0) return sellableProducts;
-
-    return sellableProducts.filter((product) => {
-      const designation = normalizeSearch(product.designation);
-      const reference = normalizeSearch(product.reference);
-      const barcode = normalizeSearch(product.barcode ?? "");
-
-      return (
-        designation.includes(query) ||
-        reference.includes(query) ||
-        barcode.includes(query)
-      );
-    });
-  }, [search, sellableProducts]);
 
   const cartLines = React.useMemo<CartLineComputed[]>(() => {
     return cart.flatMap((line) => {
@@ -263,6 +277,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setChequeNumber("");
     setBanque("");
     setDateEcheance("");
+    // A new sale starts here - mint a fresh key so it never gets confused
+    // with the one just used (whether that one succeeded or is still
+    // in-flight).
+    idempotencyKeyRef.current = crypto.randomUUID();
   }
 
   async function refreshContext() {
@@ -274,13 +292,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
     const nextContext = payload.context as CounterPosContextDto;
     setContext(nextContext);
-    setCustomerId((currentCustomerId) =>
-      nextContext.customers.some((customer) => customer.id === currentCustomerId)
-        ? currentCustomerId
-        : nextContext.customers.find((customer) => customer.type === "COUNTER")?.id ??
-          nextContext.customers[0]?.id ??
-          "",
-    );
+    // The selected customer is independent client state now (see
+    // selectedCustomer's declaration) - a refresh must never silently drop
+    // it just because it isn't in the new context's small preload. Only
+    // fall back to the default when nothing was selected at all.
+    setSelectedCustomer((current) => current ?? resolveDefaultCustomer(nextContext.customers));
   }
 
   async function confirmOperation(paidAmount?: number) {
@@ -309,6 +325,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             quantity: line.quantity,
             discountRate: line.discountPercent,
           })),
+          idempotencyKey: idempotencyKeyRef.current,
         }),
       });
       const payload = await response.json();
@@ -359,10 +376,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         />
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <CustomerSelector
-            customers={context.customers}
-            customerId={customerId}
-            onChange={setCustomerId}
+          <CustomerCombobox
+            value={selectedCustomer}
+            onChange={setSelectedCustomer}
+            initialSuggestions={context.customers}
           />
           <PaymentSelector
             paymentMethod={paymentMethod}

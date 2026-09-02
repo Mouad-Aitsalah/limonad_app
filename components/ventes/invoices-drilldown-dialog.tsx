@@ -1,7 +1,6 @@
 "use client";
 
-import * as React from "react";
-
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -10,48 +9,36 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { InvoicesTable } from "@/components/ventes/invoices-table";
-import { SalesPagination } from "@/components/ventes/sales-pagination";
-import type { SaleDto } from "@/types/operations-dto";
-
-const PAGE_SIZE = 8;
+import { useSalesOrdersPage, type OrdersQueryFilters } from "@/components/ventes/use-sales-orders-page";
 
 type InvoicesDrilldownDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   description: string;
-  invoices: SaleDto[];
+  /** Scopes the drilldown to one session (posSessionId) or one month
+   * (dateFrom/dateTo) - see SessionsTab/MonthsTab. */
+  filters: OrdersQueryFilters;
 };
 
+/**
+ * Phase 3: was a client-side slice of the full, already-loaded orders
+ * array (see the Phase 3 report) - now fetches its own server-paginated,
+ * server-filtered page via the same GET /api/sales-history the main
+ * Commandes tab uses, scoped to exactly this session or month.
+ */
 export function InvoicesDrilldownDialog({
   open,
   onOpenChange,
   title,
   description,
-  invoices,
+  filters,
 }: InvoicesDrilldownDialogProps) {
-  const [page, setPage] = React.useState(1);
-
-  const sorted = React.useMemo(
-    () =>
-      [...invoices].sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-      ),
-    [invoices],
-  );
-
-  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const paginated = sorted.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const { items, totalCount, pageIndex, hasMore, hasPrevious, loading, goToNextPage, goToPreviousPage } =
+    useSalesOrdersPage(filters, undefined, open);
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) setPage(1);
-        onOpenChange(next);
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="text-xl">{title}</DialogTitle>
@@ -59,8 +46,33 @@ export function InvoicesDrilldownDialog({
         </DialogHeader>
 
         <div className="flex-1 space-y-4 overflow-y-auto px-1 py-1">
-          <InvoicesTable invoices={paginated} />
-          <SalesPagination page={currentPage} totalPages={totalPages} onPageChange={setPage} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Page {pageIndex + 1} &middot; {items.length} commande{items.length > 1 ? "s" : ""} sur{" "}
+              {totalCount} au total.
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasPrevious || loading}
+                onClick={goToPreviousPage}
+              >
+                Precedent
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasMore || loading}
+                onClick={goToNextPage}
+              >
+                Suivant
+              </Button>
+            </div>
+          </div>
+          <InvoicesTable invoices={items} />
         </div>
       </DialogContent>
     </Dialog>

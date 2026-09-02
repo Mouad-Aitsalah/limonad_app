@@ -4,6 +4,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { createCounterSale } from "@/lib/server/counter-sales";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getAllSales } from "@/lib/server/driver-sales";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 export async function GET() {
   try {
@@ -17,6 +18,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     return NextResponse.json(
       { sale: await createCounterSale(await request.json()) },

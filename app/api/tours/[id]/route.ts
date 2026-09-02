@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AuthServiceError, requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getTourById, updateDraftTour } from "@/lib/server/tours";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -23,6 +24,8 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   try {
     return NextResponse.json({ tour: await updateDraftTour(id, await request.json()) });

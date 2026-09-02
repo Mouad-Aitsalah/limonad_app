@@ -12,9 +12,9 @@ export default async function DriverPosPage({
 }: {
   searchParams: Promise<{ customerId?: string }>;
 }) {
-  const context = await getDriverPosContext();
   const params = await searchParams;
   const initialCustomerId = params.customerId?.trim() || null;
+  const context = await getDriverPosContext(initialCustomerId);
 
   return (
     <DriverPosView

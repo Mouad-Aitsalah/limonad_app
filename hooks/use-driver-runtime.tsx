@@ -22,6 +22,22 @@ import type {
 const DRIVER_NEARBY_ENTRY_RADIUS_METERS = 100;
 const DRIVER_NEARBY_EXIT_RADIUS_METERS = 120;
 
+/**
+ * CRITICAL #2 follow-up: getDriverProximityCustomers's server-side candidate
+ * pool is boxed to ~100km around the driver's last known GPS position at
+ * fetch time (see its doc comment) - a fixed one-time fetch on mount would
+ * silently go stale for a tour that drives farther than that in one
+ * session, so local proximity suggestions for a customer near the new area
+ * would never surface even though server-side detection (upsertNearbyVisit,
+ * boxed fresh on every ping) keeps working. This re-fetches well before the
+ * driver could actually exit the original box - comfortably inside its
+ * ~100km margin - using only the already-existing calculateDistanceMeters
+ * utility to decide WHEN to refetch; the proximity/hysteresis math itself
+ * (DRIVER_NEARBY_*_RADIUS_METERS, suppressedCustomerIdsRef, syncNearbyCustomer)
+ * is untouched.
+ */
+const PROXIMITY_FEED_REFETCH_DISTANCE_METERS = 50_000;
+
 type DriverNearbyCustomerSuggestion = {
   customer: CustomerDto;
   distanceMeters: number;
@@ -48,8 +64,14 @@ type DriverRuntimeContextValue = {
 
 const DriverRuntimeContext = React.createContext<DriverRuntimeContextValue | null>(null);
 
+// Phase 3 CRITICAL #2 fix: the runtime's own GPS-reactive proximity feed
+// (syncNearbyCustomer below) never needs the driver's ENTIRE accessible
+// customer list - just a bounded, GPS-scoped candidate pool. See
+// getDriverProximityCustomers's doc comment in lib/server/driver-customers.ts.
+// /driver/clients (the full directory page) is unrelated and keeps fetching
+// GET /api/driver/customers directly server-side - untouched by this chantier.
 async function fetchDriverCustomers() {
-  const response = await fetch("/api/driver/customers", { cache: "no-store" });
+  const response = await fetch("/api/driver/customers/nearby", { cache: "no-store" });
   const payload = (await response.json()) as {
     customers?: CustomerDto[];
     message?: string;
@@ -83,6 +105,10 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
   const reliablePositionRef = React.useRef<DriverGpsPosition | null>(null);
   const suppressedCustomerIdsRef = React.useRef<Set<string>>(new Set());
   const activeNearbyCustomerIdRef = React.useRef<string | null>(null);
+  const lastProximityFetchPositionRef = React.useRef<{ latitude: number; longitude: number } | null>(
+    null,
+  );
+  const proximityRefetchInFlightRef = React.useRef(false);
 
   const [customers, setCustomers] = React.useState<CustomerDto[]>([]);
   const [currentTour, setCurrentTour] = React.useState<CurrentDriverTourDto | null>(null);
@@ -269,11 +295,6 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
   }, [customers, syncNearbyCustomer]);
 
   React.useEffect(() => {
-    reliablePositionRef.current = gps.reliablePosition;
-    syncNearbyCustomer();
-  }, [gps.reliablePosition, syncNearbyCustomer]);
-
-  React.useEffect(() => {
     if (process.env.NODE_ENV !== "production") {
       console.info("[driver-runtime] mounted");
       return () => {
@@ -291,6 +312,14 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
   }, []);
 
   const refreshCustomers = React.useCallback(async () => {
+    // Best-effort: remember roughly where this fetch's candidate pool is
+    // centered (the driver's current reliable position, if known - the
+    // server itself boxes around the driver's latest recorded ping, which
+    // by now normally matches). Used only to decide when a later refetch is
+    // due - see PROXIMITY_FEED_REFETCH_DISTANCE_METERS's doc comment.
+    lastProximityFetchPositionRef.current = reliablePositionRef.current
+      ? { latitude: reliablePositionRef.current.latitude, longitude: reliablePositionRef.current.longitude }
+      : null;
     const nextCustomers = sortCustomersByName(await fetchDriverCustomers());
     if (mountedRef.current) {
       customersRef.current = nextCustomers;
@@ -299,6 +328,36 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
     }
     return nextCustomers;
   }, [syncNearbyCustomer]);
+
+  React.useEffect(() => {
+    reliablePositionRef.current = gps.reliablePosition;
+    syncNearbyCustomer();
+
+    // CRITICAL #2 follow-up: refetch the bounded proximity feed once the
+    // driver has moved far enough from where it was last fetched - see
+    // PROXIMITY_FEED_REFETCH_DISTANCE_METERS's doc comment. Never lets more
+    // than one refetch run at a time; a position with no reference yet
+    // (first reliable fix of the session, or the very first load before any
+    // GPS reading exists) always triggers one so the pool converges onto
+    // the live area quickly.
+    const position = gps.reliablePosition;
+    if (!position || proximityRefetchInFlightRef.current) return;
+    const lastFetchPosition = lastProximityFetchPositionRef.current;
+    const shouldRefetch =
+      !lastFetchPosition ||
+      calculateDistanceMeters(lastFetchPosition, position) > PROXIMITY_FEED_REFETCH_DISTANCE_METERS;
+    if (!shouldRefetch) return;
+
+    proximityRefetchInFlightRef.current = true;
+    void refreshCustomers()
+      .catch(() => {
+        // A failed refetch just leaves the previous (still reasonably
+        // relevant) pool in place - the next reliable position retries.
+      })
+      .finally(() => {
+        proximityRefetchInFlightRef.current = false;
+      });
+  }, [gps.reliablePosition, refreshCustomers, syncNearbyCustomer]);
 
   const refreshCurrentTour = React.useCallback(async () => {
     const nextTour = mergeHydratedCurrentTour(

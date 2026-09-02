@@ -4,6 +4,8 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
 
 import { PrismaClient } from "../lib/generated/prisma/client";
+import { assertNotProduction } from "../lib/server/env-guard";
+import { BCRYPT_COST } from "../lib/password-hashing";
 import type {
   CustomerStatus,
   CustomerType,
@@ -106,8 +108,74 @@ const rootOrganizationName = "COMDIS Principal";
 const superAdminId = "user-super-admin";
 const superAdminEmail = "superadmin@comdis.local";
 
+/**
+ * This script exists to load COMDIS's demo/dev dataset: a synthetic
+ * organization, users with a single known password, mock customers,
+ * products, sales history, purchases, and tours (see lib/mock-data/*).
+ * None of it is real, and every user it creates or updates shares the
+ * exact same, publicly-known password - see the hash below.
+ *
+ * Runs ONLY when ALL hold:
+ *   0. assertNotProduction() (lib/server/env-guard.ts) does not throw -
+ *      APP_ENV !== "production" AND DATABASE_URL/DIRECT_URL don't match the
+ *      known production Neon endpoint
+ *   1. NODE_ENV !== "production"
+ *   2. ALLOW_DEMO_SEED === "true"
+ *
+ * Three independent gates on purpose, checked separately (never merged into
+ * one condition) so each has its own unambiguous refusal message:
+ *
+ *  - assertNotProduction() (Phase 4B) is the newest and broadest layer -
+ *    it catches both an explicit APP_ENV=production AND the case where
+ *    APP_ENV is simply unset/misconfigured but the connection string still
+ *    targets the known production Neon endpoint by hostname. Checked FIRST.
+ *  - NODE_ENV=production is a second, independent, non-negotiable block -
+ *    true regardless of ALLOW_DEMO_SEED. There is no combination of flags
+ *    that makes this script acceptable to run against a production
+ *    database: it would inject fabricated business records (fake
+ *    customers, fake historical sales/purchases) into a real dataset, and
+ *    it would create or reset accounts to a password anyone reading this
+ *    file already knows.
+ *  - ALLOW_DEMO_SEED requires a third, explicit, affirmative opt-in even
+ *    outside production - NODE_ENV!=="production" alone used to be
+ *    enough, but that is exactly the gap a real test surfaced: a
+ *    developer's shell can easily have no NODE_ENV set (so the old check
+ *    passed) while DATABASE_URL still points at a real, shared Neon
+ *    database rather than a disposable local/demo one. Requiring a
+ *    third, differently-named, explicitly-"true" flag makes running this
+ *    against the wrong target a deliberate act, not an accident of
+ *    default shell state.
+ *
+ * Same fail-closed pattern already used for AUTH_SECRET and
+ * BACKGROUND_TRACKING_SECRET elsewhere in this codebase: refuse loudly,
+ * before touching the database, rather than silently do the wrong thing.
+ */
 async function main() {
-  const demoPasswordHash = await bcrypt.hash("123456", 12);
+  assertNotProduction("prisma/seed.ts");
+
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      "[seed] Refuse : NODE_ENV=production. Ce script ne doit jamais etre execute " +
+        "contre une base de production, quelle que soit la valeur de ALLOW_DEMO_SEED. " +
+        "Aucune donnee n'a ete modifiee.",
+    );
+    process.exit(1);
+  }
+
+  if (process.env.ALLOW_DEMO_SEED !== "true") {
+    console.error(
+      "[seed] Refuse : ALLOW_DEMO_SEED n'est pas defini a 'true'. Ce script cree/" +
+        "reinitialise des comptes de demonstration a mot de passe connu et charge un " +
+        "jeu de donnees entierement synthetique (voir prisma/seed.ts) - un simple " +
+        "NODE_ENV different de 'production' ne suffit plus, un consentement explicite " +
+        "est requis. Definissez ALLOW_DEMO_SEED=true UNIQUEMENT si DATABASE_URL pointe " +
+        "vers une base de demonstration jetable, jamais une base partagee ou reelle. " +
+        "Aucune donnee n'a ete modifiee.",
+    );
+    process.exit(1);
+  }
+
+  const demoPasswordHash = await bcrypt.hash("123456", BCRYPT_COST);
 
   await prisma.organization.upsert({
     where: { id: rootOrganizationId },
@@ -406,27 +474,97 @@ async function main() {
     });
   }
 
+  // F6 fix (Phase 2 audit, finding F6): a StockLevel row that already exists
+  // - from an earlier seed run, or from real app usage - must never have its
+  // quantity silently overwritten here. Only a row that does not exist yet
+  // gets an initial quantity, and (when that quantity is non-zero) it is
+  // always paired, in the same transaction, with an explicit opening
+  // StockMovement so the row starts in sync with the ledger instead of
+  // reproducing the same untracked-quantity gap Audit 11 found. This script
+  // never recomputes or repairs an existing StockLevel from StockMovement
+  // history, and it does not touch the 59 pre-existing divergences found
+  // during that audit - those stay exactly as they are.
+  let seedMovementSequence = await prisma.stockMovement.count({
+    where: { organizationId: rootOrganizationId },
+  });
+  let stockLevelsInitialized = 0;
+  let stockLevelsUntouched = 0;
+
   for (const item of [...warehouseStock, ...truckStock]) {
-    await prisma.stockLevel.upsert({
+    const existingLevel = await prisma.stockLevel.findUnique({
       where: {
         productId_locationId: {
           productId: item.productId,
           locationId: item.locationId,
         },
       },
-      update: {
-        organizationId: rootOrganizationId,
-        quantity: item.quantity,
-      },
-      create: {
-        id: item.id,
-        organizationId: rootOrganizationId,
-        productId: item.productId,
-        locationId: item.locationId,
-        quantity: item.quantity,
-      },
+      select: { id: true },
     });
+
+    if (existingLevel) {
+      stockLevelsUntouched += 1;
+      continue;
+    }
+
+    if (item.quantity === 0) {
+      // Nothing to trace: an opening quantity of zero needs no movement,
+      // same convention already used elsewhere (finalizeInventory /
+      // applyStockMovement never create a movement for a zero delta).
+      await prisma.stockLevel.create({
+        data: {
+          id: item.id,
+          organizationId: rootOrganizationId,
+          productId: item.productId,
+          locationId: item.locationId,
+          quantity: 0,
+        },
+      });
+      stockLevelsInitialized += 1;
+      continue;
+    }
+
+    seedMovementSequence += 1;
+    // MV-SEED- prefix (not nextMovementNumber's plain MV-<n>) so an opening
+    // balance created by this script is always trivially distinguishable
+    // from a real application-generated movement, and can never collide
+    // with one.
+    const movementNumber = `MV-SEED-${String(seedMovementSequence).padStart(6, "0")}`;
+
+    await prisma.$transaction([
+      prisma.stockLevel.create({
+        data: {
+          id: item.id,
+          organizationId: rootOrganizationId,
+          productId: item.productId,
+          locationId: item.locationId,
+          quantity: item.quantity,
+        },
+      }),
+      prisma.stockMovement.create({
+        data: {
+          organizationId: rootOrganizationId,
+          movementNumber,
+          type: "INVENTORY_ADJUSTMENT",
+          productId: item.productId,
+          quantity: item.quantity,
+          sourceLocationId: null,
+          destinationLocationId: item.locationId,
+          referenceType: "SEED_INITIAL",
+          referenceId: null,
+          reason: "Stock d'ouverture (seed)",
+          note: "Quantite d'ouverture creee par prisma/seed.ts - aucun historique reel avant ce mouvement.",
+          createdByUserId: "user-admin",
+          status: "VALIDATED",
+        },
+      }),
+    ]);
+    stockLevelsInitialized += 1;
   }
+
+  console.log(
+    `[seed] StockLevel : ${stockLevelsInitialized} ligne(s) initialisee(s) avec mouvement d'ouverture trace, ` +
+      `${stockLevelsUntouched} ligne(s) existante(s) laissee(s) intacte(s) (quantity non modifiee).`,
+  );
 
   const requiredTourIds = new Set(driverTours.map((tour) => tour.id));
   for (const invoice of saleInvoices.filter((item) => item.tourId && !requiredTourIds.has(item.tourId))) {

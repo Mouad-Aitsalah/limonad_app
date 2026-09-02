@@ -34,10 +34,25 @@ export type CashDepositSummaryDto = {
 
 export type CashDepositDto = CashDepositSummaryDto & {
   denominations: CashDepositDenominationDto[];
+  cashSummary: CashDepositSnapshotDto | null;
+};
+
+export type CashDepositSummaryCalculationDto = {
+  cashSales: number;
+  cashExpenses: number;
+  availableCash: number;
+  hasCashShortfall: boolean;
+};
+
+export type CashDepositSnapshotDto = CashDepositSummaryCalculationDto & {
+  countedCash: number;
+  cashDifference: number;
+  cashRemaining: number;
 };
 
 export type CashDepositCreateInput = {
   denominations: Array<{ denomination: number; quantity: number }>;
+  cashDepositAmount?: number;
   checkTotal?: number;
   notes?: string | null;
 };
@@ -53,6 +68,7 @@ export type CashDepositContextDto = {
   todayTotal: number;
   todayCashTotal: number;
   todayCheckTotal: number;
+  cashSummary: CashDepositSummaryCalculationDto;
 };
 
 export type CashDepositHistoryFilters = {

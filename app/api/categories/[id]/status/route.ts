@@ -3,12 +3,15 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { setCategoryStatus } from "@/lib/server/categories";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
 };
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const { id } = await context.params;
     const body = (await request.json()) as { active?: boolean };

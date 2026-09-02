@@ -4,9 +4,12 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 
 import type { Prisma } from "@/lib/generated/prisma/client";
+import { BCRYPT_COST } from "@/lib/password-hashing";
 import { prisma } from "@/lib/prisma";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { passwordPolicySchema } from "@/lib/server/password-policy";
 import type { UserRole } from "@/types/auth";
 import type { CreatableUserRole, User, UserCreateInput } from "@/types/user";
 
@@ -45,7 +48,7 @@ const createUserSchema = z.object({
     .transform((value) => (value.length > 0 ? value : null))
     .nullable()
     .optional(),
-  password: z.string().min(6, "Le mot de passe doit contenir au moins 6 caracteres."),
+  password: passwordPolicySchema,
   role: z.enum(creatableRoleValues),
   actif: z.boolean().optional(),
 });
@@ -84,7 +87,7 @@ export async function createUser(input: UserCreateInput): Promise<User> {
   }
 
   const { firstName, lastName } = splitFullName(data.nom);
-  const passwordHash = await bcrypt.hash(data.password, 10);
+  const passwordHash = await bcrypt.hash(data.password, BCRYPT_COST);
   const dbRole = toDbRole(data.role);
 
   try {
@@ -143,16 +146,12 @@ function validateCreateUserInput(input: UserCreateInput) {
 }
 
 async function nextDriverEmployeeCode(tx: Prisma.TransactionClient, organizationId: string) {
-  const drivers = await tx.driver.findMany({
-    where: { organizationId, employeeCode: { startsWith: "DRV-" } },
-    select: { employeeCode: true },
-  });
-  const highest = drivers.reduce((max, driver) => {
-    const match = driver.employeeCode.match(/^DRV-(\d+)$/);
-    if (!match) return max;
-    return Math.max(max, Number(match[1]));
-  }, 0);
-  return `DRV-${String(highest + 1).padStart(4, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.DriverEmployeeCode,
+  );
+  return `DRV-${String(number).padStart(4, "0")}`;
 }
 
 function splitFullName(fullName: string) {

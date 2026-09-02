@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 
 import { LoadingsView } from "@/components/loadings/loadings-view";
 import { getDrivers } from "@/lib/server/drivers";
-import { getProducts } from "@/lib/server/products";
-import { getLoadingHistory } from "@/lib/server/truck-loadings";
+import { getProductPickerPreload } from "@/lib/server/products";
+import { getLoadingHistoryPage } from "@/lib/server/truck-loadings";
 import { getTrucks } from "@/lib/server/trucks";
 
 export const metadata: Metadata = {
@@ -11,19 +11,22 @@ export const metadata: Metadata = {
 };
 
 export default async function ChargementsPage() {
-  const [trucks, drivers, products, history] = await Promise.all([
+  // Phase 3 CRITICAL #1 fix: small bounded preload instead of getProducts()
+  // (measured 12.5s/56MB at 100k products) - already ACTIVE-only, so the
+  // .filter() this used to need is gone. See LoadingsView's product search.
+  const [trucks, drivers, products, historyPage] = await Promise.all([
     getTrucks(),
     getDrivers(),
-    getProducts(),
-    getLoadingHistory(),
+    getProductPickerPreload(),
+    getLoadingHistoryPage(),
   ]);
 
   return (
     <LoadingsView
       trucks={trucks}
       drivers={drivers}
-      products={products.filter((product) => product.status === "ACTIVE")}
-      history={history}
+      products={products}
+      initialHistoryPage={historyPage}
     />
   );
 }

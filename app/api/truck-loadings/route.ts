@@ -2,15 +2,23 @@ import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import {
   createOrReuseOpenLoading,
-  getLoadingHistory,
+  getLoadingHistoryPage,
   mapLoadingError,
 } from "@/lib/server/truck-loadings";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    return NextResponse.json({ loadings: await getLoadingHistory() });
+    const url = new URL(request.url);
+    const cursor = url.searchParams.get("cursor");
+    const pageSizeParam = url.searchParams.get("pageSize");
+    const page = await getLoadingHistoryPage({
+      cursor: cursor || undefined,
+      pageSize: pageSizeParam ? Number(pageSizeParam) : undefined,
+    });
+    return NextResponse.json(page);
   } catch (error) {
     if (error instanceof AuthServiceError || error instanceof OperationsServiceError) {
       return NextResponse.json({ message: error.message }, { status: error.status });
@@ -23,6 +31,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   try {
     const { loading, reused } = await createOrReuseOpenLoading(await request.json());
     return NextResponse.json({ loading, reused }, { status: reused ? 200 : 201 });

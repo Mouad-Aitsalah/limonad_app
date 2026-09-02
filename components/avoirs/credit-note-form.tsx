@@ -67,6 +67,12 @@ export function CreditNoteForm({
   const [quantities, setQuantities] = React.useState<DraftQuantities>({});
   const [loadingProducts, setLoadingProducts] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  // Stable for one avoir creation attempt (F5): the parent dialog remounts
+  // this form (key={open ? "open" : "closed"}) every time it opens, so a
+  // plain useRef initializer already gives a fresh key per attempt and keeps
+  // it identical across a retry within the same open dialog session - no
+  // manual rotation needed here.
+  const idempotencyKeyRef = React.useRef<string>(crypto.randomUUID());
 
   const selectedCustomer = customers.find((customer) => customer.id === customerId) ?? null;
   const filteredCustomers = React.useMemo(() => {
@@ -82,16 +88,27 @@ export function CreditNoteForm({
   const selectedLines = React.useMemo(
     () =>
       returnables
-        .map((product) => ({
-          productId: product.productId,
-          quantityReturned: Math.min(
-            Math.max(0, quantities[product.productId] ?? 0),
-            product.returnableQuantity,
-          ),
-          unitPrice: product.prices[0] ?? 0,
-          discountPercent: product.origins[0]?.discountPercent ?? 0,
-          taxRate: product.origins[0]?.taxRate ?? 0,
-        }))
+        .map((product) => {
+          // F4: linked to the earliest origin with something still
+          // returnable (origins is already sorted oldest-first and
+          // pre-filtered to quantityReturnable > 0 by getReturnableProducts).
+          // The server caps quantityReturned against THAT specific
+          // saleLineId, not the product's aggregate across every origin -
+          // so the UI must cap the same way here, or a value that looks
+          // valid here could still be refused server-side. A product
+          // bought across several sales can only be returned against the
+          // first one through this form (known limitation - see F4 report).
+          const origin = product.origins[0];
+          const cap = origin?.quantityReturnable ?? product.returnableQuantity;
+          return {
+            productId: product.productId,
+            quantityReturned: Math.min(Math.max(0, quantities[product.productId] ?? 0), cap),
+            unitPrice: product.prices[0] ?? 0,
+            discountPercent: origin?.discountPercent ?? 0,
+            taxRate: origin?.taxRate ?? 0,
+            saleLineId: origin?.saleLineId ?? null,
+          };
+        })
         .filter((line) => line.quantityReturned > 0),
     [returnables, quantities],
   );
@@ -149,13 +166,21 @@ export function CreditNoteForm({
       await onSaved(
         {
           customerId: selectedCustomer.id,
+          // F4 finalization: this form only ever offers products drawn
+          // from the customer's real purchase history (returnables), so
+          // every line it can produce already carries a saleLineId - it is
+          // always a LINKED return. A dedicated MANUAL-return UI does not
+          // exist yet (see the F4 finalization report).
+          returnMode: "LINKED",
           reason,
           comment,
           returnDate,
           lines: selectedLines.map((line) => ({
             productId: line.productId,
             quantityReturned: line.quantityReturned,
+            saleLineId: line.saleLineId,
           })),
+          idempotencyKey: idempotencyKeyRef.current,
         },
         status,
       );
@@ -240,6 +265,10 @@ export function CreditNoteForm({
             ) : (
               returnables.map((product) => {
                 const quantity = quantities[product.productId] ?? 0;
+                // F4: same cap the server will actually enforce (see
+                // selectedLines above) - the earliest origin's own
+                // returnable amount, not the product's aggregate.
+                const returnableCap = product.origins[0]?.quantityReturnable ?? product.returnableQuantity;
                 const lineTotals = computeCreditNoteLineTotals({
                   productId: product.productId,
                   quantityReturned: quantity,
@@ -266,13 +295,13 @@ export function CreditNoteForm({
                       <Input
                         type="number"
                         min={0}
-                        max={product.returnableQuantity}
+                        max={returnableCap}
                         value={quantity}
                         onChange={(event) =>
                           handleQuantityChange(
                             product.productId,
                             Number(event.target.value),
-                            product.returnableQuantity,
+                            returnableCap,
                           )
                         }
                         className="ml-auto h-8 w-20 text-right"

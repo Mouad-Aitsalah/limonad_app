@@ -9,9 +9,11 @@ import type {
   OrganizationSummaryDto,
   OrganizationUpdateInput,
 } from "@/types/organization";
+import { BCRYPT_COST } from "@/lib/password-hashing";
 import { prisma } from "@/lib/prisma";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireSuperAdmin } from "@/lib/server/organization-context";
+import { passwordPolicySchema } from "@/lib/server/password-policy";
 
 const optionalNullableString = z
   .string()
@@ -42,9 +44,7 @@ const organizationCreateSchema = z.object({
   status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
   adminName: z.string().trim().min(1, "Le nom de l'admin principal est obligatoire."),
   adminEmail: z.string().trim().email("L'email admin est invalide."),
-  adminPassword: z
-    .string()
-    .min(8, "Le mot de passe initial doit contenir au moins 8 caracteres."),
+  adminPassword: passwordPolicySchema,
 });
 
 const organizationUpdateSchema = organizationCreateSchema.omit({
@@ -169,7 +169,7 @@ export async function createOrganization(
     );
   }
 
-  const adminPasswordHash = await bcrypt.hash(data.adminPassword, 12);
+  const adminPasswordHash = await bcrypt.hash(data.adminPassword, BCRYPT_COST);
   const organization = await prisma.$transaction(async (tx) => {
     const createdOrganization = await tx.organization.create({
       data: {

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ProductCombobox } from "@/components/commerce/product-combobox";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,16 +39,23 @@ import type { ProductDto, ProductOptionDto } from "@/types/product-dto";
 type LineDraft = {
   key: string;
   productId: string;
+  // Phase 3 CRITICAL #1 fix: the full picked ProductDto, captured at
+  // selection time (see ProductCombobox), kept alongside `productId` for
+  // display - `productOptions` is now only a small bounded preload and may
+  // no longer contain an already-selected product once the user has
+  // searched past it. Mirrors StockAdjustmentDialog's `selectedProduct`.
+  product: ProductDto | null;
   quantite: number;
   prixAchat: number;
   remisePercent: number;
 };
 
 function createLine(key: string, productOptions: ProductDto[]): LineDraft {
-  const product = productOptions[0];
+  const product = productOptions[0] ?? null;
   return {
     key,
     productId: product?.id ?? "",
+    product,
     quantite: 1,
     prixAchat: product?.purchasePrice ?? 0,
     remisePercent: 0,
@@ -416,39 +424,20 @@ export function PurchaseForm({
                   return (
                     <TableRow key={line.key}>
                       <TableCell>
-                        <Select
-                          value={line.productId || null}
-                          onValueChange={(value) => {
-                            if (!value) return;
-                            const product = productOptions.find(
-                              (item) => item.id === value,
-                            );
+                        <ProductCombobox
+                          value={line.product}
+                          onChange={(product) => {
+                            if (!product) return;
                             updateLine(line.key, {
-                              productId: value,
-                              prixAchat: product?.purchasePrice ?? line.prixAchat,
+                              productId: product.id,
+                              product,
+                              prixAchat: product.purchasePrice ?? line.prixAchat,
                             });
                           }}
-                        >
-                          <SelectTrigger className="w-full min-w-[180px]">
-                            <SelectValue placeholder="Sélectionner">
-                              {() =>
-                                productOptions.find(
-                                  (item) => item.id === line.productId,
-                                )?.name ?? "Sélectionner"
-                              }
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {productOptions.map((product) => (
-                              <SelectItem key={product.id} value={product.id}>
-                                {product.name}{" "}
-                                <span className="text-muted-foreground">
-                                  ({product.reference})
-                                </span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          preload={productOptions}
+                          placeholder="Sélectionner"
+                          label={null}
+                        />
                       </TableCell>
                       <TableCell>
                         <input

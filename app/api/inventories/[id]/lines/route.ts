@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "@/lib/server/auth";
 import { mapInventoryError, saveInventoryLine } from "@/lib/server/inventories";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   try {
     const { line, totals } = await saveInventoryLine(id, await request.json());

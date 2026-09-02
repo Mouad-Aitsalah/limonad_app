@@ -2,6 +2,8 @@
 
 import * as React from "react";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { AppPageHeader } from "@/components/ui/app-page-header";
 import { DataTableShell } from "@/components/ui/data-table-shell";
 import { SectionCard } from "@/components/ui/section-card";
@@ -11,14 +13,17 @@ import { StockKpiCards } from "@/components/stock/stock-kpi-cards";
 import { StockMovementsTable } from "@/components/stock/stock-movements-table";
 import { StockToolbar } from "@/components/stock/stock-toolbar";
 import { TruckStockPanel } from "@/components/stock/truck-stock-panel";
+import { useStockMovementsPage } from "@/components/stock/use-stock-movements-page";
 import { WarehouseStockTable } from "@/components/stock/warehouse-stock-table";
 import type {
   StockLevelDto,
   StockLocationDto,
-  StockMovementDto,
+  StockMovementsPageDto,
   StockSummaryDto,
 } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
+
+const MOVEMENTS_SEARCH_DEBOUNCE_MS = 400;
 
 type StockFilters = {
   search: string;
@@ -37,7 +42,7 @@ const defaultFilters: StockFilters = {
 type StockViewProps = {
   initialLevels: StockLevelDto[];
   locations: StockLocationDto[];
-  movements: StockMovementDto[];
+  initialMovementsPage: StockMovementsPageDto;
   summary: StockSummaryDto;
   products: ProductDto[];
 };
@@ -45,14 +50,32 @@ type StockViewProps = {
 export function StockView({
   initialLevels,
   locations,
-  movements,
+  initialMovementsPage,
   summary,
   products,
 }: StockViewProps) {
   const [filters, setFilters] = React.useState<StockFilters>(defaultFilters);
   const [levels, setLevels] = React.useState(initialLevels);
   const [stockSummary, setStockSummary] = React.useState(summary);
-  const [stockMovements, setStockMovements] = React.useState(movements);
+
+  const [movementsSearch, setMovementsSearch] = React.useState("");
+  const [debouncedMovementsSearch, setDebouncedMovementsSearch] = React.useState("");
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedMovementsSearch(movementsSearch), MOVEMENTS_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [movementsSearch]);
+
+  const {
+    items: stockMovements,
+    totalCount: movementsTotalCount,
+    pageIndex: movementsPageIndex,
+    hasMore: movementsHasMore,
+    hasPrevious: movementsHasPrevious,
+    loading: movementsLoading,
+    goToNextPage: goToNextMovementsPage,
+    goToPreviousPage: goToPreviousMovementsPage,
+    refetchCurrentPage: refetchMovementsPage,
+  } = useStockMovementsPage({ search: debouncedMovementsSearch }, initialMovementsPage);
 
   const filteredLevels = React.useMemo(
     () => filterStockLevels(levels, filters),
@@ -74,10 +97,7 @@ export function StockView({
   }
 
   async function refreshStock() {
-    const [stockResponse, movementsResponse] = await Promise.all([
-      fetch("/api/stock", { cache: "no-store" }),
-      fetch("/api/stock/movements", { cache: "no-store" }),
-    ]);
+    const stockResponse = await fetch("/api/stock", { cache: "no-store" });
     if (stockResponse.ok) {
       const payload = (await stockResponse.json()) as {
         levels: StockLevelDto[];
@@ -86,12 +106,7 @@ export function StockView({
       setLevels(payload.levels);
       setStockSummary(payload.summary);
     }
-    if (movementsResponse.ok) {
-      const payload = (await movementsResponse.json()) as {
-        movements: StockMovementDto[];
-      };
-      setStockMovements(payload.movements);
-    }
+    await refetchMovementsPage();
   }
 
   return (
@@ -170,9 +185,42 @@ export function StockView({
       <DataTableShell
         title="Mouvements de stock"
         description="Historique immuable des receptions, chargements, retours, ventes et ajustements."
-        countLabel={`${Math.min(stockMovements.length, 25)} mouvement${Math.min(stockMovements.length, 25) > 1 ? "s" : ""} affiches`}
+        toolbar={
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Input
+              value={movementsSearch}
+              onChange={(event) => setMovementsSearch(event.target.value)}
+              placeholder="Rechercher un numero de mouvement (MV-...)"
+              className="max-w-xs"
+            />
+            <div className="flex items-center gap-3">
+              <p className="text-sm text-muted-foreground">
+                Page {movementsPageIndex + 1} &middot; {stockMovements.length} sur {movementsTotalCount} au
+                total
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!movementsHasPrevious || movementsLoading}
+                onClick={goToPreviousMovementsPage}
+              >
+                Precedent
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!movementsHasMore || movementsLoading}
+                onClick={goToNextMovementsPage}
+              >
+                Suivant
+              </Button>
+            </div>
+          </div>
+        }
       >
-        <StockMovementsTable movements={stockMovements.slice(0, 25)} />
+        <StockMovementsTable movements={stockMovements} />
       </DataTableShell>
     </div>
   );

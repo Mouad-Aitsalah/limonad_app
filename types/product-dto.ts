@@ -32,6 +32,19 @@ export type ProductOptionDto = {
   name: string;
 };
 
+/**
+ * Phase 3: ProductDto itself was already light (single-level
+ * category/brand/supplier selects, no nested arrays) - the fix for
+ * /produits is pagination + server-side filters, not a lighter row shape.
+ * See getProductsPage's doc comment in lib/server/products.ts.
+ */
+export interface ProductsPageDto {
+  items: ProductDto[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  totalCount: number;
+}
+
 export type ProductMutationInput = {
   reference: string;
   barcode?: string | null;

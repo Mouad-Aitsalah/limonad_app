@@ -1,9 +1,11 @@
 import "server-only";
 
+import { roundMoney as roundMoneyDecimal } from "@/lib/money";
 import type { SaleGetPayload } from "@/lib/generated/prisma/models/Sale";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import type { SaleDto } from "@/types/operations-dto";
 
 export const saleInclude = {
@@ -122,7 +124,7 @@ export function resolvePaymentAmounts(
  * otherwise it is closed and a new one is opened.
  */
 export async function resolveSaleSequencing(
-  tx: Pick<typeof prisma, "sale" | "posSession">,
+  tx: Pick<typeof prisma, "sale" | "posSession" | "$queryRaw">,
   now: Date,
   userId: string,
   organizationId?: string,
@@ -149,10 +151,15 @@ export async function resolveSaleSequencing(
         data: { status: "CLOSED", closedAt: now },
       });
     }
+    const number = await reserveDocumentSequence(
+      tx,
+      scopedOrganizationId,
+      DocumentType.PosSession,
+    );
     const created = await tx.posSession.create({
       data: {
         organizationId: scopedOrganizationId,
-        number: (lastSession?.number ?? 0) + 1,
+        number,
         year,
         openedAt: now,
         status: "OPEN",
@@ -162,18 +169,18 @@ export async function resolveSaleSequencing(
     posSessionId = created.id;
   }
 
-  const saleCount = await tx.sale.count({
-    where: {
-      organizationId: scopedOrganizationId,
-      saleYear: year,
-    },
-  });
+  const saleNumber = await reserveDocumentSequence(
+    tx,
+    scopedOrganizationId,
+    DocumentType.Sale,
+    String(year),
+  );
 
-  return { saleYear: year, saleNumber: saleCount + 1, posSessionId };
+  return { saleYear: year, saleNumber, posSessionId };
 }
 
 export async function nextInvoiceNumber(
-  tx: Pick<typeof prisma, "sale">,
+  tx: Pick<typeof prisma, "sale" | "$queryRaw">,
   scopeCode: string,
   organizationId?: string,
 ) {
@@ -182,41 +189,51 @@ export async function nextInvoiceNumber(
   const today = new Date();
   const date = `${today.getUTCFullYear()}${String(today.getUTCMonth() + 1).padStart(2, "0")}${String(today.getUTCDate()).padStart(2, "0")}`;
   const prefix = `VC-${date}-${scopeCode}-`;
-  const count = await tx.sale.count({
-    where: {
-      organizationId: scopedOrganizationId,
-      invoiceNumber: { startsWith: prefix },
-    },
-  });
-  return `${prefix}${String(count + 1).padStart(6, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    scopedOrganizationId,
+    DocumentType.Invoice,
+    `${date}-${scopeCode}`,
+  );
+  return `${prefix}${String(number).padStart(6, "0")}`;
 }
 
 export async function nextPaymentNumber(
-  tx: Pick<typeof prisma, "payment">,
+  tx: Pick<typeof prisma, "payment" | "$queryRaw">,
   organizationId?: string,
 ) {
   const scopedOrganizationId =
     organizationId ?? (await resolveCurrentOrganizationId());
-  const count = await tx.payment.count({
-    where: { organizationId: scopedOrganizationId },
-  });
-  return `PAY-${String(count + 1).padStart(6, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    scopedOrganizationId,
+    DocumentType.Payment,
+  );
+  return `PAY-${String(number).padStart(6, "0")}`;
 }
 
 export async function nextMovementNumber(
-  tx: Pick<typeof prisma, "stockMovement">,
+  tx: Pick<typeof prisma, "stockMovement" | "$queryRaw">,
   organizationId?: string,
 ) {
   const scopedOrganizationId =
     organizationId ?? (await resolveCurrentOrganizationId());
-  const count = await tx.stockMovement.count({
-    where: { organizationId: scopedOrganizationId },
-  });
-  return `MV-${String(count + 1).padStart(6, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    scopedOrganizationId,
+    DocumentType.StockMovement,
+  );
+  return `MV-${String(number).padStart(6, "0")}`;
 }
 
+// F8-B: delegates to the shared decimal-based engine (lib/money.ts) instead
+// of `Math.round(value * 100) / 100`, which can misround values like
+// 1.005 or 10.075 due to IEEE754 float imprecision (see the F8 audit
+// report). Re-exported under this same name/signature so every existing
+// caller (counter-sales.ts, driver-sales.ts, purchases.ts) needed zero
+// changes.
 export function roundMoney(value: number) {
-  return Math.round(value * 100) / 100;
+  return roundMoneyDecimal(value);
 }
 
 async function resolveOrganizationIdFromUserId(userId: string) {

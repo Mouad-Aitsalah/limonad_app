@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import {
   getLoadingById,
   mapLoadingError,
@@ -26,6 +27,8 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   const { id } = await context.params;
   try {
     const loading = await updateOpenLoadingLines(id, await request.json());

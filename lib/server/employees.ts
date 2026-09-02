@@ -3,13 +3,14 @@ import "server-only";
 import { z } from "zod";
 
 import type { Prisma } from "@/lib/generated/prisma/client";
+import { MONEY_RANGE_MAX_NUMBER, roundMoney as roundMoneyDecimal } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { normalizeAccountCode } from "@/lib/server/accounting";
 import {
   getEmployeePayrollContext,
   listEmployeeTransactions,
 } from "@/lib/server/employee-transactions";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { AccountingAccountType } from "@/types/accounting";
 import type { UserRole } from "@/types/auth";
@@ -51,7 +52,14 @@ const employeeInputSchema = z.object({
   hireDate: optionalString(),
   // Salary always Decimal in Postgres; phone is always free-form text (never
   // coerced to a number) so a leading 0 or international format survives.
-  salary: z.coerce.number().min(0, "Le salaire ne peut pas etre negatif.").nullable().optional(),
+  // F8-F: input-level sanity bound only - see the server-side
+  // assertMoneyRange call in validateEmployeeInput below.
+  salary: z.coerce
+    .number()
+    .min(0, "Le salaire ne peut pas etre negatif.")
+    .max(MONEY_RANGE_MAX_NUMBER, "Le salaire depasse la limite autorisee.")
+    .nullable()
+    .optional(),
   phone: optionalString(),
   advanceAccountCode: z
     .string()
@@ -321,6 +329,12 @@ function validateEmployeeInput(input: EmployeeInput) {
       ),
     );
   }
+  // F8-F: server-side gate, kept independent of the Zod .max() above - this
+  // is the single choke point both createEmployee and updateEmployee funnel
+  // through.
+  if (parsed.data.salary != null) {
+    assertMoneyRange(parsed.data.salary, "salary");
+  }
   return parsed.data;
 }
 
@@ -408,8 +422,10 @@ function mapEmployeeToDto(employee: EmployeeRecord): EmployeeDto {
   };
 }
 
+// F8-C: delegates to the shared decimal-based engine (lib/money.ts) instead
+// of `Math.round(value * 100) / 100`.
 function roundMoney(value: number) {
-  return Math.round(value * 100) / 100;
+  return roundMoneyDecimal(value);
 }
 
 function getCurrentPayrollPeriod() {

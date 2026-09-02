@@ -2,16 +2,16 @@ import "server-only";
 
 import { z } from "zod";
 
+import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
 } from "@/lib/server/accounting";
-import { getCustomers } from "@/lib/server/customers";
-import { OperationsServiceError } from "@/lib/server/depots";
+import { getPosCustomerPreload } from "@/lib/server/customers";
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
-import { getDepotStock } from "@/lib/server/stock-levels";
 import {
   mapSaleToDto,
   nextInvoiceNumber,
@@ -33,19 +33,47 @@ import type {
 const counterSaleSchema = z.object({
   customerId: z.string().trim().nullable().optional(),
   paymentMethod: z.enum(["CASH", "CARD", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
-  paidAmount: z.coerce.number().min(0).optional(),
+  // F8-D: input-level sanity bound only, not the real protection - a value
+  // right at this bound can still overflow once combined with other lines/
+  // tax (see assertMoneyRange calls below, the actual gate).
+  paidAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   reference: z.string().trim().nullable().optional(),
   stampAmount: z.coerce.number().min(0).optional(),
+  // Client-generated, stable for one logical sale attempt (see
+  // components/pos - the POS form keeps the same key across a network retry
+  // and only mints a new one when a fresh sale starts). Optional so a caller
+  // that never sends one keeps today's behavior exactly (no idempotency
+  // protection, same as before this change).
+  idempotencyKey: z
+    .string()
+    .trim()
+    .max(120)
+    .nullable()
+    .optional()
+    .transform((value) => value || null),
   lines: z
     .array(
       z.object({
         productId: z.string().trim().min(1),
-        quantity: z.coerce.number().int().positive(),
+        // F8-D: sanity bound - a quantity this large is already absurd for
+        // one sale line, well before it could combine with a plausible unit
+        // price to overflow Decimal(12,2) (that overflow is caught on the
+        // computed amount by assertMoneyRange below regardless).
+        quantity: z.coerce.number().int().positive().max(1_000_000),
         discountRate: z.coerce.number().min(0).max(100).optional(),
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
 });
+
+// Phase 3: the POS product grid preloads this many sellable products for
+// instant, zero-round-trip local search - the realistic case (a depot
+// stocking a few hundred SKUs at most) never notices the cap. Beyond it,
+// productsTruncated tells the frontend to fall back to
+// GET /api/products/search?locationId=... (searchPosProducts) instead of
+// silently hiding products the cap couldn't fit. See the Phase 3 report:
+// unbounded, this query took 76s/82MB at 100000 stocked products.
+const POS_PRODUCT_LIST_LIMIT = 500;
 
 export async function getCounterPosContext(): Promise<CounterPosContextDto> {
   const sessionUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
@@ -62,44 +90,6 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     throw new OperationsServiceError("Aucun depot actif n'est rattache a cet utilisateur.", 409);
   }
 
-  const stock = await getDepotStock(user.depotId);
-  const productsById = await prisma.product.findMany({
-    where: {
-      id: { in: stock.map((level) => level.productId) },
-      organizationId: sessionUser.organizationId,
-    },
-    select: {
-      id: true,
-      imageUrl: true,
-      taxRate: true,
-    },
-  });
-  const productMetaById = new Map(
-    productsById.map((product) => [
-      product.id,
-      { imageUrl: product.imageUrl, taxRate: product.taxRate.toNumber() },
-    ]),
-  );
-
-  const customers = (await getCustomers()).filter((customer) => customer.status === "ACTIVE");
-  const products: DriverPosProductDto[] = stock
-    .filter((level) => level.availableQuantity > 0)
-    .map((level) => {
-      const taxRate = productMetaById.get(level.productId)?.taxRate ?? 0;
-
-      return {
-        id: level.productId,
-        reference: level.productReference,
-        barcode: level.barcode,
-        name: level.productName,
-        imageUrl: productMetaById.get(level.productId)?.imageUrl ?? null,
-        salePriceHT: level.salePrice,
-        salePriceTTC: computePriceTTC(level.salePrice, taxRate),
-        taxRate,
-        availableQuantity: level.availableQuantity,
-      };
-    });
-
   const stockLocation = await prisma.stockLocation.findFirst({
     where: {
       depotId: user.depotId,
@@ -111,6 +101,58 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     throw new OperationsServiceError("Emplacement depot introuvable.", 404);
   }
 
+  const [levels, customers] = await Promise.all([
+    prisma.stockLevel.findMany({
+      where: {
+        organizationId: sessionUser.organizationId,
+        locationId: stockLocation.id,
+        quantity: { gt: 0 },
+        product: { status: "ACTIVE" },
+      },
+      include: {
+        product: {
+          select: {
+            id: true,
+            reference: true,
+            barcode: true,
+            name: true,
+            imageUrl: true,
+            salePrice: true,
+            taxRate: true,
+          },
+        },
+      },
+      orderBy: { product: { name: "asc" } },
+      take: POS_PRODUCT_LIST_LIMIT + 1,
+    }),
+    // Phase 3: bounded preload (recent customers + the org's "COUNTER"/
+    // walk-in customer, always guaranteed present since it's the default
+    // pre-selected customer below) instead of every customer in the
+    // organization - see getPosCustomerPreload's doc comment and the
+    // Phase 3 report. Anything beyond this small set is reached through
+    // the customer combobox's GET /api/customers/search fallback.
+    getPosCustomerPreload({ organizationId: sessionUser.organizationId, guaranteeType: "COUNTER" }),
+  ]);
+
+  const productsTruncated = levels.length > POS_PRODUCT_LIST_LIMIT;
+  const pageLevels = productsTruncated ? levels.slice(0, POS_PRODUCT_LIST_LIMIT) : levels;
+  const products: DriverPosProductDto[] = pageLevels.map((level) => {
+    const salePriceHT = level.product.salePrice.toNumber();
+    const taxRate = level.product.taxRate.toNumber();
+
+    return {
+      id: level.product.id,
+      reference: level.product.reference,
+      barcode: level.product.barcode,
+      name: level.product.name,
+      imageUrl: level.product.imageUrl,
+      salePriceHT,
+      salePriceTTC: computePriceTTC(salePriceHT, taxRate),
+      taxRate,
+      availableQuantity: level.quantity - level.reservedQuantity,
+    };
+  });
+
   return {
     canSell: products.length > 0,
     message: products.length > 0 ? undefined : "Aucun produit n'est disponible dans ce depot.",
@@ -119,6 +161,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     stockLocation: { id: stockLocation.id, code: stockLocation.code, name: stockLocation.name },
     customers,
     products,
+    productsTruncated,
   };
 }
 
@@ -131,8 +174,27 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
   }
   const lines = normalizeSaleLines(parsed.data.lines);
 
-  const sale = await prisma.$transaction(
-    async (tx) => {
+  const sale = await withSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
+      // Idempotency check first, before any other read: a retried request
+      // (network retry, double-click that got through the client guard
+      // anyway) carrying the same key must return the sale already created
+      // for it instead of creating a second one. organizationId always comes
+      // from the authenticated session, never from the client, so one
+      // organization can never look up - let alone reuse - another
+      // organization's idempotency key.
+      if (parsed.data.idempotencyKey) {
+        const existingSale = await tx.sale.findFirst({
+          where: {
+            organizationId: sessionUser.organizationId,
+            idempotencyKey: parsed.data.idempotencyKey,
+          },
+          include: saleInclude,
+        });
+        if (existingSale) return existingSale;
+      }
+
       const user = await tx.user.findFirst({
         where: {
           id: sessionUser.id,
@@ -205,11 +267,22 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
         const unitPriceHT = product.salePrice.toNumber();
         const discountRate = line.discountRate ?? 0;
+        // F8-D: grossHT is a raw multiplication (unitPriceHT x quantity),
+        // checked before rounding/further use - a large-but-otherwise-valid
+        // quantity times a large unit price is exactly the case a bound on
+        // quantity alone would miss (see lib/money.ts#isWithinMoneyRange).
         const grossHT = unitPriceHT * line.quantity;
+        assertMoneyRange(unitPriceHT, "line.unitPriceHT");
+        assertMoneyRange(grossHT, "line.grossHT");
         const discountAmount = roundMoney(grossHT * (discountRate / 100));
         const totalHT = roundMoney(grossHT - discountAmount);
         const taxRate = product.taxRate.toNumber();
         const taxAmount = roundMoney(totalHT * (taxRate / 100));
+        const totalTTC = roundMoney(totalHT + taxAmount);
+        assertMoneyRange(discountAmount, "line.discountAmount");
+        assertMoneyRange(totalHT, "line.totalHT");
+        assertMoneyRange(taxAmount, "line.taxAmount");
+        assertMoneyRange(totalTTC, "line.totalTTC");
         return {
           ...line,
           unitPriceHT,
@@ -218,7 +291,7 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
           taxRate,
           taxAmount,
           totalHT,
-          totalTTC: roundMoney(totalHT + taxAmount),
+          totalTTC,
         };
       });
       const subtotalHT = roundMoney(computedLines.reduce((sum, line) => sum + line.totalHT, 0));
@@ -227,17 +300,26 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       );
       const taxAmount = roundMoney(computedLines.reduce((sum, line) => sum + line.taxAmount, 0));
       const totalTTC = roundMoney(subtotalHT + taxAmount);
+      // F8-D: aggregate totals, checked before any write in this
+      // transaction (stock decrement is the first one, further below).
+      assertMoneyRange(subtotalHT, "subtotalHT");
+      assertMoneyRange(discountAmount, "discountAmount");
+      assertMoneyRange(taxAmount, "taxAmount");
+      assertMoneyRange(totalTTC, "totalTTC");
       const stampAmount = await computeCashSaleStampAmount(tx, {
         organizationId: sessionUser.organizationId,
         totalTTC,
         paymentMethod: parsed.data.paymentMethod,
       });
+      assertMoneyRange(stampAmount.toNumber(), "stampAmount");
 
       const payment = resolvePaymentAmounts(
         parsed.data.paymentMethod,
         totalTTC,
         parsed.data.paidAmount,
       );
+      assertMoneyRange(payment.paidAmount, "paidAmount");
+      assertMoneyRange(payment.creditAmount, "creditAmount");
       if (payment.creditAmount > 0 && !customer) {
         throw new OperationsServiceError("Client obligatoire pour une vente a credit.", 422);
       }
@@ -305,6 +387,7 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
           paymentMethod: parsed.data.paymentMethod,
           createdByUserId: sessionUser.id,
           validatedAt: new Date(),
+          idempotencyKey: parsed.data.idempotencyKey,
           lines: {
             create: computedLines.map((line) => ({
               productId: line.productId,
@@ -385,9 +468,57 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       }
 
       return tx.sale.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
-    },
-    { isolationLevel: "Serializable" },
+      },
+      // 15s: this transaction chains several sequential lookups plus the
+      // accounting entry posting, which can exceed Prisma's 5s default
+      // interactive-transaction timeout (P2028) against Neon's serverless
+      // connection latency, even with no real conflict (same fix already
+      // applied to the equivalent driver-sales.ts transaction).
+      { isolationLevel: "Serializable", timeout: 15000 },
+    ),
   );
 
   return mapSaleToDto(sale);
+}
+
+// Same pattern as lib/server/stock-movements.ts's withSerializableRetry, but
+// retrying P2002 as well as P2034: under true simultaneous requests carrying
+// the same idempotencyKey, Postgres Serializable isolation is expected to
+// resolve the race as a P2034 (see the idempotency check above, re-run on
+// retry it will then see the winner's already-committed row) - but the
+// unique index on (organizationId, idempotencyKey) is the last line of
+// defense, so a P2002 on that index is retried the same way instead of
+// surfacing as an error: the retried attempt's find-first-by-key check will
+// then return the row the other request just committed.
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withSerializableRetry<T>(operation: () => Promise<T>, maxAttempts = 40): Promise<T> {
+  let attempt = 0;
+
+  while (attempt < maxAttempts) {
+    try {
+      return await operation();
+    } catch (error) {
+      const prismaError = error as { code?: string; message?: string };
+      attempt += 1;
+      const isRetryable =
+        ["P2002", "P2034"].includes(prismaError.code ?? "") ||
+        (prismaError.code === "P2010" &&
+          /40001|40P01/.test(prismaError.message ?? ""));
+      if (!isRetryable || attempt >= maxAttempts) {
+        throw error;
+      }
+      // Jittered backoff: under N-way true-simultaneous contention on the
+      // same counter row, retrying instantly just re-collides with the same
+      // herd (empirically verified: without this, 50-100-way concurrent
+      // reserveDocumentSequence() calls exhausted immediate retries - see
+      // scripts/_tmp-test-real-generators.ts in the Phase 3 numbering
+      // chantier report).
+      await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
+    }
+  }
+
+  throw new OperationsServiceError("Impossible de finaliser la vente.", 500);
 }

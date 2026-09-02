@@ -9,27 +9,27 @@ import {
   type AccountsSortState,
 } from "@/components/comptes/accounts-table";
 import { AccountsToolbar } from "@/components/comptes/accounts-toolbar";
+import { useAccountsPage } from "@/components/comptes/use-accounts-page";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { AccountingAccountOptionDto } from "@/types/accounting";
-import type {
-  BusinessAccountListItem,
-  BusinessAccountsSummaryDto,
-} from "@/types/business-account";
+import type { BusinessAccountListItem, BusinessAccountsPageDto } from "@/types/business-account";
+
+const ACCOUNTS_SEARCH_DEBOUNCE_MS = 400;
 
 type AccountsViewProps = {
-  initialAccounts: BusinessAccountListItem[];
-  initialSummary: BusinessAccountsSummaryDto;
+  initialPage: BusinessAccountsPageDto;
   accountingAccounts: AccountingAccountOptionDto[];
 };
 
-export function AccountsView({
-  initialAccounts,
-  initialSummary,
-  accountingAccounts,
-}: AccountsViewProps) {
-  const [accounts, setAccounts] = React.useState(initialAccounts);
-  const [summary, setSummary] = React.useState(initialSummary);
+export function AccountsView({ initialPage, accountingAccounts }: AccountsViewProps) {
   const [search, setSearch] = React.useState("");
+  const [debouncedSearch, setDebouncedSearch] = React.useState("");
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), ACCOUNTS_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const [type, setType] = React.useState("all");
   const [status, setStatus] = React.useState("all");
   const [city, setCity] = React.useState("all");
@@ -39,34 +39,27 @@ export function AccountsView({
     direction: "desc",
   });
 
-  const cities = React.useMemo(
-    () =>
-      [...new Set(accounts.map((account) => account.city).filter(Boolean))].sort((a, b) =>
-        String(a).localeCompare(String(b), "fr-FR"),
-      ) as string[],
-    [accounts],
-  );
+  const {
+    items: accounts,
+    summary,
+    cities,
+    pageIndex,
+    hasMore,
+    hasPrevious,
+    loading,
+    goToNextPage,
+    goToPreviousPage,
+    refetchCurrentPage,
+  } = useAccountsPage({ search: debouncedSearch, type, status, city }, initialPage);
 
-  const filteredAccounts = React.useMemo(() => {
-    const query = normalizeSearch(search);
-    return accounts.filter((account) => {
-      const matchesSearch =
-        query.length === 0 ||
-        normalizeSearch(
-          `${account.accountNumber} ${account.name} ${account.phone ?? ""} ${account.email ?? ""}`,
-        ).includes(query);
-
-      const matchesType = type === "all" || account.type === type;
-      const matchesStatus = status === "all" || account.status === status;
-      const matchesCity = city === "all" || account.city === city;
-
-      return matchesSearch && matchesType && matchesStatus && matchesCity;
-    });
-  }, [accounts, city, search, status, type]);
-
+  // Server page is already createdAt-desc/id-desc ordered and filtered; this
+  // only re-sorts the current, page-sized (<=100 rows) batch when the user
+  // clicks a column header - the same instant, client-side re-sort UX as
+  // before, just scoped to one page instead of the whole (once unbounded)
+  // dataset.
   const sortedAccounts = React.useMemo(() => {
     const collator = new Intl.Collator("fr-FR", { sensitivity: "base" });
-    return [...filteredAccounts].sort((left, right) => {
+    return [...accounts].sort((left, right) => {
       const factor = sort.direction === "asc" ? 1 : -1;
 
       switch (sort.key) {
@@ -84,7 +77,7 @@ export function AccountsView({
           return 0;
       }
     });
-  }, [filteredAccounts, sort]);
+  }, [accounts, sort]);
 
   function handleSortChange(key: AccountsSortKey) {
     setSort((current) =>
@@ -101,18 +94,7 @@ export function AccountsView({
   }
 
   async function refreshAccounts() {
-    const response = await fetch("/api/comptes", { cache: "no-store" });
-    const payload = (await response.json()) as {
-      items?: BusinessAccountListItem[];
-      summary?: BusinessAccountsSummaryDto;
-      message?: string;
-    };
-    if (!response.ok || !payload.items || !payload.summary) {
-      throw new Error(payload.message ?? "Impossible de recharger les comptes.");
-    }
-
-    setAccounts(payload.items);
-    setSummary(payload.summary);
+    await refetchCurrentPage();
   }
 
   return (
@@ -153,9 +135,32 @@ export function AccountsView({
             cities={cities}
           />
 
-          <p className="text-sm text-muted-foreground">
-            {sortedAccounts.length} compte{sortedAccounts.length > 1 ? "s" : ""}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Page {pageIndex + 1} &middot; {sortedAccounts.length} compte
+              {sortedAccounts.length > 1 ? "s" : ""} sur cette page &middot; {summary.totalCount} au total
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasPrevious || loading}
+                onClick={goToPreviousPage}
+              >
+                Precedent
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasMore || loading}
+                onClick={goToNextPage}
+              >
+                Suivant
+              </Button>
+            </div>
+          </div>
 
           <AccountsTable
             accounts={sortedAccounts}
@@ -190,8 +195,4 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
       </CardContent>
     </Card>
   );
-}
-
-function normalizeSearch(value: string) {
-  return value.trim().toLowerCase();
 }
