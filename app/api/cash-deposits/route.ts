@@ -9,6 +9,7 @@ import {
 import { OperationsServiceError } from "@/lib/server/depots";
 import type { CashDepositHistoryFilters, CashDepositStatus } from "@/types/cash-deposits";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { reportUnexpected } from "@/lib/server/report-error";
 
 export async function GET(request: Request) {
   try {
@@ -34,6 +35,11 @@ export async function POST(request: Request) {
     const body = await request.json();
     return NextResponse.json(await createCashDeposit(body), { status: 201 });
   } catch (error) {
+    reportUnexpected(error, {
+      route: "POST /api/cash-deposits",
+      area: "cash-deposits",
+      op: "createCashDeposit",
+    });
     return handleError(error);
   }
 }

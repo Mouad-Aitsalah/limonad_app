@@ -5,6 +5,7 @@ import { createCounterSale } from "@/lib/server/counter-sales";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getAllSales } from "@/lib/server/driver-sales";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { reportUnexpected } from "@/lib/server/report-error";
 
 export async function GET() {
   try {
@@ -26,6 +27,7 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error) {
+    reportUnexpected(error, { route: "POST /api/sales", area: "sales", op: "createCounterSale" });
     if (error instanceof AuthServiceError) {
       return NextResponse.json({ message: error.message }, { status: error.status });
     }

@@ -13,7 +13,6 @@
 import { scrubEvent } from "@/lib/sentry-scrub";
 import {
   isSentryEnabled,
-  logSentryPreviewDiagnostics,
   resolveSentryEnvironment,
   resolveSentryRelease,
 } from "@/lib/sentry-env";
@@ -29,9 +28,6 @@ export const IGNORED_ERROR_MESSAGES: string[] = [
 ];
 
 export function commonSentryInit() {
-  // PHASE-4Q.4B temporary: preview-only, non-sensitive delivery diagnostic.
-  logSentryPreviewDiagnostics(DSN);
-
   return {
     dsn: DSN,
     enabled: isSentryEnabled(DSN),

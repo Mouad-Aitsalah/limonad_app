@@ -4,6 +4,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { createPurchase, getPurchases } from "@/lib/server/purchases";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { reportUnexpected } from "@/lib/server/report-error";
 
 export async function GET() {
   try {
@@ -30,6 +31,11 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error) {
+    reportUnexpected(error, {
+      route: "POST /api/purchases",
+      area: "purchases",
+      op: "createPurchase",
+    });
     if (error instanceof AuthServiceError) {
       return NextResponse.json({ message: error.message }, { status: error.status });
     }

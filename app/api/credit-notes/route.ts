@@ -8,6 +8,7 @@ import {
 import { OperationsServiceError } from "@/lib/server/depots";
 import type { CreditNoteStatus } from "@/types/credit-note";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { reportUnexpected } from "@/lib/server/report-error";
 
 const acceptedStatuses: CreditNoteStatus[] = ["BROUILLON", "VALIDE", "CONTREPASSE"];
 
@@ -34,6 +35,11 @@ export async function POST(request: Request) {
     const creditNote = await createCreditNote(body, status);
     return NextResponse.json({ creditNote }, { status: 201 });
   } catch (error) {
+    reportUnexpected(error, {
+      route: "POST /api/credit-notes",
+      area: "credit-notes",
+      op: "createCreditNote",
+    });
     if (error instanceof AuthServiceError) {
       return NextResponse.json({ message: error.message }, { status: error.status });
     }
