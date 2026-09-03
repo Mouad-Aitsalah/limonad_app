@@ -6,6 +6,7 @@ import { ChevronsLeft, ChevronsRight, LogOut } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
+import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { useSidebar } from "@/hooks/use-sidebar";
 import { navItems } from "@/components/layout/nav-items";
 import { SidebarItem } from "@/components/layout/sidebar-item";
@@ -15,7 +16,9 @@ export function Sidebar() {
   const pathname = usePathname();
   const { collapsed, toggleCollapsed, mobileOpen, closeMobile } = useSidebar();
   const { currentUser, logout } = useAuth();
+  const { identity } = useCompanyIdentity();
   const homeHref = currentUser?.role === "super_admin" ? "/organisations" : "/dashboard";
+  const companyName = identity?.tradeName || identity?.name || "COMDIS";
 
   const visibleNavItems = navItems.filter(
     (item) =>
@@ -49,13 +52,22 @@ export function Sidebar() {
             href={homeHref}
             className={cn("flex items-start gap-3", collapsed && "justify-center")}
           >
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-[linear-gradient(135deg,#2b6cb0_0%,#0f7a5d_100%)] text-lg font-bold text-white shadow-[0_18px_35px_rgba(9,21,36,0.28)]">
-              C
-            </div>
+            {identity?.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={identity.logoUrl}
+                alt={companyName}
+                className="h-12 w-12 shrink-0 rounded-[18px] bg-white/95 object-contain p-1 shadow-[0_18px_35px_rgba(9,21,36,0.28)]"
+              />
+            ) : (
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-[linear-gradient(135deg,#2b6cb0_0%,#0f7a5d_100%)] text-lg font-bold text-white shadow-[0_18px_35px_rgba(9,21,36,0.28)]">
+                {companyName.charAt(0).toUpperCase() || "C"}
+              </div>
+            )}
 
             {!collapsed && (
               <div className="min-w-0">
-                <p className="page-eyebrow text-white/56">COMDIS</p>
+                <p className="page-eyebrow truncate text-white/56">{companyName}</p>
                 <p className="mt-2 text-xl font-semibold tracking-[-0.03em] text-white">
                   COMDIS MANAGER
                 </p>

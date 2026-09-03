@@ -370,6 +370,11 @@ model Organization {
   country              String?
   phone                String?
   email                String?
+  // Company logo shown in the sidebar and on sales tickets. Stored as a
+  // validated `data:image/(png|jpeg|webp);base64,...` URL (same persistence
+  // approach as product photos - a text column, never the Vercel FS).
+  // Nullable: no logo => the "C" / name fallback is used.
+  logoUrl              String?
   status               OrganizationStatus    @default(ACTIVE)
   users                User[]
   depots               Depot[]

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { resetCompanyIdentityCache } from "@/hooks/use-company-identity";
 import { stopNativeTracking } from "@/lib/gps/native-tracking";
 import type { CurrentUser } from "@/types/auth";
 
@@ -125,6 +126,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await stopNativeTracking();
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     setCurrentUser(null);
+    // Drop the cached company identity so the next user never sees the
+    // previous organisation's logo/name.
+    resetCompanyIdentityCache(null);
   }, []);
 
   const value = React.useMemo<AuthContextValue>(

@@ -28,13 +28,20 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/use-auth";
 import { purchasePaymentMethods } from "@/lib/mock-data/purchase-payment-methods";
+import { computePriceTTC } from "@/lib/product-pricing";
 import {
-  computeLineSousTotal,
-  computePurchaseTotals,
+  computeDraftLineTotalTTC,
+  computeDraftPurchaseTotalsTTC,
+  DEFAULT_PURCHASE_TVA_RATE,
 } from "@/lib/purchase-calculations";
 import { cn, formatCurrency } from "@/lib/utils";
-import type { Purchase, PurchasePaymentMethod } from "@/types/purchase";
+import type { PurchaseInput, PurchasePaymentMethod } from "@/types/purchase";
 import type { ProductDto, ProductOptionDto } from "@/types/product-dto";
+
+function productPurchasePriceTTC(product: ProductDto | null): number {
+  if (!product) return 0;
+  return computePriceTTC(product.purchasePrice, product.taxRate);
+}
 
 type LineDraft = {
   key: string;
@@ -46,7 +53,8 @@ type LineDraft = {
   // searched past it. Mirrors StockAdjustmentDialog's `selectedProduct`.
   product: ProductDto | null;
   quantite: number;
-  prixAchat: number;
+  /** Unit purchase price tax INCLUDED (prefilled from product.purchasePrice + taxRate). */
+  prixAchatTTC: number;
   remisePercent: number;
 };
 
@@ -57,7 +65,7 @@ function createLine(key: string, productOptions: ProductDto[]): LineDraft {
     productId: product?.id ?? "",
     product,
     quantite: 1,
-    prixAchat: product?.purchasePrice ?? 0,
+    prixAchatTTC: productPurchasePriceTTC(product),
     remisePercent: 0,
   };
 }
@@ -120,7 +128,7 @@ function validate(values: PurchaseFormValues): FormErrors {
     if (
       line.productId.trim().length === 0 ||
       line.quantite <= 0 ||
-      line.prixAchat <= 0
+      line.prixAchatTTC <= 0
     ) {
       errors.invalidLineKeys[line.key] = true;
       hasLineError = true;
@@ -146,7 +154,7 @@ type PurchaseFormProps = {
   onCancel: () => void;
   supplierOptions: ProductOptionDto[];
   productOptions: ProductDto[];
-  onSaved: (purchase: Omit<Purchase, "id" | "numero" | "createdAt" | "updatedAt">) => Promise<void>;
+  onSaved: (purchase: PurchaseInput) => Promise<void>;
 };
 
 export function PurchaseForm({
@@ -197,7 +205,14 @@ export function PurchaseForm({
     }));
   }
 
-  const totals = computePurchaseTotals(values.lignes);
+  const totals = computeDraftPurchaseTotalsTTC(
+    values.lignes.map((line) => ({
+      quantite: line.quantite,
+      prixAchatTTC: line.prixAchatTTC,
+      remisePercent: line.remisePercent,
+      taxRate: line.product?.taxRate ?? DEFAULT_PURCHASE_TVA_RATE,
+    })),
+  );
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -222,7 +237,7 @@ export function PurchaseForm({
         lignes: values.lignes.map((line) => ({
           productId: line.productId,
           quantite: line.quantite,
-          prixAchat: line.prixAchat,
+          prixAchatTTC: line.prixAchatTTC,
           remisePercent: line.remisePercent,
         })),
       });
@@ -411,9 +426,9 @@ export function PurchaseForm({
                 <TableRow>
                   <TableHead>Produit</TableHead>
                   <TableHead className="w-24 text-right">Quantité</TableHead>
-                  <TableHead className="w-28 text-right">Prix Achat</TableHead>
+                  <TableHead className="w-28 text-right">Prix Achat TTC</TableHead>
                   <TableHead className="w-24 text-right">Remise %</TableHead>
-                  <TableHead className="text-right">Sous-total</TableHead>
+                  <TableHead className="text-right">Sous-total TTC</TableHead>
                   <TableHead className="w-8" />
                 </TableRow>
               </TableHeader>
@@ -431,7 +446,7 @@ export function PurchaseForm({
                             updateLine(line.key, {
                               productId: product.id,
                               product,
-                              prixAchat: product.purchasePrice ?? line.prixAchat,
+                              prixAchatTTC: productPurchasePriceTTC(product),
                             });
                           }}
                           preload={productOptions}
@@ -461,10 +476,10 @@ export function PurchaseForm({
                           type="number"
                           min={0}
                           step="0.01"
-                          value={line.prixAchat}
+                          value={line.prixAchatTTC}
                           onChange={(event) =>
                             updateLine(line.key, {
-                              prixAchat: Number(event.target.value),
+                              prixAchatTTC: Number(event.target.value),
                             })
                           }
                           aria-invalid={invalid}
@@ -489,7 +504,13 @@ export function PurchaseForm({
                         />
                       </TableCell>
                       <TableCell className="text-right font-medium tabular-nums">
-                        {formatCurrency(computeLineSousTotal(line))}
+                        {formatCurrency(
+                          computeDraftLineTotalTTC({
+                            quantite: line.quantite,
+                            prixAchatTTC: line.prixAchatTTC,
+                            remisePercent: line.remisePercent,
+                          }),
+                        )}
                       </TableCell>
                       <TableCell>
                         <Button

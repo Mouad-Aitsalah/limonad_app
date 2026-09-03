@@ -1,5 +1,6 @@
 "use client";
 
+import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { formatCustomerCode } from "@/lib/customer-code";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto } from "@/types/operations-dto";
@@ -51,6 +52,8 @@ export function ReceiptPrint({
   sale,
   paperWidth = "80",
 }: ReceiptPrintProps) {
+  const { identity } = useCompanyIdentity();
+
   if (!sale) return null;
 
   const receiptDate = sale.validatedAt ?? sale.createdAt;
@@ -62,6 +65,9 @@ export function ReceiptPrint({
   // A sale still DRAFT has not been collected yet: the payment method on the
   // row is only a placeholder, so the ticket must not look like a paid one.
   const awaitingPayment = sale.status === "DRAFT";
+  // Fall back to the previous hardcoded brand only until the identity loads,
+  // so a ticket never prints without a header.
+  const brandName = identity?.tradeName || identity?.name || "AITSALAHMARKET";
 
   return (
     <section
@@ -71,7 +77,15 @@ export function ReceiptPrint({
     >
       <div className="receipt-print-ticket">
         <header className="receipt-print-header">
-          <p className="receipt-print-brand">AITSALAHMARKET</p>
+          {identity?.logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={identity.logoUrl}
+              alt={brandName}
+              className="receipt-print-logo"
+            />
+          ) : null}
+          <p className="receipt-print-brand">{brandName}</p>
         </header>
 
         <div className="receipt-print-meta">

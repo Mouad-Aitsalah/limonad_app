@@ -13,7 +13,7 @@ import {
 } from "@/components/achats/purchases-toolbar";
 import { PurchasesTable } from "@/components/achats/purchases-table";
 import { PurchasesPagination } from "@/components/achats/purchases-pagination";
-import type { Purchase } from "@/types/purchase";
+import type { Purchase, PurchaseInput } from "@/types/purchase";
 import type { ProductDto, ProductOptionDto } from "@/types/product-dto";
 
 const PAGE_SIZE = 10;
@@ -134,9 +134,7 @@ export function PurchasesView() {
     setPage(1);
   }
 
-  async function handleAddPurchase(
-    purchase: Omit<Purchase, "id" | "numero" | "createdAt" | "updatedAt">,
-  ) {
+  async function handleAddPurchase(purchase: PurchaseInput) {
     const response = await fetch("/api/purchases", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

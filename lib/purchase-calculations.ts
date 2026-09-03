@@ -59,6 +59,50 @@ export function computePurchaseTotals(
   return { totalHT, totalTVA, totalTTC };
 }
 
+/**
+ * Draft "Nouvel achat" form totals, computed TTC-first (the operator types a
+ * tax-included unit price and a % discount on the TTC subtotal). HT / VAT are
+ * derived per line from each product's own tax rate - mirrors the server
+ * (lib/server/purchases.ts#createPurchase). Used only while typing a new
+ * purchase; persisted purchases keep using computePurchaseTotals above,
+ * which reads the stored HT/VAT/TTC columns.
+ */
+export function computeDraftPurchaseTotalsTTC(
+  lines: Array<{
+    quantite: number;
+    prixAchatTTC: number;
+    remisePercent: number;
+    taxRate: number;
+  }>,
+): PurchaseTotals {
+  let totalHT = 0;
+  let totalTVA = 0;
+  let totalTTC = 0;
+  for (const line of lines) {
+    const grossTTC = (line.quantite || 0) * (line.prixAchatTTC || 0);
+    const lineTTC = roundCurrency(grossTTC * (1 - (line.remisePercent || 0) / 100));
+    const lineHT = roundCurrency(lineTTC / (1 + (line.taxRate || 0) / 100));
+    totalTTC += lineTTC;
+    totalHT += lineHT;
+    totalTVA += roundCurrency(lineTTC - lineHT);
+  }
+  return {
+    totalHT: roundCurrency(totalHT),
+    totalTVA: roundCurrency(totalTVA),
+    totalTTC: roundCurrency(totalTTC),
+  };
+}
+
+/** One draft purchase line's TTC subtotal (quantity x unit TTC, less % discount). */
+export function computeDraftLineTotalTTC(line: {
+  quantite: number;
+  prixAchatTTC: number;
+  remisePercent: number;
+}): number {
+  const grossTTC = (line.quantite || 0) * (line.prixAchatTTC || 0);
+  return roundCurrency(grossTTC * (1 - (line.remisePercent || 0) / 100));
+}
+
 export function nextPurchaseNumero(existing: Purchase[]): string {
   const maxNumber = existing.reduce((max, purchase) => {
     const value = Number(purchase.numero.replace("A-", ""));

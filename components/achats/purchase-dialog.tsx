@@ -13,13 +13,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { PurchaseForm } from "@/components/achats/purchase-form";
-import type { Purchase } from "@/types/purchase";
+import type { PurchaseInput } from "@/types/purchase";
 import type { ProductDto, ProductOptionDto } from "@/types/product-dto";
 
 type PurchaseDialogProps = {
-  onSaved: (
-    purchase: Omit<Purchase, "id" | "numero" | "createdAt" | "updatedAt">,
-  ) => Promise<void>;
+  onSaved: (purchase: PurchaseInput) => Promise<void>;
   supplierOptions: ProductOptionDto[];
   productOptions: ProductDto[];
 };

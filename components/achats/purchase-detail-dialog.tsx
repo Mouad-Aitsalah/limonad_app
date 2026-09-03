@@ -151,9 +151,9 @@ export function PurchaseDetailDialog({
                   <TableRow>
                     <TableHead>Produit</TableHead>
                     <TableHead className="text-right">Quantité</TableHead>
-                    <TableHead className="text-right">Prix Achat</TableHead>
+                    <TableHead className="text-right">Prix Achat TTC</TableHead>
                     <TableHead className="text-right">Remise</TableHead>
-                    <TableHead className="text-right">Sous-total</TableHead>
+                    <TableHead className="text-right">Sous-total TTC</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -166,13 +166,13 @@ export function PurchaseDetailDialog({
                         {line.quantite}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {formatCurrency(line.prixAchat)}
+                        {formatCurrency(line.prixAchatTTC ?? line.prixAchat)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {line.remisePercent}%
                       </TableCell>
                       <TableCell className="text-right font-medium tabular-nums">
-                        {formatCurrency(computeLineSousTotal(line))}
+                        {formatCurrency(line.totalTTC ?? computeLineSousTotal(line))}
                       </TableCell>
                     </TableRow>
                   ))}
