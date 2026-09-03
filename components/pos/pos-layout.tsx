@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Plus, ReceiptText } from "lucide-react";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,6 @@ import { CartTable } from "@/components/pos/cart-table";
 import { CartSummary } from "@/components/pos/cart-summary";
 import { InvoiceActions } from "@/components/pos/invoice-actions";
 import { CheckoutDialog } from "@/components/pos/checkout-dialog";
-import { PendingSalesDialog } from "@/components/pos/pending-sales-dialog";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 
 export type CartLine = {
@@ -121,10 +120,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [submitting, setSubmitting] = React.useState(false);
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
 
-  // "Factures du jour" - server-persisted DRAFT sales awaiting collection.
+  // Server-persisted DRAFT sales awaiting collection, shown as numbered tabs.
   const [pendingSales, setPendingSales] = React.useState<SaleDto[]>([]);
+  const [openPendingSale, setOpenPendingSale] = React.useState<SaleDto | null>(null);
   const [preparing, setPreparing] = React.useState(false);
-  const [pendingDialogOpen, setPendingDialogOpen] = React.useState(false);
   const [collecting, setCollecting] = React.useState(false);
 
   const operationType: PosOperationType = "sale";
@@ -157,6 +156,25 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   );
 
   const cartLines = React.useMemo<CartLineComputed[]>(() => {
+    if (openPendingSale) {
+      return openPendingSale.lines.map((line) => ({
+        productId: line.productId,
+        designation: line.productName,
+        reference: line.productReference,
+        quantity: line.quantity,
+        discountPercent: line.discountRate,
+        unitPriceHT: line.unitPriceHT,
+        unitPriceTTC: line.quantity > 0 ? line.totalTTC / line.quantity : 0,
+        tauxTVA: line.taxRate,
+        baseHT: line.unitPriceHT * line.quantity,
+        discountAmount: line.discountAmount,
+        netHT: line.totalHT,
+        tvaAmount: line.taxAmount,
+        totalTTC: line.totalTTC,
+        transferValue: 0,
+      }));
+    }
+
     return cart.flatMap((line) => {
       const product = productById.get(line.productId);
       if (!product) return [];
@@ -188,7 +206,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         transferValue: 0,
       };
     });
-  }, [cart, productById]);
+  }, [cart, openPendingSale, productById]);
 
   const totals = React.useMemo<CartTotals>(() => {
     const sousTotalHT = roundCurrency(
@@ -295,6 +313,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   // "+ Nouvelle facture" - start a fresh invoice. Asks before discarding a
   // cart that was never prepared; a DRAFT already prepared is untouched.
   function newInvoice() {
+    if (openPendingSale) {
+      setCheckoutOpen(false);
+      setLastSale(null);
+      setOpenPendingSale(null);
+      resetOperation();
+      return;
+    }
     if (
       cartLines.length > 0 &&
       !window.confirm("Abandonner la facture en cours ?")
@@ -347,7 +372,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       const response = await fetch("/api/sales/pending", { cache: "no-store" });
       if (!response.ok) return;
       const payload = (await response.json()) as { sales?: SaleDto[] };
-      setPendingSales(payload.sales ?? []);
+      const sales = payload.sales ?? [];
+      setPendingSales(sales);
+      setOpenPendingSale((current) =>
+        current ? sales.find((sale) => sale.id === current.id) ?? null : null,
+      );
     } catch {
       // non-fatal: the panel just stays as it was
     }
@@ -390,6 +419,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     // A prepared invoice is persisted server-side already; the POS can start
     // a fresh cart immediately while keeping this sale available for reprint.
     resetOperation();
+    setOpenPendingSale(null);
     return sale;
   }
 
@@ -398,6 +428,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   }
 
   async function confirmOperation(paidAmount?: number) {
+    if (openPendingSale) {
+      await collectOpenPendingSale(paidAmount);
+      return;
+    }
     if (!selectedCustomer) {
       toast.error("Sélectionnez un client avant de valider.");
       return;
@@ -437,23 +471,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     }
     setPreparing(true);
     try {
-      const response = await fetch("/api/sales", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: buildSaleBody({ collectNow: false }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message ?? "Impossible de préparer la facture.");
-      }
-      setLastSale(payload.sale as SaleDto);
+      const sale = await createDraftSale();
       toast.success(
-        `Facture ${payload.sale.invoiceNumber} préparée. Ajoutée aux « Factures du jour ».`,
+        `Facture ${sale.invoiceNumber} préparée. Ajoutée aux factures en attente.`,
       );
-      // POS réinitialisé automatiquement : le caissier enchaîne la facture
-      // suivante immédiatement.
-      resetOperation();
-      await Promise.all([refreshContext(), refreshPending()]);
+      await syncPendingSalesState();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Impossible de préparer la facture.",
@@ -463,17 +485,23 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     }
   }
 
-  async function collectFromDialog(
-    saleId: string,
-    method: PosPaymentMethodValue,
-    paidAmount?: number,
-  ) {
+  async function collectOpenPendingSale(paidAmount?: number) {
+    if (!openPendingSale) return;
     setCollecting(true);
     try {
-      const response = await fetch(`/api/sales/${saleId}/collect`, {
+      const response = await fetch(`/api/sales/${openPendingSale.id}/collect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paymentMethod: method, paidAmount, reference: null }),
+        body: JSON.stringify({
+          paymentMethod,
+          paidAmount,
+          reference:
+            paymentMethod === "CHECK"
+              ? chequeNumber || null
+              : paymentMethod === "BANK_TRANSFER"
+                ? banque || null
+                : null,
+        }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -481,8 +509,8 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       }
       setLastSale(payload.sale as SaleDto);
       toast.success(`Facture ${payload.sale.invoiceNumber} encaissée.`);
-      setPendingDialogOpen(false);
-      // §6 : retour automatique sur une nouvelle facture vide.
+      setCheckoutOpen(false);
+      setOpenPendingSale(null);
       resetOperation();
       await Promise.all([refreshContext(), refreshPending()]);
     } catch (error) {
@@ -495,6 +523,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   }
 
   async function printInvoice() {
+    if (openPendingSale) {
+      printPending(openPendingSale);
+      return;
+    }
     if (cartLines.length > 0) {
       if (!selectedCustomer) {
         toast.error("Selectionnez un client avant d'imprimer la facture.");
@@ -534,6 +566,30 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     schedulePrint();
   }
 
+  function pendingDisplayNumber(sale: SaleDto, fallback: number) {
+    const match = /^BR-\d{8}-(\d+)$/.exec(sale.invoiceNumber);
+    return match ? Number(match[1]) : fallback;
+  }
+
+  function openPendingInvoice(sale: SaleDto) {
+    if (cart.length > 0 && !window.confirm("Abandonner la facture en cours ?")) {
+      return;
+    }
+
+    const customer = sale.customer
+      ? context.customers.find((item) => item.id === sale.customer?.id) ?? (sale.customer as CustomerDto)
+      : resolveDefaultCustomer(context.customers);
+    setCheckoutOpen(false);
+    setSelectedCustomer(customer);
+    setPaymentMethod(defaultPaymentMethod);
+    setChequeNumber("");
+    setBanque("");
+    setDateEcheance("");
+    setCart([]);
+    setOpenPendingSale(sale);
+    setLastSale(sale);
+  }
+
   const paymentMethodLabel =
     posPaymentMethods.find((method) => method.value === paymentMethod)?.label ?? "";
 
@@ -544,21 +600,16 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           <Plus aria-hidden="true" className="h-4 w-4" />
           Nouvelle facture
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => setPendingDialogOpen(true)}
-        >
-          <ReceiptText aria-hidden="true" className="h-4 w-4" />
-          Factures du jour ({pendingSales.length})
-        </Button>
       </div>
 
       <div className="grid gap-4 lg:h-[calc(100vh-11rem)] lg:grid-cols-2 lg:gap-6">
       <div className="flex flex-col gap-4 lg:h-full lg:overflow-hidden">
         <ProductSearch value={search} onChange={setSearch} />
         <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1">
-          <ProductGrid products={filteredProducts} onAdd={addToCart} />
+        <ProductGrid
+          products={filteredProducts}
+          onAdd={openPendingSale ? () => toast.info("Cette facture est déjà préparée.") : addToCart}
+        />
         </div>
       </div>
 
@@ -594,6 +645,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           <CartTable
             lines={cartLines}
             operationType={operationType}
+            readOnly={Boolean(openPendingSale)}
             onIncrement={incrementQuantity}
             onDecrement={decrementQuantity}
             onQuantityChange={updateQuantity}
@@ -607,12 +659,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         <InvoiceActions
           operationType={operationType}
           disabled={cartLines.length === 0}
-          loading={submitting}
+          loading={submitting || collecting}
           onCheckout={() => setCheckoutOpen(true)}
           onPrint={() => {
             void printInvoice();
           }}
-          onHold={prepareInvoice}
+          onHold={openPendingSale ? undefined : prepareInvoice}
           holdLoading={preparing}
         />
 
@@ -628,8 +680,40 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
               {lastSale.totalTTC.toFixed(2)} MAD
             </p>
           )}
+          {openPendingSale && (
+            <p className="mt-1 font-medium text-amber-700">
+              Facture ouverte : {openPendingSale.invoiceNumber} · En attente de règlement
+            </p>
+          )}
         </div>
       </div>
+
+      </div>
+
+      {pendingSales.length > 0 ? (
+        <div className="flex items-center gap-3 overflow-x-auto rounded-2xl border border-border bg-card px-3 py-2 shadow-sm">
+          <span className="shrink-0 text-sm font-medium text-foreground">Factures en attente</span>
+          <div className="flex min-w-max items-center gap-2">
+            {pendingSales.map((sale, index) => {
+              const number = pendingDisplayNumber(sale, index + 1);
+              const active = openPendingSale?.id === sale.id;
+              return (
+                <Button
+                  key={sale.id}
+                  type="button"
+                  size="sm"
+                  variant={active ? "default" : "outline"}
+                  aria-label={`Ouvrir la facture en attente ${number}`}
+                  className="h-8 min-w-8 px-2 font-semibold tabular-nums"
+                  onClick={() => openPendingInvoice(sale)}
+                >
+                  {number}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <CheckoutDialog
         open={checkoutOpen}
@@ -640,19 +724,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         paymentMethod={paymentMethod}
         operationType={operationType}
         destinationLabel={selectedCustomer?.name ?? "Client comptoir"}
-        submitting={submitting}
+        submitting={submitting || collecting}
         onConfirm={confirmOperation}
       />
-      <PendingSalesDialog
-        open={pendingDialogOpen}
-        onOpenChange={setPendingDialogOpen}
-        sales={pendingSales}
-        busy={collecting}
-        onCollect={collectFromDialog}
-        onPrint={printPending}
-      />
       <ReceiptPrint sale={lastSale} />
-      </div>
     </div>
   );
 }

@@ -16,6 +16,7 @@ import type { PosOperationType } from "@/types/pos";
 type CartTableProps = {
   lines: CartLineComputed[];
   operationType: PosOperationType;
+  readOnly?: boolean;
   onIncrement: (productId: string) => void;
   onDecrement: (productId: string) => void;
   onQuantityChange: (productId: string, quantity: number) => void;
@@ -26,6 +27,7 @@ type CartTableProps = {
 export function CartTable({
   lines,
   operationType,
+  readOnly = false,
   onIncrement,
   onDecrement,
   onQuantityChange,
@@ -82,6 +84,7 @@ export function CartTable({
                   variant="outline"
                   size="icon-xs"
                   aria-label="Diminuer la quantite"
+                  disabled={readOnly}
                   onClick={() => onDecrement(line.productId)}
                 >
                   <Minus className="h-3 w-3" />
@@ -90,6 +93,7 @@ export function CartTable({
                   type="number"
                   min={1}
                   value={line.quantity}
+                  disabled={readOnly}
                   onChange={(event) =>
                     onQuantityChange(
                       line.productId,
@@ -104,6 +108,7 @@ export function CartTable({
                   variant="outline"
                   size="icon-xs"
                   aria-label="Augmenter la quantite"
+                  disabled={readOnly}
                   onClick={() => onIncrement(line.productId)}
                 >
                   <Plus className="h-3 w-3" />
@@ -120,6 +125,7 @@ export function CartTable({
                   min={0}
                   max={100}
                   value={line.discountPercent}
+                  disabled={readOnly}
                   onChange={(event) =>
                     onDiscountChange(
                       line.productId,
@@ -145,6 +151,7 @@ export function CartTable({
                 variant="ghost"
                 size="icon-sm"
                 aria-label={`Retirer ${line.designation} du panier`}
+                disabled={readOnly}
                 onClick={() => onRemove(line.productId)}
                 className="text-muted-foreground hover:text-red-600"
               >
