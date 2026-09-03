@@ -42,6 +42,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  /**
+   * Phase 5C - resilient background re-check. Hitting /api/auth/session also
+   * slides a still-active session's window forward (server side), so keeping
+   * the app open through a long day keeps the driver logged in. Crucially, a
+   * NETWORK error here must NOT log the driver out - only a definitive
+   * `{ user: null }` from a real 200 response does.
+   */
+  const revalidateSession = React.useCallback(async () => {
+    try {
+      setCurrentUser(await fetchSessionUser());
+    } catch {
+      // transient connectivity - keep the last known session
+    }
+  }, []);
+
   React.useEffect(() => {
     let active = true;
 
@@ -63,6 +78,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       active = false;
     };
   }, []);
+
+  React.useEffect(() => {
+    const onResume = () => {
+      if (document.visibilityState === "visible") void revalidateSession();
+    };
+    const intervalId = window.setInterval(() => void revalidateSession(), 30 * 60_000);
+    document.addEventListener("visibilitychange", onResume);
+    window.addEventListener("online", onResume);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onResume);
+      window.removeEventListener("online", onResume);
+    };
+  }, [revalidateSession]);
 
   const login = React.useCallback(
     async (email: string, password: string): Promise<LoginResult> => {

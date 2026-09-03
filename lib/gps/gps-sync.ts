@@ -45,6 +45,26 @@ export function configureGpsSync(resolver: () => string | null): void {
   resolveActiveTourId = resolver;
 }
 
+/**
+ * Phase 5C - stop the sync layer when a tour ends: cancel any pending
+ * backoff retry so nothing keeps hitting the network for a finished tour.
+ * The queue itself is left intact (a final flush should run first).
+ */
+export function stopGpsSync(): void {
+  clearRetryTimer();
+  backoffMs = BACKOFF_BASE_MS;
+}
+
+/**
+ * Phase 5C - one last drain for a tour that is ending, addressed by its
+ * explicit id (by now `resolveActiveTourId()` returns null). Best-effort:
+ * if the network is down it simply no-ops and the points stay queued for
+ * the next tour-scoped opportunity or eventual eviction.
+ */
+export function finalFlushForTour(tourId: string): Promise<GpsFlushOutcome> {
+  return flushGpsQueue({ force: true, tourId });
+}
+
 function clearRetryTimer(): void {
   if (retryTimer) {
     clearTimeout(retryTimer);
@@ -63,7 +83,7 @@ function scheduleRetry(): void {
 }
 
 export async function flushGpsQueue(
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; tourId?: string } = {},
 ): Promise<GpsFlushOutcome> {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return "skipped";
   if (flushing) return "skipped";
@@ -71,7 +91,9 @@ export async function flushGpsQueue(
   const now = Date.now();
   if (!opts.force && now - lastFlushAt < MIN_FLUSH_INTERVAL_MS) return "skipped";
 
-  const tourId = resolveActiveTourId?.() ?? null;
+  // `opts.tourId` is the end-of-tour final-flush path (finalFlushForTour),
+  // where the resolver already reports no active tour.
+  const tourId = opts.tourId ?? resolveActiveTourId?.() ?? null;
   if (!tourId) return "no-tour";
 
   flushing = true;

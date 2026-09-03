@@ -8,7 +8,19 @@ import { prisma } from "@/lib/prisma";
 import type { CurrentUser, UserRole } from "@/types/auth";
 
 const SESSION_COOKIE = "comdis.session";
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8;
+// Phase 5C: a full driver day (early start + a late close + margin) must fit
+// inside one window so a driver logged in that morning is never bounced to
+// /login mid-tour. Sliding renewal (refreshCurrentSession, below) keeps a
+// still-active session alive past that, capped by an absolute ceiling so it
+// is never an infinite session.
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 20;
+// A session is never renewed past this many seconds from its creation - after
+// it, the user re-authenticates. 14 days comfortably covers back-to-back
+// working days without turning "stay logged in" into "logged in forever".
+const SESSION_ABSOLUTE_MAX_AGE_SECONDS = 60 * 60 * 24 * 14;
+// Only slide the window (a DB write + a fresh Set-Cookie) once a session has
+// burned through more than half its life - not on every session probe.
+const SESSION_RENEW_WHEN_REMAINING_MS = (SESSION_MAX_AGE_SECONDS * 1000) / 2;
 // Raw token size in bytes - >= the 32-byte minimum required. base64url keeps
 // it compact and cookie/URL-safe (43 chars for 32 bytes, no padding).
 const SESSION_TOKEN_BYTES = 32;
@@ -131,6 +143,69 @@ export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
     // a failed write here must never break authentication itself.
     await prisma.session
       .update({ where: { id: session.id }, data: { lastUsedAt: new Date() } })
+      .catch(() => undefined);
+  }
+
+  return mapUserToSession(user);
+}
+
+/**
+ * Phase 5C - sliding session renewal. Same authority checks as
+ * getCurrentSessionUser (revoked / expired / user still ACTIVE / org still
+ * ACTIVE), and additionally, when the current session has burned through
+ * more than half its window AND is still within the absolute ceiling from
+ * its creation, extends `expiresAt` and re-issues the cookie with a fresh
+ * max-age. Never resurrects an expired/revoked session, never renews past
+ * the absolute cap - so a driver who keeps the app open all day stays
+ * logged in, but a stale cookie left on a shelf still dies.
+ *
+ * MUST only be called from a Route Handler / Server Action (it may write a
+ * cookie). Everything else keeps calling getCurrentSessionUser.
+ */
+export async function refreshCurrentSession(): Promise<CurrentUser | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+
+  const tokenHash = hashSessionToken(token);
+  const session = await prisma.session.findUnique({
+    where: { tokenHash },
+    select: { id: true, userId: true, createdAt: true, expiresAt: true, revokedAt: true },
+  });
+
+  if (!session) return null;
+  if (session.revokedAt) return null;
+  const now = Date.now();
+  if (session.expiresAt.getTime() <= now) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: userForSessionSelect,
+  });
+  if (!user || user.status !== "ACTIVE") return null;
+  if (user.role !== "SUPER_ADMIN" && !user.organizationId) return null;
+  if (user.organization && user.organization.status !== "ACTIVE") return null;
+
+  const withinAbsoluteCeiling =
+    now - session.createdAt.getTime() < SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000;
+  const burnedMoreThanHalf =
+    session.expiresAt.getTime() - now < SESSION_RENEW_WHEN_REMAINING_MS;
+
+  if (withinAbsoluteCeiling && burnedMoreThanHalf) {
+    const nextExpiresAt = new Date(now + SESSION_MAX_AGE_SECONDS * 1000);
+    // Best-effort: a failed renewal must never break authentication - the
+    // session is still valid for the rest of its current window.
+    await prisma.session
+      .update({ where: { id: session.id }, data: { expiresAt: nextExpiresAt } })
+      .then(() => {
+        cookieStore.set(SESSION_COOKIE, token, {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: process.env.NODE_ENV === "production",
+          path: "/",
+          maxAge: SESSION_MAX_AGE_SECONDS,
+        });
+      })
       .catch(() => undefined);
   }
 

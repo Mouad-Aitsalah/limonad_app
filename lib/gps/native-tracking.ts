@@ -52,12 +52,22 @@ const BACKGROUND_MESSAGE = "Suivi GPS de votre tournee en cours";
 const DISTANCE_FILTER_METERS = 20;
 const MIN_INTERVAL_MS = 30_000;
 
+// Phase 5C - the native tracking token (lib/server/tracking-token.ts, 16 h
+// TTL) must never lapse mid-tour. We rotate it into the plugin's headers
+// (BackgroundGeolocation.updateHeaders) this long before it would expire.
+const TOKEN_REFRESH_MARGIN_MS = 2 * 60 * 60 * 1000;
+// When a refresh fetch fails (no network), try again this soon rather than
+// waiting for the next scheduled point.
+const TOKEN_REFRESH_RETRY_MS = 5 * 60 * 1000;
+
 // Module-level (not component-level) on purpose: this is the single source
 // of truth for "is a native watcher currently running, and for which tour",
 // across the whole app - it must survive whichever component/effect last
 // called start()/stop(), so two watchers are never started concurrently.
 let activeTourId: string | null = null;
 let starting = false;
+let tokenExpiresAtMs: number | null = null;
+let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function isNativeGpsPlatform(): boolean {
   return Capacitor.isNativePlatform();
@@ -77,8 +87,8 @@ export async function startNativeTracking(
 
   starting = true;
   try {
-    const token = await fetchTrackingToken();
-    if (!token) return false;
+    const issued = await fetchTrackingToken();
+    if (!issued) return false;
 
     await BackgroundGeolocation.start(
       {
@@ -89,7 +99,7 @@ export async function startNativeTracking(
         distanceFilter: DISTANCE_FILTER_METERS,
         minIntervalMs: MIN_INTERVAL_MS,
         url: `${window.location.origin}/api/driver/tour/location/native`,
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${issued.token}` },
       },
       (location, error) => {
         if (error) {
@@ -112,6 +122,8 @@ export async function startNativeTracking(
     );
 
     activeTourId = tourId;
+    tokenExpiresAtMs = issued.expiresAtMs;
+    scheduleTokenRefresh();
     return true;
   } catch (error) {
     console.warn("[gps-native] start failed", error);
@@ -123,6 +135,7 @@ export async function startNativeTracking(
 
 /** Stops native tracking. Safe to call even when nothing is running. */
 export async function stopNativeTracking(): Promise<void> {
+  clearTokenRefresh();
   if (!isNativeGpsPlatform() || activeTourId === null) return;
 
   activeTourId = null;
@@ -131,6 +144,20 @@ export async function stopNativeTracking(): Promise<void> {
   } catch (error) {
     console.warn("[gps-native] stop failed", error);
   }
+}
+
+/**
+ * Phase 5C - called on app resume: if native tracking is running and its
+ * token is inside the refresh margin, rotate it now rather than waiting for
+ * the background timer (which may not have fired while the app was suspended).
+ */
+export async function refreshNativeTrackingTokenIfNeeded(): Promise<void> {
+  if (!isNativeGpsPlatform() || activeTourId === null) return;
+  if (tokenExpiresAtMs !== null && tokenExpiresAtMs - Date.now() > TOKEN_REFRESH_MARGIN_MS) {
+    scheduleTokenRefresh();
+    return;
+  }
+  await rotateTrackingToken();
 }
 
 /** Opens the device's location settings - used when permission was refused. */
@@ -143,15 +170,75 @@ export async function openNativeLocationSettings(): Promise<void> {
   }
 }
 
-async function fetchTrackingToken(): Promise<string | null> {
+/**
+ * Phase 5C - opens this app's system settings screen (permissions + battery
+ * optimisation). `openSettings()` on Android lands on the app info page;
+ * kept as a separate name from the location-permission use so call sites
+ * read clearly. Same underlying call.
+ */
+export const openNativeAppSettings = openNativeLocationSettings;
+
+function clearTokenRefresh() {
+  if (tokenRefreshTimer) {
+    clearTimeout(tokenRefreshTimer);
+    tokenRefreshTimer = null;
+  }
+  tokenExpiresAtMs = null;
+}
+
+function scheduleTokenRefresh() {
+  if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
+  const delay =
+    tokenExpiresAtMs !== null
+      ? Math.max(60_000, tokenExpiresAtMs - Date.now() - TOKEN_REFRESH_MARGIN_MS)
+      : TOKEN_REFRESH_RETRY_MS;
+  tokenRefreshTimer = setTimeout(() => {
+    tokenRefreshTimer = null;
+    void rotateTrackingToken();
+  }, delay);
+}
+
+async function rotateTrackingToken(): Promise<void> {
+  if (activeTourId === null) return;
+  const issued = await fetchTrackingToken();
+  if (!issued) {
+    // Keep the existing (still valid for a bit) token, retry sooner.
+    tokenRefreshTimer = setTimeout(() => {
+      tokenRefreshTimer = null;
+      void rotateTrackingToken();
+    }, TOKEN_REFRESH_RETRY_MS);
+    return;
+  }
+  try {
+    await BackgroundGeolocation.updateHeaders({
+      headers: { Authorization: `Bearer ${issued.token}` },
+    });
+    tokenExpiresAtMs = issued.expiresAtMs;
+  } catch (error) {
+    console.warn("[gps-native] updateHeaders failed", error);
+  }
+  scheduleTokenRefresh();
+}
+
+async function fetchTrackingToken(): Promise<{ token: string; expiresAtMs: number } | null> {
   try {
     const response = await fetch("/api/driver/tour/location-token", { method: "POST" });
-    const payload = (await response.json()) as { token?: string; message?: string };
+    const payload = (await response.json()) as {
+      token?: string;
+      expiresAt?: string;
+      message?: string;
+    };
     if (!response.ok || !payload.token) {
       console.warn("[gps-native] token fetch failed", payload.message);
       return null;
     }
-    return payload.token;
+    const parsed = payload.expiresAt ? Date.parse(payload.expiresAt) : Number.NaN;
+    return {
+      token: payload.token,
+      // Fall back to "now + 16 h" if the server ever omits expiresAt, so the
+      // refresh scheduler still has something sane to work with.
+      expiresAtMs: Number.isFinite(parsed) ? parsed : Date.now() + 16 * 60 * 60 * 1000,
+    };
   } catch (error) {
     console.warn("[gps-native] token fetch error", error);
     return null;

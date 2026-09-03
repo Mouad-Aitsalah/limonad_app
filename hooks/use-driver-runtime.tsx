@@ -12,8 +12,14 @@ import {
   dropGpsPointsForOtherTours,
   enqueueGpsPoint,
 } from "@/lib/gps/gps-offline-queue";
-import { configureGpsSync, flushGpsQueue } from "@/lib/gps/gps-sync";
 import {
+  configureGpsSync,
+  finalFlushForTour,
+  flushGpsQueue,
+  stopGpsSync,
+} from "@/lib/gps/gps-sync";
+import {
+  refreshNativeTrackingTokenIfNeeded,
   startNativeTracking,
   stopNativeTracking,
 } from "@/lib/gps/native-tracking";
@@ -275,15 +281,20 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
     [queueGpsPosition, syncNearbyCustomer],
   );
 
+  const activeTourId = currentTour?.tour?.id ?? null;
+  const activeTourStatus = currentTour?.tour?.status ?? null;
+  const isTourInProgress = activeTourStatus === "IN_PROGRESS";
+
+  // Phase 5C - the foreground watch runs ONLY during an IN_PROGRESS tour.
+  // Outside one there is nothing to track, so the GPS chip stays off
+  // (battery) and no stray points are captured.
   const gps = useDriverGeolocation({
-    active: true,
+    active: isTourInProgress,
     initialPosition: null,
     onReliablePosition: handleReliablePosition,
   });
   const lastKnownPosition = gps.lastKnownPosition;
   const resetGps = gps.reset;
-  const activeTourId = currentTour?.tour?.id ?? null;
-  const activeTourStatus = currentTour?.tour?.status ?? null;
 
   // Native background tracking follows the tour lifecycle: starts the
   // moment a tour becomes IN_PROGRESS, stops as soon as it no longer is
@@ -311,11 +322,30 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
 
   React.useEffect(() => {
     return () => {
+      // Provider unmount (logout, leaving /driver): tear everything down so
+      // nothing keeps tracking or retrying in the background.
       if (Capacitor.isNativePlatform()) {
         void stopNativeTracking();
       }
+      stopGpsSync();
     };
   }, []);
+
+  // Phase 5C - end of tour: the instant the tour leaves IN_PROGRESS, run one
+  // last flush of the offline queue for THAT tour (native/foreground GPS is
+  // already stopped by the effects above / the `active` gate), then stop the
+  // sync backoff so nothing keeps hitting the network for a finished tour.
+  const previousTourRef = React.useRef<{ id: string; inProgress: boolean } | null>(null);
+  React.useEffect(() => {
+    const previous = previousTourRef.current;
+    previousTourRef.current = activeTourId
+      ? { id: activeTourId, inProgress: isTourInProgress }
+      : null;
+
+    if (previous?.inProgress && (!isTourInProgress || previous.id !== activeTourId)) {
+      void finalFlushForTour(previous.id).finally(() => stopGpsSync());
+    }
+  }, [activeTourId, isTourInProgress]);
 
   // Phase 5B - GPS offline sync wiring. Tell the sync layer how to resolve
   // the CURRENTLY active tour (so it never mis-attaches a finished tour's
@@ -438,6 +468,22 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
   const refreshRuntime = React.useCallback(async () => {
     await Promise.allSettled([refreshCustomers(), refreshCurrentTour()]);
   }, [refreshCustomers, refreshCurrentTour]);
+
+  // Phase 5C - on every app open / resume: re-hydrate the tour (it may have
+  // ended, been cancelled, or been closed by an admin while we were away),
+  // and rotate the native tracking token if it is near expiry. The
+  // tour-status effects above then start or wind down tracking accordingly.
+  // The 5B queue flush + session revalidation are handled by their own
+  // resume listeners (this effect / hooks/use-auth.tsx).
+  React.useEffect(() => {
+    const onResume = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshCurrentTour().catch(() => undefined);
+      void refreshNativeTrackingTokenIfNeeded();
+    };
+    document.addEventListener("visibilitychange", onResume);
+    return () => document.removeEventListener("visibilitychange", onResume);
+  }, [refreshCurrentTour]);
 
   const replaceCurrentTour = React.useCallback((tour: CurrentDriverTourDto) => {
     if (!mountedRef.current) return;
