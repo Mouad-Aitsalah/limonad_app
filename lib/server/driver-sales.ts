@@ -135,33 +135,24 @@ export async function getDriverPosContext(
     }, driver.truck, activeTour);
   }
 
-  const [levels, customers] = await Promise.all([
-    prisma.stockLevel.findMany({
-      where: {
-        organizationId: user.organizationId,
-        locationId: driver.truck.stockLocation.id,
-        // Same rule as the counter POS: every ACTIVE product with a stock
-        // row on this truck stays sellable at 0 or negative stock (shown in
-        // red). Negative truck stock is allowed for driver sales.
-        product: { status: "ACTIVE" },
+  const [productRows, customers] = await Promise.all([
+    // Same rule as the counter POS: visibility = every ACTIVE product the
+    // driver is allowed to sell, NOT "what has a stock row on this truck".
+    // A product not (yet) loaded on the truck (no StockLevel row) is still
+    // shown and sellable at 0 / negative. Bounded (LIMIT + 1 -> truncated
+    // -> search fallback). minimumStock is never a filter.
+    prisma.product.findMany({
+      where: { organizationId: user.organizationId, status: "ACTIVE" },
+      select: {
+        id: true,
+        reference: true,
+        barcode: true,
+        name: true,
+        imageUrl: true,
+        salePrice: true,
+        taxRate: true,
       },
-      include: {
-        product: {
-          select: {
-            id: true,
-            reference: true,
-            barcode: true,
-            name: true,
-            imageUrl: true,
-            salePrice: true,
-            taxRate: true,
-          },
-        },
-      },
-      orderBy: { product: { name: "asc" } },
-      // Phase 3: same POS_PRODUCT_LIST_LIMIT cap as getCounterPosContext
-      // (counter-sales.ts) - see productsTruncated below and the Phase 3
-      // report for why this is bounded now.
+      orderBy: { name: "asc" },
       take: POS_PRODUCT_LIST_LIMIT + 1,
     }),
     // Phase 3: bounded preload (recent customers this driver is allowed to
@@ -181,15 +172,29 @@ export async function getDriverPosContext(
     }),
   ]);
 
-  const productsTruncated = levels.length > POS_PRODUCT_LIST_LIMIT;
-  const pageLevels = productsTruncated ? levels.slice(0, POS_PRODUCT_LIST_LIMIT) : levels;
+  const productsTruncated = productRows.length > POS_PRODUCT_LIST_LIMIT;
+  const pageProducts = productsTruncated
+    ? productRows.slice(0, POS_PRODUCT_LIST_LIMIT)
+    : productRows;
 
-  const canSell = Boolean(activeTour) && pageLevels.length > 0;
+  const levels = pageProducts.length
+    ? await prisma.stockLevel.findMany({
+        where: {
+          organizationId: user.organizationId,
+          locationId: driver.truck.stockLocation.id,
+          productId: { in: pageProducts.map((product) => product.id) },
+        },
+        select: { productId: true, quantity: true, reservedQuantity: true },
+      })
+    : [];
+  const levelByProductId = new Map(levels.map((level) => [level.productId, level]));
+
+  const canSell = Boolean(activeTour) && pageProducts.length > 0;
   const message = !activeTour
     ? "Demarrez votre tournee avant de vendre."
-    : pageLevels.length > 0
+    : pageProducts.length > 0
       ? undefined
-      : "Aucun produit n'est disponible dans votre camion.";
+      : "Aucun produit actif n'est disponible.";
 
   return {
     canSell,
@@ -200,20 +205,22 @@ export async function getDriverPosContext(
     customers: customers.filter((customer) => customer.status === "ACTIVE"),
     stockLocationId: driver.truck.stockLocation.id,
     productsTruncated,
-    products: pageLevels.map((level) => {
-      const salePriceHT = level.product.salePrice.toNumber();
-      const taxRate = level.product.taxRate.toNumber();
+    products: pageProducts.map((product) => {
+      const salePriceHT = product.salePrice.toNumber();
+      const taxRate = product.taxRate.toNumber();
+      const level = levelByProductId.get(product.id);
 
       return {
-        id: level.product.id,
-        reference: level.product.reference,
-        barcode: level.product.barcode,
-        name: level.product.name,
-        imageUrl: level.product.imageUrl,
+        id: product.id,
+        reference: product.reference,
+        barcode: product.barcode,
+        name: product.name,
+        imageUrl: product.imageUrl,
         salePriceHT,
         salePriceTTC: computePriceTTC(salePriceHT, taxRate),
         taxRate,
-        availableQuantity: level.quantity - level.reservedQuantity,
+        // No stock row on this truck -> shown as 0 (still sellable).
+        availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
       };
     }),
   };

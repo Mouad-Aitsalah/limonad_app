@@ -459,13 +459,16 @@ export async function getProductPickerPreload(params?: {
 }
 
 /**
- * Phase 3 follow-up: location-scoped POS search, the fallback the frontend
- * calls when a POS context's `products` list was truncated (see
- * POS_PRODUCT_LIST_LIMIT in counter-sales.ts/driver-sales.ts) and the
- * cashier/driver has typed a query - lets them still find and sell an item
- * beyond the preload cap instead of it being silently unreachable. Scoped to
- * `quantity > 0` at the given location, same shape as the preloaded list
- * (DriverPosProductDto) so the frontend can merge results in directly.
+ * POS search fallback (comptoir + chauffeur), called when the context's
+ * preloaded `products` list was truncated (see POS_PRODUCT_LIST_LIMIT in
+ * counter-sales.ts / driver-sales.ts) and the operator has typed a query.
+ *
+ * Visibility is NOT gated on stock: any ACTIVE product of the organisation
+ * that matches is returned, with its `availableQuantity` for `locationId`
+ * (0 when it has no stock row there). Negative sales are allowed, so a
+ * product at 0 / negative stock must still be findable - by designation,
+ * reference or barcode. Same shape as the preloaded list
+ * (DriverPosProductDto) so the frontend can merge results directly.
  */
 export async function searchPosProducts(params: {
   locationId: string;
@@ -483,81 +486,79 @@ export async function searchPosProducts(params: {
       ? Math.min(requestedLimit, PRODUCT_SEARCH_MAX_LIMIT)
       : PRODUCT_SEARCH_DEFAULT_LIMIT;
 
-  const levelSelect = {
-    product: {
-      select: {
-        id: true,
-        reference: true,
-        barcode: true,
-        name: true,
-        imageUrl: true,
-        salePrice: true,
-        taxRate: true,
-      },
-    },
+  const productSelect = {
+    id: true,
+    reference: true,
+    barcode: true,
+    name: true,
+    imageUrl: true,
+    salePrice: true,
+    taxRate: true,
   } as const;
 
-  function toDto(level: {
-    quantity: number;
-    reservedQuantity: number;
-    product: {
-      id: string;
-      reference: string;
-      barcode: string | null;
-      name: string;
-      imageUrl: string | null;
-      salePrice: Prisma.Decimal;
-      taxRate: Prisma.Decimal;
-    };
-  }): DriverPosProductDto {
-    const salePriceHT = level.product.salePrice.toNumber();
-    const taxRate = level.product.taxRate.toNumber();
-    return {
-      id: level.product.id,
-      reference: level.product.reference,
-      barcode: level.product.barcode,
-      name: level.product.name,
-      imageUrl: level.product.imageUrl,
-      salePriceHT,
-      salePriceTTC: computePriceTTC(salePriceHT, taxRate),
-      taxRate,
-      availableQuantity: level.quantity - level.reservedQuantity,
-    };
+  type ProductRow = {
+    id: string;
+    reference: string;
+    barcode: string | null;
+    name: string;
+    imageUrl: string | null;
+    salePrice: Prisma.Decimal;
+    taxRate: Prisma.Decimal;
+  };
+
+  async function withLevels(products: ProductRow[]): Promise<DriverPosProductDto[]> {
+    if (products.length === 0) return [];
+    const levels = await prisma.stockLevel.findMany({
+      where: {
+        organizationId,
+        locationId: params.locationId,
+        productId: { in: products.map((product) => product.id) },
+      },
+      select: { productId: true, quantity: true, reservedQuantity: true },
+    });
+    const byId = new Map(levels.map((level) => [level.productId, level]));
+    return products.map((product) => {
+      const salePriceHT = product.salePrice.toNumber();
+      const taxRate = product.taxRate.toNumber();
+      const level = byId.get(product.id);
+      return {
+        id: product.id,
+        reference: product.reference,
+        barcode: product.barcode,
+        name: product.name,
+        imageUrl: product.imageUrl,
+        salePriceHT,
+        salePriceTTC: computePriceTTC(salePriceHT, taxRate),
+        taxRate,
+        availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
+      };
+    });
   }
 
-  // POS product search: an ACTIVE product with a stock row at this location
-  // stays findable at 0 or negative stock (negative sales are allowed).
-  const exactBarcodeMatch = await prisma.stockLevel.findFirst({
-    where: {
-      organizationId,
-      locationId: params.locationId,
-      product: { status: "ACTIVE", barcode: query },
-    },
-    select: { quantity: true, reservedQuantity: true, ...levelSelect },
+  const exactBarcodeMatch = await prisma.product.findFirst({
+    where: { organizationId, status: "ACTIVE", barcode: query },
+    select: productSelect,
   });
   if (exactBarcodeMatch) {
-    return [toDto(exactBarcodeMatch)];
+    return withLevels([exactBarcodeMatch]);
   }
 
-  const matches = await prisma.stockLevel.findMany({
+  const matches = await prisma.product.findMany({
     where: {
       organizationId,
-      locationId: params.locationId,
-      product: {
-        status: "ACTIVE",
-        OR: [
-          { name: { contains: query, mode: "insensitive" } },
-          { reference: { contains: query, mode: "insensitive" } },
-          { barcode: { contains: query, mode: "insensitive" } },
-        ],
-      },
+      status: "ACTIVE",
+      OR: [
+        { name: { contains: query, mode: "insensitive" } },
+        { reference: { contains: query, mode: "insensitive" } },
+        { barcode: { contains: query, mode: "insensitive" } },
+      ],
     },
-    select: { quantity: true, reservedQuantity: true, ...levelSelect },
-    orderBy: { product: { name: "asc" } },
+    select: productSelect,
+    orderBy: { name: "asc" },
     take: limit,
   });
 
-  return matches.map(toDto);
+  return withLevels(matches);
 }
 
 async function getProductRecordById(id: string, organizationId: string) {

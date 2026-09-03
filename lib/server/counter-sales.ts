@@ -103,32 +103,26 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     throw new OperationsServiceError("Emplacement depot introuvable.", 404);
   }
 
-  const [levels, customers] = await Promise.all([
-    prisma.stockLevel.findMany({
-      where: {
-        organizationId: sessionUser.organizationId,
-        locationId: stockLocation.id,
-        // Every ACTIVE product with a stock row at this depot stays sellable,
-        // including at 0 or negative stock (negative sales are allowed - the
-        // POS shows the quantity in red, see the product card). A product
-        // that has never had any stock movement at this depot still needs a
-        // first movement before it appears here.
-        product: { status: "ACTIVE" },
+  const [productRows, customers] = await Promise.all([
+    // Source of truth for POS visibility = every ACTIVE product of the
+    // organisation, NOT "what has a stock row at this depot". A product
+    // never received/loaded here (no StockLevel row) must still be sellable
+    // - the stock is only information, never a visibility filter, and
+    // negative sales are allowed. minimumStock is never a filter either.
+    // Still bounded (take LIMIT + 1 -> productsTruncated -> the search
+    // fallback), same as before.
+    prisma.product.findMany({
+      where: { organizationId: sessionUser.organizationId, status: "ACTIVE" },
+      select: {
+        id: true,
+        reference: true,
+        barcode: true,
+        name: true,
+        imageUrl: true,
+        salePrice: true,
+        taxRate: true,
       },
-      include: {
-        product: {
-          select: {
-            id: true,
-            reference: true,
-            barcode: true,
-            name: true,
-            imageUrl: true,
-            salePrice: true,
-            taxRate: true,
-          },
-        },
-      },
-      orderBy: { product: { name: "asc" } },
+      orderBy: { name: "asc" },
       take: POS_PRODUCT_LIST_LIMIT + 1,
     }),
     // Phase 3: bounded preload (recent customers + the org's "COUNTER"/
@@ -140,22 +134,39 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     getPosCustomerPreload({ organizationId: sessionUser.organizationId, guaranteeType: "COUNTER" }),
   ]);
 
-  const productsTruncated = levels.length > POS_PRODUCT_LIST_LIMIT;
-  const pageLevels = productsTruncated ? levels.slice(0, POS_PRODUCT_LIST_LIMIT) : levels;
-  const products: DriverPosProductDto[] = pageLevels.map((level) => {
-    const salePriceHT = level.product.salePrice.toNumber();
-    const taxRate = level.product.taxRate.toNumber();
+  const productsTruncated = productRows.length > POS_PRODUCT_LIST_LIMIT;
+  const pageProducts = productsTruncated
+    ? productRows.slice(0, POS_PRODUCT_LIST_LIMIT)
+    : productRows;
+
+  const levels = pageProducts.length
+    ? await prisma.stockLevel.findMany({
+        where: {
+          organizationId: sessionUser.organizationId,
+          locationId: stockLocation.id,
+          productId: { in: pageProducts.map((product) => product.id) },
+        },
+        select: { productId: true, quantity: true, reservedQuantity: true },
+      })
+    : [];
+  const levelByProductId = new Map(levels.map((level) => [level.productId, level]));
+
+  const products: DriverPosProductDto[] = pageProducts.map((product) => {
+    const salePriceHT = product.salePrice.toNumber();
+    const taxRate = product.taxRate.toNumber();
+    const level = levelByProductId.get(product.id);
 
     return {
-      id: level.product.id,
-      reference: level.product.reference,
-      barcode: level.product.barcode,
-      name: level.product.name,
-      imageUrl: level.product.imageUrl,
+      id: product.id,
+      reference: product.reference,
+      barcode: product.barcode,
+      name: product.name,
+      imageUrl: product.imageUrl,
       salePriceHT,
       salePriceTTC: computePriceTTC(salePriceHT, taxRate),
       taxRate,
-      availableQuantity: level.quantity - level.reservedQuantity,
+      // No stock row at this depot -> shown as 0 (still sellable).
+      availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
     };
   });
 
