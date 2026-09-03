@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { CUSTOMER_ACCOUNT_PREFIX, formatCustomerCode, resolveCustomerCodeFromInput } from "@/lib/customer-code";
 import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
@@ -21,7 +22,7 @@ const customerTypes = [
 ] as const;
 
 const customerStatuses = ["ACTIVE", "INACTIVE", "BLOCKED"] as const;
-const customerAccountPrefix = "3421";
+const customerAccountPrefix = CUSTOMER_ACCOUNT_PREFIX;
 
 export const customerMutationSchema = z.object({
   code: optionalString(),
@@ -73,6 +74,7 @@ export function mapCustomerToDto(customer: NonNullable<CustomerRecord>): Custome
   return {
     id: customer.id,
     code: customer.code,
+    displayCode: formatCustomerCode(customer.code),
     name: customer.name,
     phone: customer.phone,
     email: customer.email,
@@ -184,6 +186,44 @@ export async function searchCustomers(params: {
   });
 
   return matches.map(mapCustomerToDto);
+}
+
+/**
+ * POS "N° client" box: turns a short number (1, 15, 125), a full "3421/15"
+ * or a raw "342115" into the one customer it can only be, scoped to the
+ * caller's organisation (and, for a driver session, to the same
+ * "ADMIN-origin OR created by this driver" restriction searchCustomers
+ * already enforces). Returns null when the input can't be a customer number
+ * or no such customer exists in this organisation - the caller turns that
+ * into a clean "Client introuvable", never a 500. The same number in
+ * another organisation is unreachable: the lookup is always
+ * `where: { organizationId, code }`.
+ */
+export async function resolveCustomerByNumber(rawInput: string): Promise<CustomerDto | null> {
+  const currentUser = await requireOrganizationUser([
+    "admin",
+    "depot_manager",
+    "cashier",
+    "driver",
+  ]);
+  const code = resolveCustomerCodeFromInput(rawInput ?? "");
+  if (!code) return null;
+
+  const driverScope =
+    currentUser.role === "driver"
+      ? {
+          OR: [
+            { creationOrigin: "ADMIN" as const },
+            { createdByDriverId: currentUser.driverId ?? "__never__" },
+          ],
+        }
+      : {};
+
+  const customer = await prisma.customer.findFirst({
+    where: { organizationId: currentUser.organizationId, code, ...driverScope },
+    include: customerInclude,
+  });
+  return customer ? mapCustomerToDto(customer) : null;
 }
 
 const POS_CUSTOMER_PRELOAD_LIMIT = 20;

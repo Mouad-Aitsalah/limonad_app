@@ -107,9 +107,10 @@ export function CustomerCombobox({
             <ComboboxItem key={customer.id} value={customer} index={index}>
               <div className="flex min-w-0 flex-col">
                 <span className="truncate">{customer.name}</span>
-                {customer.phone ? (
-                  <span className="truncate text-xs text-muted-foreground">{customer.phone}</span>
-                ) : null}
+                <span className="truncate text-xs text-muted-foreground">
+                  N° {customer.displayCode}
+                  {customer.phone ? ` · ${customer.phone}` : ""}
+                </span>
               </div>
             </ComboboxItem>
           ))}

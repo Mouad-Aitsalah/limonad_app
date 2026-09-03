@@ -38,7 +38,10 @@ export const productMutationSchema = z.object({
   description: optionalNullableString,
   categoryId: z.string().trim().min(1, "La categorie est obligatoire."),
   brandId: optionalNullableString,
-  defaultSupplierId: optionalNullableString,
+  // Now mandatory (was optional): every product must be tied to a supplier.
+  // The server-side check in parseAndValidateProductInput additionally
+  // verifies the supplier belongs to this organisation and is active.
+  defaultSupplierId: z.string().trim().min(1, "Le fournisseur est obligatoire."),
   // F8-F: input-level sanity bound only (Decimal(12,2)), not the real
   // protection - a second, server-side assertMoneyRange call in
   // parseAndValidateProductInput below is the actual gate, since this
@@ -522,11 +525,12 @@ export async function searchPosProducts(params: {
     };
   }
 
+  // POS product search: an ACTIVE product with a stock row at this location
+  // stays findable at 0 or negative stock (negative sales are allowed).
   const exactBarcodeMatch = await prisma.stockLevel.findFirst({
     where: {
       organizationId,
       locationId: params.locationId,
-      quantity: { gt: 0 },
       product: { status: "ACTIVE", barcode: query },
     },
     select: { quantity: true, reservedQuantity: true, ...levelSelect },
@@ -539,7 +543,6 @@ export async function searchPosProducts(params: {
     where: {
       organizationId,
       locationId: params.locationId,
-      quantity: { gt: 0 },
       product: {
         status: "ACTIVE",
         OR: [
@@ -622,15 +625,10 @@ async function parseAndValidateProductInput(
             where: { id: "__never__" },
             select: { id: true },
           }),
-      data.defaultSupplierId
-        ? prisma.supplier.findFirst({
-            where: { id: data.defaultSupplierId, organizationId },
-            select: { id: true },
-          })
-        : prisma.supplier.findFirst({
-            where: { id: "__never__" },
-            select: { id: true },
-          }),
+      prisma.supplier.findFirst({
+        where: { id: data.defaultSupplierId, organizationId, active: true },
+        select: { id: true },
+      }),
     ]);
 
   const fieldErrors: Record<string, string> = {};
@@ -646,8 +644,8 @@ async function parseAndValidateProductInput(
   if (data.brandId && !brand) {
     fieldErrors.brandId = "Marque inexistante.";
   }
-  if (data.defaultSupplierId && !supplier) {
-    fieldErrors.defaultSupplierId = "Fournisseur inexistant.";
+  if (!supplier) {
+    fieldErrors.defaultSupplierId = "Fournisseur inexistant ou inactif.";
   }
 
   if (Object.keys(fieldErrors).length > 0) {

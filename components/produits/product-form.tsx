@@ -79,6 +79,16 @@ export function ProductForm({
     event.preventDefault();
     if (readOnly) return;
 
+    // Instant feedback only - the server enforces this too (and also checks
+    // the supplier belongs to the org and is active).
+    if (!values.defaultSupplierId) {
+      setFieldErrors((current) => ({
+        ...current,
+        defaultSupplierId: "Le fournisseur est obligatoire.",
+      }));
+      return;
+    }
+
     setIsSaving(true);
     const errors = await onSaved(valuesToMutationInput(values));
     setFieldErrors(errors ?? {});

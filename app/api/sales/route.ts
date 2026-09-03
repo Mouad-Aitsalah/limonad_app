@@ -22,8 +22,12 @@ export async function POST(request: Request) {
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {
+    const body = await request.json();
+    // collectNow:false = "Préparer la facture" (persisted DRAFT, no payment
+    // yet). Anything else keeps the immediate create+pay behaviour.
+    const collectNow = body?.collectNow !== false;
     return NextResponse.json(
-      { sale: await createCounterSale(await request.json()) },
+      { sale: await createCounterSale(body, { collectNow }) },
       { status: 201 },
     );
   } catch (error) {

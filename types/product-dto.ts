@@ -52,7 +52,8 @@ export type ProductMutationInput = {
   description?: string | null;
   categoryId: string;
   brandId?: string | null;
-  defaultSupplierId?: string | null;
+  /** Mandatory: a product must always be tied to an active supplier of the same organisation. */
+  defaultSupplierId: string;
   purchasePrice: number;
   salePrice: number;
   taxRate: number;

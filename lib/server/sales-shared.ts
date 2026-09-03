@@ -117,6 +117,61 @@ export function resolvePaymentAmounts(
 }
 
 /**
+ * The civil day boundary POS activity is scoped to (server local time,
+ * matching resolvePosSession / resolveSaleSequencing). "Factures du jour"
+ * uses the same boundary.
+ */
+export function posDayStart(now: Date = new Date()): Date {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+/**
+ * Resolves (reusing or opening) the POS session for `now` - the session
+ * part of resolveSaleSequencing, without reserving an official saleNumber.
+ * Used by the "prepare a pending invoice" path, which must be attributable
+ * to today's session but must NOT consume the year-scoped Sale sequence
+ * (that is only spent at collection).
+ */
+export async function resolvePosSession(
+  tx: Pick<typeof prisma, "posSession" | "$queryRaw">,
+  now: Date,
+  userId: string,
+  organizationId: string,
+): Promise<string> {
+  const year = now.getFullYear();
+  const dayStart = posDayStart(now);
+
+  const lastSession = await tx.posSession.findFirst({
+    where: { organizationId },
+    orderBy: { number: "desc" },
+  });
+  const reuseExisting =
+    lastSession !== null && lastSession.status === "OPEN" && lastSession.openedAt >= dayStart;
+
+  if (reuseExisting && lastSession) {
+    return lastSession.id;
+  }
+  if (lastSession && lastSession.status === "OPEN") {
+    await tx.posSession.update({
+      where: { id: lastSession.id },
+      data: { status: "CLOSED", closedAt: now },
+    });
+  }
+  const number = await reserveDocumentSequence(tx, organizationId, DocumentType.PosSession);
+  const created = await tx.posSession.create({
+    data: {
+      organizationId,
+      number,
+      year,
+      openedAt: now,
+      status: "OPEN",
+      openedByUserId: userId,
+    },
+  });
+  return created.id;
+}
+
+/**
  * Assigns the year-scoped display number ("N/YYYY") and the POS session for a
  * new sale, atomically within the caller's own Serializable transaction so two
  * concurrent sales can never collide. A session is a calendar day of POS
@@ -132,42 +187,8 @@ export async function resolveSaleSequencing(
   const scopedOrganizationId =
     organizationId ?? (await resolveOrganizationIdFromUserId(userId));
   const year = now.getFullYear();
-  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const lastSession = await tx.posSession.findFirst({
-    where: { organizationId: scopedOrganizationId },
-    orderBy: { number: "desc" },
-  });
-  const reuseExisting =
-    lastSession !== null && lastSession.status === "OPEN" && lastSession.openedAt >= dayStart;
-
-  let posSessionId: string;
-  if (reuseExisting && lastSession) {
-    posSessionId = lastSession.id;
-  } else {
-    if (lastSession && lastSession.status === "OPEN") {
-      await tx.posSession.update({
-        where: { id: lastSession.id },
-        data: { status: "CLOSED", closedAt: now },
-      });
-    }
-    const number = await reserveDocumentSequence(
-      tx,
-      scopedOrganizationId,
-      DocumentType.PosSession,
-    );
-    const created = await tx.posSession.create({
-      data: {
-        organizationId: scopedOrganizationId,
-        number,
-        year,
-        openedAt: now,
-        status: "OPEN",
-        openedByUserId: userId,
-      },
-    });
-    posSessionId = created.id;
-  }
+  const posSessionId = await resolvePosSession(tx, now, userId, scopedOrganizationId);
 
   const saleNumber = await reserveDocumentSequence(
     tx,
@@ -177,6 +198,28 @@ export async function resolveSaleSequencing(
   );
 
   return { saleYear: year, saleNumber, posSessionId };
+}
+
+/**
+ * Throwaway provisional reference for a sale prepared but not yet collected
+ * ("BR-YYYYMMDD-000001", per day). It lives in Sale.invoiceNumber only
+ * until collection, when it is replaced by the real nextInvoiceNumber().
+ * Gaps in this sequence are meaningless - the official Invoice / Sale
+ * sequences are never spent by an abandoned draft.
+ */
+export async function nextPendingSaleRef(
+  tx: Pick<typeof prisma, "$queryRaw">,
+  organizationId: string,
+) {
+  const today = new Date();
+  const date = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+  const number = await reserveDocumentSequence(
+    tx,
+    organizationId,
+    DocumentType.SalePendingRef,
+    date,
+  );
+  return `BR-${date}-${String(number).padStart(6, "0")}`;
 }
 
 export async function nextInvoiceNumber(

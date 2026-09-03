@@ -126,7 +126,7 @@ export function ProductFormGeneral({
           </div>
 
           <div className="space-y-2">
-            <Label>Fournisseur</Label>
+            <Label>Fournisseur *</Label>
             <Select
               value={values.defaultSupplierId || null}
               onValueChange={(value) =>
@@ -135,9 +135,9 @@ export function ProductFormGeneral({
               disabled={readOnly}
             >
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="Optionnel">
+                <SelectValue placeholder="Selectionner">
                   {(value: string | null) =>
-                    optionLabel(suppliers, value) ?? "Optionnel"
+                    optionLabel(suppliers, value) ?? "Selectionner"
                   }
                 </SelectValue>
               </SelectTrigger>

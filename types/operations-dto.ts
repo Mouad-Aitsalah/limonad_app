@@ -525,7 +525,10 @@ export type TruckLoadingValidationInput = {
 
 export interface CustomerDto {
   id: string;
+  /** Stored account code, e.g. "34211" (never change this - it is the unique key). */
   code: string;
+  /** Presentation form of `code`, e.g. "3421/1" (see lib/customer-code.ts). Display only. */
+  displayCode: string;
   name: string;
   phone: string;
   email?: string | null;

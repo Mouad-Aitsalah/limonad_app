@@ -86,6 +86,7 @@ export const DocumentType = {
   Sale: "SALE", // sales-shared.ts resolveSaleSequencing saleNumber (N/YYYY, per year)
   PosSession: "POS_SESSION", // sales-shared.ts resolveSaleSequencing posSession.number (global per org)
   Invoice: "INVOICE", // sales-shared.ts nextInvoiceNumber (VC-YYYYMMDD-SCOPE-000001, per day+scope)
+  SalePendingRef: "SALE_PENDING_REF", // sales-shared.ts nextPendingSaleRef - throwaway provisional ref for a not-yet-collected sale (BR-YYYYMMDD-000001, per day). Gaps here are meaningless; the official Invoice/Sale sequences are only consumed at collection.
   Payment: "PAYMENT", // sales-shared.ts nextPaymentNumber (PAY-000001, global per org)
   AccountingEntry: "ACCOUNTING_ENTRY", // accounting.ts nextAccountingEntryNumber (EC-<date>-000001, per day)
   SupplierCode: "SUPPLIER_CODE", // business-accounts.ts nextSupplierCode

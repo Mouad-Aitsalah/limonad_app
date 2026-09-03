@@ -1,5 +1,6 @@
 "use client";
 
+import { formatCustomerCode } from "@/lib/customer-code";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto } from "@/types/operations-dto";
 
@@ -55,8 +56,12 @@ export function ReceiptPrint({
   const receiptDate = sale.validatedAt ?? sale.createdAt;
   const articleCount = sale.lines.reduce((sum, line) => sum + line.quantity, 0);
   const customerName = sale.customer?.name ?? "Client Comptoir";
+  const customerCode = sale.customer ? formatCustomerCode(sale.customer.code) : null;
   const cashierName = sale.driver?.name ?? sale.createdByUserName;
   const paymentLabel = paymentLabels[sale.paymentMethod] ?? sale.paymentMethod;
+  // A sale still DRAFT has not been collected yet: the payment method on the
+  // row is only a placeholder, so the ticket must not look like a paid one.
+  const awaitingPayment = sale.status === "DRAFT";
 
   return (
     <section
@@ -80,7 +85,17 @@ export function ReceiptPrint({
             <strong>{customerName}</strong>
           </div>
           <div className="receipt-print-right">{formatReceiptTime(receiptDate)}</div>
+          {customerCode ? (
+            <div>
+              <span>N° client : </span>
+              <strong>{customerCode}</strong>
+            </div>
+          ) : null}
         </div>
+
+        {awaitingPayment ? (
+          <div className="receipt-print-pending">EN ATTENTE DE RÈGLEMENT</div>
+        ) : null}
 
         <div className="receipt-print-separator" />
 
@@ -128,15 +143,17 @@ export function ReceiptPrint({
           <span>MONTANT TTC À PAYER</span>
         </div>
 
-        <div className="receipt-print-tax">
-          <span>Total HT : {formatCurrency(sale.subtotalHT)}</span>
-          <span>TVA : {formatCurrency(sale.taxAmount)}</span>
-        </div>
-
         <div className="receipt-print-separator" />
 
         <footer className="receipt-print-footer">
-          <p>Paiement : {paymentLabel}</p>
+          {awaitingPayment ? (
+            <p>Règlement : EN ATTENTE</p>
+          ) : (
+            <>
+              <p>Paiement : {paymentLabel}</p>
+              <p>Statut : Réglée</p>
+            </>
+          )}
           <p>Caisse : {cashierName}</p>
           <p>
             {articleCount} Article{articleCount > 1 ? "s" : ""}

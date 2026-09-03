@@ -1,4 +1,5 @@
 import { ProductMedia } from "@/components/products/product-media";
+import { posStockTone } from "@/lib/pos-stock-display";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { PosProduct } from "@/types/pos";
 
@@ -8,20 +9,21 @@ type ProductCardProps = {
 };
 
 export function ProductCard({ product, onAdd }: ProductCardProps) {
-  const outOfStock = product.quantiteStock <= 0;
+  // Negative sales are allowed: stock <= 0 never disables "Ajouter", it is
+  // only ever shown in red (see posStockTone).
+  const tone = posStockTone(product.quantiteStock);
 
   return (
     <button
       type="button"
-      disabled={outOfStock}
       onClick={() => onAdd(product.id)}
       className={cn(
-        "group relative flex min-h-[250px] flex-col rounded-[24px] border border-border bg-card p-3 text-left ring-0 transition duration-200 ease-out hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-emerald-500/20 disabled:pointer-events-none disabled:opacity-50",
+        "group relative flex min-h-[250px] flex-col rounded-[24px] border border-border bg-card p-3 text-left ring-0 transition duration-200 ease-out hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-emerald-500/20",
       )}
     >
-      {outOfStock && (
+      {tone.alert && (
         <span className="absolute top-2 right-2 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-600">
-          Rupture
+          {product.quantiteStock < 0 ? "Stock négatif" : "Rupture"}
         </span>
       )}
 
@@ -47,19 +49,12 @@ export function ProductCard({ product, onAdd }: ProductCardProps) {
             <span className="text-sm font-semibold text-emerald-700">
               {formatCurrency(product.prixVenteTTC)}
             </span>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Stock {product.quantiteStock}
+            <p className={cn("mt-1 text-xs", tone.textClassName)}>
+              {tone.label(product.quantiteStock)}
             </p>
           </div>
-          <span
-            className={cn(
-              "rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.08em]",
-              outOfStock
-                ? "bg-red-50 text-red-600"
-                : "bg-emerald-50 text-emerald-700",
-            )}
-          >
-            {outOfStock ? "Rupture" : "Ajouter"}
+          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-emerald-700">
+            Ajouter
           </span>
         </div>
       </div>

@@ -17,11 +17,14 @@ import { ProductGrid } from "@/components/pos/product-grid";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { InvoiceHeader } from "@/components/pos/invoice-header";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
+import { CustomerNumberInput } from "@/components/pos/customer-number-input";
 import { PaymentSelector } from "@/components/pos/payment-selector";
 import { CartTable } from "@/components/pos/cart-table";
 import { CartSummary } from "@/components/pos/cart-summary";
 import { InvoiceActions } from "@/components/pos/invoice-actions";
 import { CheckoutDialog } from "@/components/pos/checkout-dialog";
+import { CollectDialog } from "@/components/pos/collect-dialog";
+import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 
 export type CartLine = {
@@ -117,6 +120,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [submitting, setSubmitting] = React.useState(false);
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
 
+  // "Factures du jour" - server-persisted DRAFT sales awaiting collection.
+  const [pendingSales, setPendingSales] = React.useState<SaleDto[]>([]);
+  const [preparing, setPreparing] = React.useState(false);
+  const [collectTarget, setCollectTarget] = React.useState<SaleDto | null>(null);
+  const [collectOpen, setCollectOpen] = React.useState(false);
+  const [collecting, setCollecting] = React.useState(false);
+
   const operationType: PosOperationType = "sale";
   // Phase 3: when the depot has more sellable products than the POS context
   // preloads (context.productsTruncated), fall back to a server search
@@ -202,6 +212,8 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     };
   }, [cartLines]);
 
+  // Negative stock is allowed: the cart quantity is never capped at the
+  // product's on-hand stock. The only lower bound is 1.
   function addToCart(productId: string) {
     const product = productById.get(productId);
     if (!product) return;
@@ -209,7 +221,6 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setCart((prev) => {
       const existing = prev.find((line) => line.productId === productId);
       if (existing) {
-        if (existing.quantity >= product.quantiteStock) return prev;
         return prev.map((line) =>
           line.productId === productId
             ? { ...line, quantity: line.quantity + 1 }
@@ -221,13 +232,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   }
 
   function updateQuantity(productId: string, quantity: number) {
-    const product = productById.get(productId);
-    const max = product?.quantiteStock ?? quantity;
-
     setCart((prev) =>
       prev.map((line) =>
         line.productId === productId
-          ? { ...line, quantity: Math.min(Math.max(1, quantity), max) }
+          ? { ...line, quantity: Math.max(1, quantity) }
           : line,
       ),
     );
@@ -235,11 +243,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
   function incrementQuantity(productId: string) {
     setCart((prev) =>
-      prev.map((line) => {
-        if (line.productId !== productId) return line;
-        const max = productById.get(productId)?.quantiteStock ?? line.quantity + 1;
-        return { ...line, quantity: Math.min(line.quantity + 1, max) };
-      }),
+      prev.map((line) =>
+        line.productId === productId
+          ? { ...line, quantity: line.quantity + 1 }
+          : line,
+      ),
     );
   }
 
@@ -299,6 +307,50 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setSelectedCustomer((current) => current ?? resolveDefaultCustomer(nextContext.customers));
   }
 
+  function buildSaleBody(extra: Record<string, unknown>) {
+    return JSON.stringify({
+      customerId: selectedCustomer?.id ?? null,
+      paymentMethod,
+      reference:
+        paymentMethod === "CHECK"
+          ? chequeNumber || null
+          : paymentMethod === "BANK_TRANSFER"
+            ? banque || null
+            : null,
+      lines: cartLines.map((line) => ({
+        productId: line.productId,
+        quantity: line.quantity,
+        discountRate: line.discountPercent,
+      })),
+      idempotencyKey: idempotencyKeyRef.current,
+      ...extra,
+    });
+  }
+
+  async function refreshPending() {
+    try {
+      const response = await fetch("/api/sales/pending", { cache: "no-store" });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { sales?: SaleDto[] };
+      setPendingSales(payload.sales ?? []);
+    } catch {
+      // non-fatal: the panel just stays as it was
+    }
+  }
+
+  React.useEffect(() => {
+    let active = true;
+    fetch("/api/sales/pending", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : { sales: [] }))
+      .then((payload: { sales?: SaleDto[] }) => {
+        if (active) setPendingSales(payload.sales ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   async function confirmOperation(paidAmount?: number) {
     if (!selectedCustomer) {
       toast.error("Sélectionnez un client avant de valider.");
@@ -310,23 +362,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       const response = await fetch("/api/sales", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customerId: selectedCustomer.id,
-          paymentMethod,
-          paidAmount,
-          reference:
-            paymentMethod === "CHECK"
-              ? chequeNumber || null
-              : paymentMethod === "BANK_TRANSFER"
-                ? banque || null
-                : null,
-          lines: cartLines.map((line) => ({
-            productId: line.productId,
-            quantity: line.quantity,
-            discountRate: line.discountPercent,
-          })),
-          idempotencyKey: idempotencyKeyRef.current,
-        }),
+        body: buildSaleBody({ paidAmount }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -347,12 +383,74 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     }
   }
 
+  // "Préparer la facture" - persist a DRAFT "Facture du jour", pay later.
+  async function prepareInvoice() {
+    if (!selectedCustomer) {
+      toast.error("Sélectionnez un client avant de préparer la facture.");
+      return;
+    }
+    setPreparing(true);
+    try {
+      const response = await fetch("/api/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: buildSaleBody({ collectNow: false }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message ?? "Impossible de préparer la facture.");
+      }
+      setLastSale(payload.sale as SaleDto);
+      toast.success("Facture préparée. Encaissez-la depuis « Factures du jour ».");
+      resetOperation();
+      await Promise.all([refreshContext(), refreshPending()]);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Impossible de préparer la facture.",
+      );
+    } finally {
+      setPreparing(false);
+    }
+  }
+
+  async function collectPending(method: PosPaymentMethodValue, paidAmount?: number) {
+    if (!collectTarget) return;
+    setCollecting(true);
+    try {
+      const response = await fetch(`/api/sales/${collectTarget.id}/collect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentMethod: method, paidAmount, reference: null }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message ?? "Impossible d'encaisser la facture.");
+      }
+      setLastSale(payload.sale as SaleDto);
+      toast.success(`Facture ${payload.sale.invoiceNumber} encaissée.`);
+      setCollectOpen(false);
+      setCollectTarget(null);
+      await refreshPending();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Impossible d'encaisser la facture.",
+      );
+    } finally {
+      setCollecting(false);
+    }
+  }
+
   function printLastSale() {
     if (!lastSale) {
-      toast.error("Veuillez d'abord encaisser la vente.");
+      toast.error("Aucune facture à imprimer.");
       return;
     }
 
+    window.setTimeout(() => window.print(), 0);
+  }
+
+  function printPending(sale: SaleDto) {
+    setLastSale(sale);
     window.setTimeout(() => window.print(), 0);
   }
 
@@ -376,11 +474,14 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         />
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <CustomerCombobox
-            value={selectedCustomer}
-            onChange={setSelectedCustomer}
-            initialSuggestions={context.customers}
-          />
+          <div className="grid gap-3 sm:grid-cols-[1fr_120px]">
+            <CustomerCombobox
+              value={selectedCustomer}
+              onChange={setSelectedCustomer}
+              initialSuggestions={context.customers}
+            />
+            <CustomerNumberInput onResolved={setSelectedCustomer} />
+          </div>
           <PaymentSelector
             paymentMethod={paymentMethod}
             onPaymentMethodChange={setPaymentMethod}
@@ -413,6 +514,16 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           loading={submitting}
           onCheckout={() => setCheckoutOpen(true)}
           onPrint={printLastSale}
+          onHold={prepareInvoice}
+          holdLoading={preparing}
+        />
+
+        <PendingSalesPanel
+          sales={pendingSales}
+          onSelect={(sale) => {
+            setCollectTarget(sale);
+            setCollectOpen(true);
+          }}
         />
 
         <div className="rounded-2xl border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
@@ -441,6 +552,19 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         destinationLabel={selectedCustomer?.name ?? "Client comptoir"}
         submitting={submitting}
         onConfirm={confirmOperation}
+      />
+      <CollectDialog
+        open={collectOpen}
+        onOpenChange={(open) => {
+          setCollectOpen(open);
+          if (!open) setCollectTarget(null);
+        }}
+        sale={collectTarget}
+        submitting={collecting}
+        onCollect={collectPending}
+        onPrint={() => {
+          if (collectTarget) printPending(collectTarget);
+        }}
       />
       <ReceiptPrint sale={lastSale} />
     </div>

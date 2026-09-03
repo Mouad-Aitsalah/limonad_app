@@ -18,12 +18,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CollectDialog } from "@/components/pos/collect-dialog";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
+import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
+import type { PosPaymentMethodValue } from "@/types/pos";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { ProductMedia } from "@/components/products/product-media";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
 import { roundMoney } from "@/lib/money";
+import { posStockTone } from "@/lib/pos-stock-display";
 import { formatCurrency } from "@/lib/utils";
 import type {
   CustomerDto,
@@ -80,6 +84,12 @@ export function DriverPosView({
   const [paidAmount, setPaidAmount] = React.useState("");
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // "Factures du jour" - server-persisted DRAFT truck sales awaiting collection.
+  const [pendingSales, setPendingSales] = React.useState<SaleDto[]>([]);
+  const [preparing, setPreparing] = React.useState(false);
+  const [collectTarget, setCollectTarget] = React.useState<SaleDto | null>(null);
+  const [collectOpen, setCollectOpen] = React.useState(false);
+  const [collecting, setCollecting] = React.useState(false);
   // Stable for one sale attempt (F5): kept identical across a network retry
   // of validateSale, only replaced once a sale has actually gone through and
   // the cart is cleared for the next one. A ref so it is synchronously
@@ -134,13 +144,14 @@ export function DriverPosView({
     [cartRows],
   );
 
+  // Negative truck stock is allowed: cart quantity is never capped at the
+  // product's on-hand quantity, only floored at 1.
   function addProduct(product: DriverPosProductDto) {
     setCart((current) => {
       const existing = current.find((line) => line.productId === product.id);
       if (!existing) {
         return [...current, { productId: product.id, quantity: 1, discountRate: 0 }];
       }
-      if (existing.quantity >= product.availableQuantity) return current;
       return current.map((line) =>
         line.productId === product.id ? { ...line, quantity: line.quantity + 1 } : line,
       );
@@ -148,11 +159,10 @@ export function DriverPosView({
   }
 
   function updateQuantity(productId: string, quantity: number) {
-    const max = productById.get(productId)?.availableQuantity ?? 1;
     setCart((current) =>
       current.map((line) =>
         line.productId === productId
-          ? { ...line, quantity: Math.min(Math.max(1, quantity), max) }
+          ? { ...line, quantity: Math.max(1, quantity) }
           : line,
       ),
     );
@@ -172,6 +182,48 @@ export function DriverPosView({
     if (refreshedPayload.context) setContext(refreshedPayload.context);
   }
 
+  function buildSaleBody(extra: Record<string, unknown>) {
+    return JSON.stringify({
+      customerId: selectedCustomer?.id ?? null,
+      paymentMethod,
+      paidAmount: paidAmount ? Number(paidAmount) : undefined,
+      lines: cart,
+      idempotencyKey: idempotencyKeyRef.current,
+      ...extra,
+    });
+  }
+
+  function resetForNextSale() {
+    setCart([]);
+    setPaidAmount("");
+    setPaymentMethod("CASH");
+    idempotencyKeyRef.current = crypto.randomUUID();
+  }
+
+  async function refreshPending() {
+    try {
+      const response = await fetch("/api/driver/sales/pending", { cache: "no-store" });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { sales?: SaleDto[] };
+      setPendingSales(payload.sales ?? []);
+    } catch {
+      // non-fatal
+    }
+  }
+
+  React.useEffect(() => {
+    let active = true;
+    fetch("/api/driver/sales/pending", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : { sales: [] }))
+      .then((payload: { sales?: SaleDto[] }) => {
+        if (active) setPendingSales(payload.sales ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   async function validateSale() {
     const handledCustomerId = selectedCustomer?.id ?? null;
     setBusy(true);
@@ -179,13 +231,7 @@ export function DriverPosView({
       const response = await fetch("/api/driver/sales", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customerId: handledCustomerId,
-          paymentMethod,
-          paidAmount: paidAmount ? Number(paidAmount) : undefined,
-          lines: cart,
-          idempotencyKey: idempotencyKeyRef.current,
-        }),
+        body: buildSaleBody({}),
       });
       const payload = (await response.json()) as { sale?: SaleDto; message?: string };
       if (!response.ok || !payload.sale) {
@@ -194,11 +240,7 @@ export function DriverPosView({
       }
 
       setLastSale(payload.sale);
-      setCart([]);
-      setPaidAmount("");
-      setPaymentMethod("CASH");
-      // A new sale starts here - mint a fresh key for it.
-      idempotencyKeyRef.current = crypto.randomUUID();
+      resetForNextSale();
       if (handledCustomerId) {
         driverRuntime.markCustomerHandled(handledCustomerId);
       }
@@ -212,12 +254,67 @@ export function DriverPosView({
     }
   }
 
+  async function prepareInvoice() {
+    setPreparing(true);
+    try {
+      const response = await fetch("/api/driver/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: buildSaleBody({ collectNow: false }),
+      });
+      const payload = (await response.json()) as { sale?: SaleDto; message?: string };
+      if (!response.ok || !payload.sale) {
+        toast.error(payload.message ?? "Impossible de preparer la facture.");
+        return;
+      }
+      setLastSale(payload.sale);
+      resetForNextSale();
+      toast.success("Facture preparee. Encaissez-la depuis « Factures du jour ».");
+      await Promise.allSettled([refreshContext(), refreshPending()]);
+    } finally {
+      setPreparing(false);
+    }
+  }
+
+  async function collectPending(method: PosPaymentMethodValue, collectPaidAmount?: number) {
+    if (!collectTarget) return;
+    setCollecting(true);
+    try {
+      const response = await fetch(`/api/driver/sales/${collectTarget.id}/collect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paymentMethod: method,
+          paidAmount: collectPaidAmount,
+          reference: null,
+        }),
+      });
+      const payload = (await response.json()) as { sale?: SaleDto; message?: string };
+      if (!response.ok || !payload.sale) {
+        toast.error(payload.message ?? "Impossible d'encaisser la facture.");
+        return;
+      }
+      setLastSale(payload.sale);
+      toast.success(`Facture ${payload.sale.invoiceNumber} encaissee.`);
+      setCollectOpen(false);
+      setCollectTarget(null);
+      await Promise.allSettled([refreshPending(), driverRuntime.refreshCurrentTour()]);
+    } finally {
+      setCollecting(false);
+    }
+  }
+
   function printLastSale() {
     if (!lastSale) {
-      toast.error("Veuillez d'abord encaisser la vente.");
+      toast.error("Aucune facture a imprimer.");
       return;
     }
 
+    window.setTimeout(() => window.print(), 0);
+  }
+
+  function printPending(sale: SaleDto) {
+    setLastSale(sale);
     window.setTimeout(() => window.print(), 0);
   }
 
@@ -305,15 +402,17 @@ export function DriverPosView({
                 {filteredProducts.map((product) => {
                   const cartLine = cart.find((line) => line.productId === product.id);
                   const inCartQuantity = cartLine?.quantity ?? 0;
-                  const fullyUsed = inCartQuantity >= product.availableQuantity;
+                  // Negative truck stock is allowed: the tile is never
+                  // disabled because of stock, the quantity is only shown in
+                  // red at 0 / negative.
+                  const tone = posStockTone(product.availableQuantity);
 
                   return (
                     <button
                       key={product.id}
                       type="button"
                       onClick={() => addProduct(product)}
-                      disabled={fullyUsed}
-                      className="group overflow-hidden rounded-[22px] border border-border bg-card text-left transition hover:border-emerald-200 hover:shadow-[0_10px_24px_rgba(16,185,129,0.14)] disabled:cursor-not-allowed disabled:opacity-55"
+                      className="group overflow-hidden rounded-[22px] border border-border bg-card text-left transition hover:border-emerald-200 hover:shadow-[0_10px_24px_rgba(16,185,129,0.14)]"
                     >
                       <ProductPhoto product={product} />
                       <div className="space-y-3 p-3">
@@ -332,12 +431,12 @@ export function DriverPosView({
                             <p className="text-sm font-semibold text-emerald-700">
                               {formatCurrency(product.salePriceTTC)}
                             </p>
-                            <p className="text-xs text-muted-foreground">
-                              Stock: {product.availableQuantity}
+                            <p className={`text-xs ${tone.textClassName}`}>
+                              {tone.label(product.availableQuantity)}
                             </p>
                           </div>
-                          <Badge variant={fullyUsed ? "outline" : "secondary"}>
-                            {fullyUsed ? "Maximum" : inCartQuantity > 0 ? `${inCartQuantity} au panier` : "Ajouter"}
+                          <Badge variant="secondary">
+                            {inCartQuantity > 0 ? `${inCartQuantity} au panier` : "Ajouter"}
                           </Badge>
                         </div>
                       </div>
@@ -448,7 +547,6 @@ export function DriverPosView({
                               <Input
                                 type="number"
                                 min={1}
-                                max={row.product.availableQuantity}
                                 value={row.quantity}
                                 onChange={(event) =>
                                   updateQuantity(row.productId, Number(event.target.value))
@@ -486,15 +584,32 @@ export function DriverPosView({
                 <Summary label="Total TTC" value={totals.ttc} strong />
               </div>
 
-              <div className="hidden xl:block">
+              <PendingSalesPanel
+                sales={pendingSales}
+                onSelect={(sale) => {
+                  setCollectTarget(sale);
+                  setCollectOpen(true);
+                }}
+              />
+
+              <div className="hidden gap-2 xl:grid xl:grid-cols-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={preparing || cartRows.length === 0}
+                  onClick={prepareInvoice}
+                  className="h-12 rounded-2xl"
+                >
+                  {preparing ? "..." : "Préparer"}
+                </Button>
                 <Button
                   type="button"
                   disabled={busy || cartRows.length === 0}
                   onClick={validateSale}
-                  className="h-12 w-full rounded-2xl"
+                  className="h-12 rounded-2xl"
                 >
                   <ShoppingCart className="h-4 w-4" />
-                  Valider la vente
+                  Valider
                 </Button>
               </div>
             </CardContent>
@@ -514,6 +629,15 @@ export function DriverPosView({
           </div>
           <Button
             type="button"
+            variant="outline"
+            disabled={preparing || cartRows.length === 0}
+            onClick={prepareInvoice}
+            className="h-12 rounded-2xl px-4"
+          >
+            Préparer
+          </Button>
+          <Button
+            type="button"
             disabled={busy || cartRows.length === 0}
             onClick={validateSale}
             className="h-12 rounded-2xl px-5"
@@ -524,6 +648,19 @@ export function DriverPosView({
         </div>
       </div>
 
+      <CollectDialog
+        open={collectOpen}
+        onOpenChange={(open) => {
+          setCollectOpen(open);
+          if (!open) setCollectTarget(null);
+        }}
+        sale={collectTarget}
+        submitting={collecting}
+        onCollect={collectPending}
+        onPrint={() => {
+          if (collectTarget) printPending(collectTarget);
+        }}
+      />
       <ReceiptPrint sale={lastSale} />
     </div>
   );

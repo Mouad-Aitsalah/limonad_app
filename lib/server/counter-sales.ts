@@ -17,8 +17,10 @@ import {
   nextInvoiceNumber,
   nextMovementNumber,
   nextPaymentNumber,
+  nextPendingSaleRef,
   normalizeSaleLines,
   resolvePaymentAmounts,
+  resolvePosSession,
   resolveSaleSequencing,
   roundMoney,
   saleInclude,
@@ -106,7 +108,11 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       where: {
         organizationId: sessionUser.organizationId,
         locationId: stockLocation.id,
-        quantity: { gt: 0 },
+        // Every ACTIVE product with a stock row at this depot stays sellable,
+        // including at 0 or negative stock (negative sales are allowed - the
+        // POS shows the quantity in red, see the product card). A product
+        // that has never had any stock movement at this depot still needs a
+        // first movement before it appears here.
         product: { status: "ACTIVE" },
       },
       include: {
@@ -165,8 +171,18 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
   };
 }
 
-export async function createCounterSale(input: CounterSaleInput): Promise<SaleDto> {
+export async function createCounterSale(
+  input: CounterSaleInput,
+  opts: { collectNow?: boolean } = {},
+): Promise<SaleDto> {
   const sessionUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  // collectNow (default true) keeps today's behaviour exactly: create + pay
+  // + validate in one atomic shot. collectNow:false = "Préparer la facture":
+  // a persisted DRAFT sale carrying a provisional "BR-..." reference, with
+  // stock already moved and a COUNTER_SALE StockMovement, but NO payment, NO
+  // accounting entry and NO official invoice/sale number - those are all
+  // assigned later by collectCounterSale (lib/server/pending-sales.ts).
+  const collectNow = opts.collectNow !== false;
 
   const parsed = counterSaleSchema.safeParse(input);
   if (!parsed.success) {
@@ -313,64 +329,86 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
       });
       assertMoneyRange(stampAmount.toNumber(), "stampAmount");
 
-      const payment = resolvePaymentAmounts(
-        parsed.data.paymentMethod,
-        totalTTC,
-        parsed.data.paidAmount,
-      );
+      // A pending (not-yet-collected) sale has no payment split and no credit
+      // exposure yet - the payment method is only chosen at collection.
+      const payment = collectNow
+        ? resolvePaymentAmounts(parsed.data.paymentMethod, totalTTC, parsed.data.paidAmount)
+        : { paidAmount: 0, creditAmount: 0 };
       assertMoneyRange(payment.paidAmount, "paidAmount");
       assertMoneyRange(payment.creditAmount, "creditAmount");
-      if (payment.creditAmount > 0 && !customer) {
+      if (collectNow && payment.creditAmount > 0 && !customer) {
         throw new OperationsServiceError("Client obligatoire pour une vente a credit.", 422);
       }
-      if (customer && payment.creditAmount > 0) {
+      if (collectNow && customer && payment.creditAmount > 0) {
         const nextBalance = customer.currentBalance.toNumber() + payment.creditAmount;
         if (nextBalance > customer.creditLimit.toNumber()) {
           throw new OperationsServiceError("Plafond de credit depasse.", 409);
         }
       }
 
+      // Negative stock is an explicit business choice for COUNTER sales:
+      // a sale is never blocked because its quantity exceeds the depot
+      // StockLevel. The decrement still runs exactly as before (and the
+      // COUNTER_SALE StockMovement below is unchanged), so StockLevel simply
+      // goes negative and a later inventory/adjustment reconciles it.
+      // Guards for transfers, loadings, inventories and adjustments are
+      // untouched - only the sale path allows this.
       for (const line of computedLines) {
-        const level = await tx.stockLevel.findUnique({
+        await tx.stockLevel.upsert({
           where: {
             productId_locationId: {
               productId: line.productId,
               locationId: stockLocation.id,
             },
           },
-        });
-        const available = (level?.quantity ?? 0) - (level?.reservedQuantity ?? 0);
-        if (!level || available < line.quantity) {
-          throw new OperationsServiceError("Stock depot insuffisant.", 422);
-        }
-        await tx.stockLevel.update({
-          where: { id: level.id },
-          data: { quantity: { decrement: line.quantity } },
+          update: { quantity: { decrement: line.quantity } },
+          create: {
+            organizationId: sessionUser.organizationId,
+            productId: line.productId,
+            locationId: stockLocation.id,
+            quantity: -line.quantity,
+            reservedQuantity: 0,
+          },
         });
       }
 
       const saleDate = new Date();
-      const sequencing = await resolveSaleSequencing(
-        tx,
-        saleDate,
-        sessionUser.id,
-        sessionUser.organizationId,
-      );
+      const sequencing = collectNow
+        ? await resolveSaleSequencing(
+            tx,
+            saleDate,
+            sessionUser.id,
+            sessionUser.organizationId,
+          )
+        : {
+            saleYear: null as number | null,
+            saleNumber: null as number | null,
+            posSessionId: await resolvePosSession(
+              tx,
+              saleDate,
+              sessionUser.id,
+              sessionUser.organizationId,
+            ),
+          };
+      const invoiceNumber = collectNow
+        ? await nextInvoiceNumber(tx, "CTR", sessionUser.organizationId)
+        : await nextPendingSaleRef(tx, sessionUser.organizationId);
 
       const sale = await tx.sale.create({
         data: {
           organizationId: sessionUser.organizationId,
-          invoiceNumber: await nextInvoiceNumber(tx, "CTR", sessionUser.organizationId),
+          invoiceNumber,
           saleYear: sequencing.saleYear,
           saleNumber: sequencing.saleNumber,
           posSessionId: sequencing.posSessionId,
           origin: "COUNTER",
-          status:
-            payment.creditAmount === totalTTC
+          status: collectNow
+            ? payment.creditAmount === totalTTC
               ? "CREDIT"
               : payment.creditAmount > 0
                 ? "PARTIALLY_PAID"
-                : "PAID",
+                : "PAID"
+            : "DRAFT",
           customerId: customer?.id ?? null,
           depotId: user.depotId,
           driverId: null,
@@ -381,12 +419,12 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
           discountAmount,
           taxAmount,
           totalTTC,
-          stampAmount,
+          stampAmount: collectNow ? stampAmount : 0,
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
           paymentMethod: parsed.data.paymentMethod,
           createdByUserId: sessionUser.id,
-          validatedAt: new Date(),
+          validatedAt: collectNow ? new Date() : null,
           idempotencyKey: parsed.data.idempotencyKey,
           lines: {
             create: computedLines.map((line) => ({
@@ -405,8 +443,11 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
         select: { id: true, invoiceNumber: true },
       });
 
+      // Payment, customer-balance movement and the accounting entry only
+      // ever happen for a collected sale. A pending DRAFT sale carries none
+      // of them until collectCounterSale runs.
       const createdPayment =
-        payment.paidAmount > 0
+        collectNow && payment.paidAmount > 0
           ? await tx.payment.create({
               data: {
                 organizationId: sessionUser.organizationId,
@@ -423,30 +464,32 @@ export async function createCounterSale(input: CounterSaleInput): Promise<SaleDt
             select: { id: true, reference: true },
           })
           : null;
-      if (customer && payment.creditAmount > 0) {
+      if (collectNow && customer && payment.creditAmount > 0) {
         await tx.customer.update({
           where: { id: customer.id },
           data: { currentBalance: { increment: payment.creditAmount } },
         });
       }
 
-      await postSaleAccountingEntry(tx, {
-        organizationId: sessionUser.organizationId,
-        saleId: sale.id,
-        invoiceNumber: sale.invoiceNumber,
-        customerId: customer?.id ?? null,
-        date: new Date(),
-        subtotalHT,
-        taxAmount,
-        totalTTC,
-        stampAmount,
-        paidAmount: payment.paidAmount,
-        creditAmount: payment.creditAmount,
-        paymentMethod: parsed.data.paymentMethod,
-        paymentId: createdPayment?.id ?? null,
-        paymentReference: createdPayment?.reference ?? null,
-        createdByUserId: sessionUser.id,
-      });
+      if (collectNow) {
+        await postSaleAccountingEntry(tx, {
+          organizationId: sessionUser.organizationId,
+          saleId: sale.id,
+          invoiceNumber: sale.invoiceNumber,
+          customerId: customer?.id ?? null,
+          date: new Date(),
+          subtotalHT,
+          taxAmount,
+          totalTTC,
+          stampAmount,
+          paidAmount: payment.paidAmount,
+          creditAmount: payment.creditAmount,
+          paymentMethod: parsed.data.paymentMethod,
+          paymentId: createdPayment?.id ?? null,
+          paymentReference: createdPayment?.reference ?? null,
+          createdByUserId: sessionUser.id,
+        });
+      }
 
       for (const line of computedLines) {
         await tx.stockMovement.create({

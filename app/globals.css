@@ -578,12 +578,16 @@ body {
     font-weight: 700;
   }
 
-  .receipt-print-tax {
+  /* Unpaid ("facture du jour" printed before collection) marker - a plain
+     paid ticket must never be mistaken for this one. */
+  .receipt-print-pending {
     margin-top: 1mm;
-    display: flex;
-    justify-content: space-between;
-    gap: 2mm;
-    font-size: 9px;
+    border: 1px dashed #000;
+    padding: 1mm 2mm;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
   }
 
   .receipt-print-footer {

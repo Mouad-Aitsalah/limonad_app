@@ -20,8 +20,10 @@ export async function POST(request: Request) {
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {
+    const body = await request.json();
+    const collectNow = body?.collectNow !== false;
     return NextResponse.json(
-      { sale: await createDriverSale(await request.json()) },
+      { sale: await createDriverSale(body, { collectNow }) },
       { status: 201 },
     );
   } catch (error) {

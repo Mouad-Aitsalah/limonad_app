@@ -9,6 +9,9 @@ type InvoiceActionsProps = {
   loading?: boolean;
   onCheckout: () => void;
   onPrint: () => void;
+  /** "Préparer la facture" - persist as a pending "Facture du jour", pay later. */
+  onHold?: () => void;
+  holdLoading?: boolean;
 };
 
 export function InvoiceActions({
@@ -17,6 +20,8 @@ export function InvoiceActions({
   loading = false,
   onCheckout,
   onPrint,
+  onHold,
+  holdLoading = false,
 }: InvoiceActionsProps) {
   const isTransfer = operationType === "transfer";
   const Icon = isTransfer ? Send : Wallet;
@@ -39,9 +44,15 @@ export function InvoiceActions({
       </Button>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Button type="button" variant="outline" size="sm">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={disabled || holdLoading || !onHold || isTransfer}
+          onClick={onHold}
+        >
           <PauseCircle aria-hidden="true" className="h-4 w-4" />
-          Attente
+          {holdLoading ? "..." : "Préparer"}
         </Button>
         <Button type="button" variant="outline" size="sm">
           <FileText aria-hidden="true" className="h-4 w-4" />
