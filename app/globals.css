@@ -501,6 +501,23 @@ body {
     text-align: center;
   }
 
+  /* Company logo on the ticket - kept small and ratio-preserving for
+     thermal printers, no heavy background. */
+  .receipt-print-logo {
+    display: block;
+    margin: 0 auto 1mm;
+    max-height: 16mm;
+    max-width: 46mm;
+    height: auto;
+    width: auto;
+    object-fit: contain;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-logo {
+    max-height: 13mm;
+    max-width: 38mm;
+  }
+
   .receipt-print-brand {
     font-size: 16px;
     font-weight: 800;

@@ -42,7 +42,10 @@ const purchaseSchema = z.object({
           .int()
           .positive("La quantite doit etre positive.")
           .max(1_000_000),
-        prixAchat: z.coerce
+        // The purchase form now works in TTC: this is the unit purchase
+        // price tax INCLUDED. HT / VAT are derived server-side (see the
+        // computedLines map below) so the accounting entry stays correct.
+        prixAchatTTC: z.coerce
           .number()
           .positive("Le prix d'achat doit etre positif.")
           .max(MONEY_RANGE_MAX_NUMBER),
@@ -161,18 +164,22 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
         const product = productById.get(line.productId);
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
 
-        // F8-D: grossHT is a raw multiplication (prixAchat x quantite),
-        // checked before rounding/further use - a large-but-otherwise-valid
-        // quantity times a large purchase price is exactly the case a bound
-        // on quantity alone would miss (see lib/money.ts#isWithinMoneyRange).
-        const grossHT = line.prixAchat * line.quantite;
-        assertMoneyRange(line.prixAchat, "line.prixAchat");
-        assertMoneyRange(grossHT, "line.grossHT");
-        const discountAmount = roundMoney(grossHT * (line.remisePercent / 100));
-        const totalHT = roundMoney(grossHT - discountAmount);
+        // TTC-first derivation: the operator types the tax-included unit
+        // price and a % discount on the TTC subtotal (matches the form's
+        // visible total). HT and VAT are then derived from the TTC total so
+        // the accounting entry (subtotalHT / taxAmount / totalTTC) stays
+        // exact - taxAmount is always totalTTC - totalHT.
         const taxRate = product.taxRate.toNumber();
-        const taxAmount = roundMoney(totalHT * (taxRate / 100));
-        const totalTTC = roundMoney(totalHT + taxAmount);
+        const grossTTC = line.prixAchatTTC * line.quantite;
+        assertMoneyRange(line.prixAchatTTC, "line.prixAchatTTC");
+        assertMoneyRange(grossTTC, "line.grossTTC");
+        const discountAmount = roundMoney(grossTTC * (line.remisePercent / 100));
+        const totalTTC = roundMoney(grossTTC - discountAmount);
+        const totalHT = roundMoney(totalTTC / (1 + taxRate / 100));
+        const taxAmount = roundMoney(totalTTC - totalHT);
+        // Stored unit purchase price stays HT (same meaning as every other
+        // *HT column and as historical rows) - derived from the TTC input.
+        const unitPurchasePriceHT = roundMoney(line.prixAchatTTC / (1 + taxRate / 100));
         assertMoneyRange(discountAmount, "line.discountAmount");
         assertMoneyRange(totalHT, "line.totalHT");
         assertMoneyRange(taxAmount, "line.taxAmount");
@@ -184,6 +191,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
           taxAmount,
           totalHT,
           totalTTC,
+          unitPurchasePriceHT,
         };
       });
       const subtotalHT = roundMoney(
@@ -230,7 +238,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
               productId: line.productId,
               orderedQuantity: line.quantite,
               receivedQuantity: line.quantite,
-              unitPurchasePrice: line.prixAchat,
+              unitPurchasePrice: line.unitPurchasePriceHT,
               discountRate: line.remisePercent,
               taxRate: line.taxRate,
               taxAmount: line.taxAmount,
@@ -372,17 +380,24 @@ function mapPurchaseToDto(purchase: PurchaseWithRelations): Purchase {
     utilisateurNom: purchase.createdBy.fullName,
     observation: purchase.observation ?? "",
     statut: mapPurchaseStatus(purchase.status),
-    lignes: purchase.lines.map((line) => ({
-      productId: line.productId,
-      productName: line.product.name,
-      quantite: line.receivedQuantity || line.orderedQuantity,
-      prixAchat: line.unitPurchasePrice.toNumber(),
-      remisePercent: line.discountRate.toNumber(),
-      tauxTVA: line.taxRate.toNumber(),
-      totalHT: line.totalHT.toNumber(),
-      totalTVA: line.taxAmount.toNumber(),
-      totalTTC: line.totalTTC.toNumber(),
-    })),
+    lignes: purchase.lines.map((line) => {
+      const unitHT = line.unitPurchasePrice.toNumber();
+      const rate = line.taxRate.toNumber();
+      return {
+        productId: line.productId,
+        productName: line.product.name,
+        quantite: line.receivedQuantity || line.orderedQuantity,
+        // prixAchat kept HT for backward compatibility; prixAchatTTC is what
+        // the TTC-based UI shows.
+        prixAchat: unitHT,
+        prixAchatTTC: roundMoney(unitHT * (1 + rate / 100)),
+        remisePercent: line.discountRate.toNumber(),
+        tauxTVA: rate,
+        totalHT: line.totalHT.toNumber(),
+        totalTVA: line.taxAmount.toNumber(),
+        totalTTC: line.totalTTC.toNumber(),
+      };
+    }),
     createdAt: purchase.createdAt,
     updatedAt: purchase.updatedAt,
   };

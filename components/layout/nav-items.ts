@@ -8,6 +8,7 @@ import {
   Navigation,
   Package,
   ReceiptText,
+  Settings,
   ShieldUser,
   ShoppingBag,
   ShoppingCart,
@@ -228,5 +229,20 @@ export const navItems: NavItem[] = [
     description: "Acces et roles",
     order: "14",
     roles: ["admin"],
+  },
+  {
+    label: "Parametres",
+    icon: Settings,
+    description: "Identite de l'entreprise",
+    order: "15",
+    roles: ["admin"],
+    children: [
+      {
+        label: "Identite de l'entreprise",
+        href: "/parametres/identite",
+        description: "Nom et logo affiches dans l'application et sur les tickets",
+        roles: ["admin"],
+      },
+    ],
   },
 ];
