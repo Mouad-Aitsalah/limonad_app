@@ -8,7 +8,9 @@ import {
   boundingBoxAround,
   calculateDistanceMeters,
   calculateSegmentedGpsDistanceMeters,
+  CLIENT_PING_ID_PATTERN,
   hasAcceptableAccuracy,
+  hasValidCoordinates,
   isGpsPointReliable,
   splitGpsRouteIntoSegments,
 } from "@/lib/gps/gps-utils";
@@ -33,8 +35,20 @@ import type {
   DriverTourSummaryDto,
   TourDto,
 } from "@/types/operations-dto";
+import type { GpsBatchResult } from "@/types/gps-offline";
 
 const proximityThresholdMeters = 150;
+
+/** Phase 5B: hard cap on how many points one batch may carry. */
+export const GPS_BATCH_MAX_POINTS = 100;
+/**
+ * Phase 5B: a catch-up point older than this (relative to `now`, when the
+ * tour has no `startedAt`) is treated as junk. When the tour has a
+ * `startedAt`, that minus a small grace is the real lower bound instead.
+ */
+const GPS_BATCH_MAX_CAPTURE_AGE_MS = 24 * 60 * 60 * 1000;
+
+const clientPingIdSchema = z.string().regex(CLIENT_PING_ID_PATTERN);
 
 const locationPingSchema = z.object({
   latitude: z.coerce.number().min(-90).max(90),
@@ -43,6 +57,22 @@ const locationPingSchema = z.object({
   speed: z.coerce.number().min(0).nullable().optional(),
   heading: z.coerce.number().min(0).max(360).nullable().optional(),
   recordedAt: z.coerce.date().optional(),
+  clientPingId: clientPingIdSchema.optional(),
+});
+
+const batchEnvelopeSchema = z.object({
+  tourId: z.string().min(1).max(64),
+  points: z.array(z.unknown()).min(1).max(GPS_BATCH_MAX_POINTS),
+});
+
+const batchPointSchema = z.object({
+  clientPingId: clientPingIdSchema,
+  latitude: z.coerce.number().min(-90).max(90),
+  longitude: z.coerce.number().min(-180).max(180),
+  accuracy: z.coerce.number().min(0).nullable().optional(),
+  speed: z.coerce.number().min(0).nullable().optional(),
+  heading: z.coerce.number().min(0).max(360).nullable().optional(),
+  capturedAt: z.coerce.date(),
 });
 
 const noSaleSchema = z.object({
@@ -111,6 +141,14 @@ export async function recordCurrentDriverLocation(
 ): Promise<{ currentTour: CurrentDriverTourDto; point: DriverTourPositionDto }> {
   const user = await requireDriverUser();
   return recordDriverLocationForDriver(user.organizationId, user.driverId, input);
+}
+
+/** Phase 5B: session-authenticated wrapper over the offline batch path. */
+export async function recordCurrentDriverLocationBatch(
+  input: unknown,
+): Promise<GpsBatchResult> {
+  const user = await requireDriverUser();
+  return recordDriverLocationBatchForDriver(user.organizationId, user.driverId, input);
 }
 
 /**
@@ -236,17 +274,27 @@ export async function recordDriverLocationForDriver(
     }
   }
 
-  await prisma.tourLocationPing.create({
-    data: {
-      tourId: tour.id,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      accuracy: data.accuracy ?? null,
-      speed: data.speed ?? null,
-      heading: data.heading ?? null,
-      recordedAt,
-    },
-  });
+  try {
+    await prisma.tourLocationPing.create({
+      data: {
+        tourId: tour.id,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        accuracy: data.accuracy ?? null,
+        speed: data.speed ?? null,
+        heading: data.heading ?? null,
+        recordedAt,
+        clientPingId: data.clientPingId ?? null,
+      },
+    });
+  } catch (error) {
+    // Idempotent when a clientPingId is present (native path, Phase 5B): the
+    // offline batch, or a retried native POST, may have already stored this
+    // exact fix under the same (tourId, clientPingId). Anything else rethrows.
+    if (!(data.clientPingId && (error as { code?: string }).code === "P2002")) {
+      throw error;
+    }
+  }
 
   await upsertNearbyVisit(
     organizationId,
@@ -282,6 +330,171 @@ export async function recordDriverLocationForDriver(
   );
 
   return { currentTour, point };
+}
+
+/**
+ * Phase 5B - the offline catch-up path. Takes a batch of GPS fixes that were
+ * captured on the phone (possibly minutes ago, while the network was down)
+ * and stores the ones that pass validation, idempotently.
+ *
+ * Same trust model as recordDriverLocationForDriver: driverId /
+ * organizationId are resolved by the caller (session or signed token), never
+ * from the body; the active tour is re-derived here and must be IN_PROGRESS
+ * and belong to this driver/organization. `expectedTourId` (native/token
+ * path) rejects a stale-but-valid token whose tour has since changed.
+ *
+ * Idempotent by construction: `createMany({ skipDuplicates: true })` against
+ * the @@unique([tourId, clientPingId]) index, so a batch that is retried
+ * after a lost response never creates a duplicate row.
+ *
+ * Deliberately does NOT re-run the live "implausible jump" speed check (that
+ * guards a real-time stream against a single spike; a catch-up batch has
+ * legitimate gaps) and runs upsertNearbyVisit only once, for the newest
+ * point, rather than 100 times.
+ */
+export async function recordDriverLocationBatchForDriver(
+  organizationId: string,
+  driverId: string,
+  input: unknown,
+  options?: { expectedTourId?: string },
+): Promise<GpsBatchResult> {
+  const envelope = batchEnvelopeSchema.safeParse(input);
+  if (!envelope.success) {
+    throw new OperationsServiceError(
+      "Lot de positions GPS invalide (tableau vide ou trop grand).",
+      422,
+    );
+  }
+
+  const tour = await requireActiveTourForDriver(driverId, organizationId);
+
+  if (options?.expectedTourId && tour.id !== options.expectedTourId) {
+    throw new OperationsServiceError(
+      "Le jeton de suivi ne correspond plus a la tournee active.",
+      409,
+    );
+  }
+  if (tour.status !== "IN_PROGRESS") {
+    throw new OperationsServiceError(
+      "Le suivi GPS ne peut demarrer qu'une fois la tournee commencée.",
+      409,
+    );
+  }
+
+  // The queued points belong to a tour that has since ended (the phone was
+  // offline across the return). They can never be attached to this new tour -
+  // acknowledge them as processed (200, all "rejected") so the phone drops
+  // them cleanly instead of retrying forever.
+  if (envelope.data.tourId !== tour.id) {
+    const staleIds: string[] = [];
+    for (const raw of envelope.data.points) {
+      const id = (raw as { clientPingId?: unknown } | null)?.clientPingId;
+      if (typeof id === "string" && CLIENT_PING_ID_PATTERN.test(id)) staleIds.push(id);
+    }
+    return {
+      accepted: 0,
+      duplicates: 0,
+      rejected: envelope.data.points.length,
+      processedIds: staleIds,
+    };
+  }
+
+  const nowMs = Date.now();
+  const startedAtMs = tour.startedAt ? Date.parse(tour.startedAt) : Number.NaN;
+  const minCapturedMs = Number.isFinite(startedAtMs)
+    ? startedAtMs - 60_000
+    : nowMs - GPS_BATCH_MAX_CAPTURE_AGE_MS;
+  const maxCapturedMs = nowMs + GPS_MAX_FUTURE_DRIFT_MS;
+
+  const processedIds: string[] = [];
+  const seenIds = new Set<string>();
+  let rejected = 0;
+  let duplicates = 0;
+  const rows: Array<{
+    tourId: string;
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    speed: number | null;
+    heading: number | null;
+    recordedAt: Date;
+    clientPingId: string;
+  }> = [];
+
+  for (const raw of envelope.data.points) {
+    const parsed = batchPointSchema.safeParse(raw);
+    if (!parsed.success) {
+      rejected += 1;
+      const maybeId = (raw as { clientPingId?: unknown } | null)?.clientPingId;
+      if (typeof maybeId === "string" && CLIENT_PING_ID_PATTERN.test(maybeId)) {
+        processedIds.push(maybeId);
+      }
+      continue;
+    }
+
+    const p = parsed.data;
+    processedIds.push(p.clientPingId);
+
+    if (seenIds.has(p.clientPingId)) {
+      duplicates += 1;
+      continue;
+    }
+    seenIds.add(p.clientPingId);
+
+    const capturedMs = p.capturedAt.getTime();
+    const point = {
+      latitude: p.latitude,
+      longitude: p.longitude,
+      accuracy: p.accuracy ?? null,
+    };
+    if (
+      !hasValidCoordinates(point) ||
+      !hasAcceptableAccuracy(point) ||
+      capturedMs < minCapturedMs ||
+      capturedMs > maxCapturedMs
+    ) {
+      rejected += 1;
+      continue;
+    }
+
+    rows.push({
+      tourId: tour.id,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      accuracy: p.accuracy ?? null,
+      speed: p.speed ?? null,
+      heading: p.heading ?? null,
+      recordedAt: p.capturedAt,
+      clientPingId: p.clientPingId,
+    });
+  }
+
+  let accepted = 0;
+  if (rows.length > 0) {
+    const created = await prisma.tourLocationPing.createMany({
+      data: rows,
+      skipDuplicates: true,
+    });
+    accepted = created.count;
+    duplicates += rows.length - created.count;
+
+    const newest = rows.reduce((a, b) =>
+      b.recordedAt.getTime() > a.recordedAt.getTime() ? b : a,
+    );
+    try {
+      await upsertNearbyVisit(
+        organizationId,
+        driverId,
+        tour.id,
+        newest.latitude,
+        newest.longitude,
+      );
+    } catch {
+      // proximity detection is best-effort - never fail a batch for it
+    }
+  }
+
+  return { accepted, duplicates, rejected, processedIds };
 }
 
 export async function confirmCurrentDriverArrival(

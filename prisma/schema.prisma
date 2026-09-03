@@ -924,9 +924,20 @@ model TourLocationPing {
   accuracy   Decimal? @db.Decimal(10, 2)
   speed      Decimal? @db.Decimal(10, 2)
   heading    Decimal? @db.Decimal(10, 2)
+  // recordedAt = the moment the phone actually captured the fix (client
+  // supplied). createdAt = the moment the server stored it. They differ when
+  // an offline-queued point is synced later - the trace stays ordered by
+  // recordedAt, so a 10:05 fix synced at 10:15 still sits at 10:05.
   recordedAt DateTime @default(now())
   createdAt  DateTime @default(now())
+  // Phone-generated stable id for one physical GPS fix, identical across
+  // every (re)send. Lets the offline batch endpoint be idempotent: a retried
+  // batch collides on @@unique([tourId, clientPingId]) and is skipped. NULL
+  // for the pre-5B single-point paths, which never dedup (multiple NULLs do
+  // not conflict in a Postgres unique index).
+  clientPingId String?
 
+  @@unique([tourId, clientPingId])
   @@index([tourId, recordedAt])
 }
 

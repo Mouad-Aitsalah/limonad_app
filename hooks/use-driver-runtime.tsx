@@ -7,7 +7,12 @@ import {
   useDriverGeolocation,
   type DriverGpsPosition,
 } from "@/hooks/use-driver-geolocation";
-import { calculateDistanceMeters } from "@/lib/gps/gps-utils";
+import { calculateDistanceMeters, deriveClientPingId } from "@/lib/gps/gps-utils";
+import {
+  dropGpsPointsForOtherTours,
+  enqueueGpsPoint,
+} from "@/lib/gps/gps-offline-queue";
+import { configureGpsSync, flushGpsQueue } from "@/lib/gps/gps-sync";
 import {
   startNativeTracking,
   stopNativeTracking,
@@ -18,6 +23,7 @@ import type {
   DriverTourCustomerDto,
   DriverTourPositionDto,
 } from "@/types/operations-dto";
+import type { QueuedGpsPoint } from "@/types/gps-offline";
 
 const DRIVER_NEARBY_ENTRY_RADIUS_METERS = 100;
 const DRIVER_NEARBY_EXIT_RADIUS_METERS = 120;
@@ -195,57 +201,79 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
     setNearbyCustomer(null);
   }, []);
 
-  const handleReliablePosition = React.useCallback(async (position: DriverGpsPosition) => {
-    reliablePositionRef.current = position;
-    syncNearbyCustomer();
+  /**
+   * Phase 5B - record-first: every reliable fix is written to the durable
+   * offline queue BEFORE any network attempt, then a (throttled, backoff-ed)
+   * batch flush is kicked. A network outage while the app is alive therefore
+   * loses nothing - the point waits in the queue and syncs when the network
+   * returns. Shared by the web watch and the native plugin's JS callback;
+   * `source` keeps their clientPingIds from ever colliding.
+   */
+  const queueGpsPosition = React.useCallback(
+    (position: DriverGpsPosition, source: "w" | "n") => {
+      const tour = currentTourRef.current?.tour;
+      if (!tour || tour.status !== "IN_PROGRESS") return;
 
-    const activeTour = currentTourRef.current?.tour;
-    if (!activeTour || activeTour.status !== "IN_PROGRESS") {
-      return;
-    }
-
-    if (Capacitor.isNativePlatform()) {
-      // Native background-geolocation already POSTs every point straight to
-      // the server from native code (see lib/gps/native-tracking.ts and the
-      // tour-status effect below) - fetching here too would double-write
-      // every GPS point.
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/driver/tour/location", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          latitude: position.latitude,
-          longitude: position.longitude,
-          accuracy: position.accuracy,
-          speed: position.speed,
-          heading: position.heading,
-          recordedAt: position.recordedAt,
-        }),
-      });
-      const payload = (await response.json()) as {
-        currentTour?: CurrentDriverTourDto;
-        point?: DriverTourPositionDto;
+      const capturedAtMs = Date.parse(position.recordedAt);
+      const queued: QueuedGpsPoint = {
+        tourId: tour.id,
+        clientPingId: deriveClientPingId(
+          source,
+          Number.isFinite(capturedAtMs) ? capturedAtMs : Date.now(),
+          position.latitude,
+          position.longitude,
+        ),
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy ?? null,
+        speed: position.speed ?? null,
+        heading: position.heading ?? null,
+        capturedAt: position.recordedAt,
       };
 
-      if (!response.ok || !payload.currentTour || !payload.point || !mountedRef.current) {
-        return;
-      }
+      void enqueueGpsPoint(queued).then(() => flushGpsQueue());
 
-      const nextTour = mergeCurrentTourLocationUpdate(
-        currentTourRef.current,
-        payload.currentTour,
-        payload.point,
-      );
-      currentTourRef.current = nextTour;
-      setCurrentTour(nextTour);
+      // Keep the driver's own route/map growing immediately, without waiting
+      // for the batch round-trip - the server stays authoritative on the next
+      // currentTour refresh.
+      const current = currentTourRef.current;
+      if (current && mountedRef.current) {
+        const point: DriverTourPositionDto = {
+          latitude: queued.latitude,
+          longitude: queued.longitude,
+          accuracy: queued.accuracy,
+          speed: queued.speed,
+          heading: queued.heading,
+          recordedAt: queued.capturedAt,
+        };
+        const nextTour = mergeCurrentTourLocationUpdate(current, current, point);
+        if (nextTour !== current) {
+          currentTourRef.current = nextTour;
+          setCurrentTour(nextTour);
+          syncNearbyCustomer();
+        }
+      }
+    },
+    [syncNearbyCustomer],
+  );
+
+  const handleReliablePosition = React.useCallback(
+    async (position: DriverGpsPosition) => {
+      reliablePositionRef.current = position;
       syncNearbyCustomer();
-    } catch {
-      // Nearby detection must keep working locally even if tour sync fails.
-    }
-  }, [syncNearbyCustomer]);
+
+      const activeTour = currentTourRef.current?.tour;
+      if (!activeTour || activeTour.status !== "IN_PROGRESS") return;
+
+      // On native the capgo JS callback (see the tour-status effect below) is
+      // the one that feeds the queue - the browser watch runs there too but
+      // must not double-capture the same drive.
+      if (Capacitor.isNativePlatform()) return;
+
+      queueGpsPosition(position, "w");
+    },
+    [queueGpsPosition, syncNearbyCustomer],
+  );
 
   const gps = useDriverGeolocation({
     active: true,
@@ -261,26 +289,61 @@ export function DriverRuntimeProvider({ children }: { children: React.ReactNode 
   // moment a tour becomes IN_PROGRESS, stops as soon as it no longer is
   // (return, closure, cancellation) - mirroring exactly when the web path
   // above is allowed to push points. A no-op entirely on the web (see
-  // lib/gps/native-tracking.ts). The position callback only updates the
-  // live/displayed position (via gps.reset) - it never fetch()es, since the
-  // native `url` POST already persisted the point server-side.
+  // lib/gps/native-tracking.ts). The plugin still POSTs each point natively
+  // to /api/driver/tour/location/native (that survives WebView suspension);
+  // the JS callback here ALSO records it into the shared offline queue so a
+  // network outage while the app is alive loses nothing. Both writes carry
+  // the SAME deterministic clientPingId, so they converge on one row.
   React.useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
     if (activeTourStatus === "IN_PROGRESS" && activeTourId) {
+      void dropGpsPointsForOtherTours(activeTourId);
       void startNativeTracking(activeTourId, (position) => {
-        if (mountedRef.current) resetGps(position);
+        if (!mountedRef.current) return;
+        resetGps(position);
+        queueGpsPosition(position, "n");
       });
     } else {
       void stopNativeTracking();
     }
-  }, [activeTourId, activeTourStatus, resetGps]);
+  }, [activeTourId, activeTourStatus, resetGps, queueGpsPosition]);
 
   React.useEffect(() => {
     return () => {
       if (Capacitor.isNativePlatform()) {
         void stopNativeTracking();
       }
+    };
+  }, []);
+
+  // Phase 5B - GPS offline sync wiring. Tell the sync layer how to resolve
+  // the CURRENTLY active tour (so it never mis-attaches a finished tour's
+  // points), and kick a catch-up flush on the ambient "we might be back
+  // online" signals. `flushGpsQueue` is internally throttled + backoff-ed,
+  // so these are safe to fire liberally.
+  React.useEffect(() => {
+    configureGpsSync(() => {
+      const tour = currentTourRef.current?.tour;
+      return tour && tour.status === "IN_PROGRESS" ? tour.id : null;
+    });
+
+    const kick = () => void flushGpsQueue({ force: true });
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") kick();
+    };
+    window.addEventListener("online", kick);
+    document.addEventListener("visibilitychange", onVisibility);
+    const intervalId = window.setInterval(() => void flushGpsQueue(), 60_000);
+
+    // One attempt on mount / resume so a queue left over from a previous
+    // session syncs as soon as the driver reopens the app.
+    kick();
+
+    return () => {
+      window.removeEventListener("online", kick);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(intervalId);
     };
   }, []);
 

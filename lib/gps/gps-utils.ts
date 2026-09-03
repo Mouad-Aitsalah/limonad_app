@@ -62,6 +62,30 @@ export function hasValidCoordinates(point: Pick<GpsPointLike, "latitude" | "long
   );
 }
 
+/** Charset/length gate for a clientPingId, shared by client and server. */
+export const CLIENT_PING_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+/**
+ * Phase 5B - a deterministic id for one physical GPS fix, stable across every
+ * (re)send. Derived purely from the fix itself (capture instant + coordinates
+ * at 1e-6 deg ~= 0.1 m), so the two delivery paths for the same native point -
+ * the plugin's own native POST to /api/driver/tour/location/native and the JS
+ * offline-queue batch - land on the SAME (tourId, clientPingId) and are
+ * deduplicated to a single row. `source` keeps web ("w") and native ("n")
+ * points from ever colliding.
+ */
+export function deriveClientPingId(
+  source: "w" | "n",
+  capturedAtMs: number,
+  latitude: number,
+  longitude: number,
+): string {
+  const t = Number.isFinite(capturedAtMs) ? Math.round(capturedAtMs) : 0;
+  const lat = Math.round(latitude * 1_000_000);
+  const lng = Math.round(longitude * 1_000_000);
+  return `${source}_${t}_${lat}_${lng}`;
+}
+
 export function hasAcceptableAccuracy(point: Pick<GpsPointLike, "accuracy">) {
   return (
     point.accuracy === null ||

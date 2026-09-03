@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { deriveClientPingId } from "@/lib/gps/gps-utils";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { recordDriverLocationForDriver } from "@/lib/server/driver-tour";
 import { verifyTrackingToken } from "@/lib/server/tracking-token";
@@ -40,6 +41,16 @@ export async function POST(request: Request) {
     // (the request is never rejected for carrying them) but intentionally
     // not persisted, since TourLocationPing has no column for them and none
     // was requested.
+    // Phase 5B: derive the SAME deterministic clientPingId the JS offline
+    // queue derives for this native fix (see deriveClientPingId), so the
+    // plugin's native POST and a later offline-queue batch converge on one
+    // (tourId, clientPingId) row instead of writing the point twice.
+    const capturedAtMs = typeof body?.time === "number" ? body.time : Date.now();
+    const clientPingId =
+      typeof body?.latitude === "number" && typeof body?.longitude === "number"
+        ? deriveClientPingId("n", capturedAtMs, body.latitude, body.longitude)
+        : undefined;
+
     const input = {
       latitude: body?.latitude,
       longitude: body?.longitude,
@@ -47,6 +58,7 @@ export async function POST(request: Request) {
       speed: body?.speed ?? null,
       heading: body?.bearing ?? null,
       recordedAt: typeof body?.time === "number" ? new Date(body.time) : undefined,
+      clientPingId,
     };
 
     const { point } = await recordDriverLocationForDriver(
