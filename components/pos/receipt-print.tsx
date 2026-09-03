@@ -48,10 +48,7 @@ export function formatReceiptInvoiceNumber(invoiceNumber: string) {
   return withoutLeadingZeroes.padStart(2, "0");
 }
 
-export function ReceiptPrint({
-  sale,
-  paperWidth = "80",
-}: ReceiptPrintProps) {
+export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
   const { identity } = useCompanyIdentity();
 
   if (!sale) return null;
@@ -65,9 +62,9 @@ export function ReceiptPrint({
   // A sale still DRAFT has not been collected yet: the payment method on the
   // row is only a placeholder, so the ticket must not look like a paid one.
   const awaitingPayment = sale.status === "DRAFT";
-  // Fall back to the previous hardcoded brand only until the identity loads,
+  // Fall back to a readable hardcoded brand only until the identity loads,
   // so a ticket never prints without a header.
-  const brandName = identity?.tradeName || identity?.name || "AITSALAHMARKET";
+  const brandName = identity?.tradeName || identity?.name || "AITSALAH MARKET";
 
   return (
     <section
@@ -108,14 +105,14 @@ export function ReceiptPrint({
         </div>
 
         {awaitingPayment ? (
-          <div className="receipt-print-pending">EN ATTENTE DE RÈGLEMENT</div>
-        ) : null}
+  <div className="receipt-print-pending">EN ATTENTE DE RÈGLEMENT</div>
+) : null}
 
         <div className="receipt-print-separator" />
 
         <div className="receipt-print-grid receipt-print-head">
-          <span className="receipt-print-qty">Qté</span>
-          <span>Désignation</span>
+          <span className="receipt-print-qty">QTE</span>
+          <span>DESIGNATION</span>
           <span className="receipt-print-number">Prix TTC</span>
           <span className="receipt-print-number">Montant</span>
         </div>
@@ -130,9 +127,7 @@ export function ReceiptPrint({
               <div key={line.id} className="receipt-print-line">
                 <div className="receipt-print-grid">
                   <span className="receipt-print-qty">{line.quantity}</span>
-                  <span className="receipt-print-product">
-                    {line.productName}
-                  </span>
+                  <span className="receipt-print-product">{line.productName}</span>
                   <span className="receipt-print-number">
                     {formatReceiptAmount(unitPriceTTC)}
                   </span>
@@ -141,9 +136,7 @@ export function ReceiptPrint({
                   </span>
                 </div>
                 {line.discountRate > 0 ? (
-                  <p className="receipt-print-discount">
-                    Remise : {line.discountRate} %
-                  </p>
+                  <p className="receipt-print-discount">Remise : {line.discountRate} %</p>
                 ) : null}
               </div>
             );
@@ -154,14 +147,14 @@ export function ReceiptPrint({
 
         <div className="receipt-print-total">
           <strong>{formatCurrency(sale.totalTTC)}</strong>
-          <span>MONTANT TTC À PAYER</span>
+          <span>TOTAL TTC</span>
         </div>
 
         <div className="receipt-print-separator" />
 
         <footer className="receipt-print-footer">
           {awaitingPayment ? (
-            <p>Règlement : EN ATTENTE</p>
+            <p>Statut : EN ATTENTE DE RÈGLEMENT</p>
           ) : (
             <>
               <p>Paiement : {paymentLabel}</p>

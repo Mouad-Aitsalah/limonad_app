@@ -58,7 +58,13 @@ export function InvoiceActions({
           <FileText aria-hidden="true" className="h-4 w-4" />
           Devis
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onPrint}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={loading || holdLoading}
+          onClick={onPrint}
+        >
           <Printer aria-hidden="true" className="h-4 w-4" />
           Imprimer
         </Button>
