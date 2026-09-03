@@ -310,9 +310,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     idempotencyKeyRef.current = crypto.randomUUID();
   }
 
-  // "+ Nouvelle facture" - start a fresh invoice. Asks before discarding a
-  // cart that was never prepared; a DRAFT already prepared is untouched.
-  function newInvoice() {
+  // "+ Nouvelle facture" never discards products: an unprepared cart is
+  // first persisted as a DRAFT, while an already-open DRAFT is simply closed.
+  async function newInvoice() {
     if (openPendingSale) {
       setCheckoutOpen(false);
       setLastSale(null);
@@ -320,12 +320,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       resetOperation();
       return;
     }
-    if (
-      cartLines.length > 0 &&
-      !window.confirm("Abandonner la facture en cours ?")
-    ) {
+
+    if (cartLines.length > 0) {
+      setCheckoutOpen(false);
+      await prepareInvoice();
       return;
     }
+
     setCheckoutOpen(false);
     setLastSale(null);
     resetOperation();
@@ -596,7 +597,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="button" onClick={newInvoice}>
+        <Button
+          type="button"
+          disabled={preparing || submitting || collecting}
+          onClick={() => void newInvoice()}
+        >
           <Plus aria-hidden="true" className="h-4 w-4" />
           Nouvelle facture
         </Button>
