@@ -423,6 +423,35 @@ export async function getLoadingById(id: string): Promise<TruckLoadingDto> {
  * truck already having an open fiche is not an error, it just means "resume
  * that one"). Never looks at, creates, or requires a Tour of any status.
  */
+/**
+ * A driver's "usual" products = the distinct products of their most recent
+ * CLOSED (VALIDATED) fiche de chargement. Scoped to organizationId + driverId
+ * (never truck, never org-wide - spec item 1: no cross-driver bleed). The
+ * last fiche is implicitly the template for the next one, so an item removed
+ * last time is simply absent here (item 2/6). Products no longer ACTIVE in
+ * this organisation are dropped and never reactivated (item 9). Returns []
+ * for a driver who has never had a closed fiche (item 5).
+ */
+async function resolveDriverUsualProductIds(
+  tx: Pick<typeof prisma, "truckLoading" | "product">,
+  organizationId: string,
+  driverId: string,
+): Promise<string[]> {
+  const lastClosed = await tx.truckLoading.findFirst({
+    where: { organizationId, driverId, status: "VALIDATED" },
+    orderBy: [{ validatedAt: "desc" }, { createdAt: "desc" }],
+    select: { lines: { select: { productId: true } } },
+  });
+  if (!lastClosed || lastClosed.lines.length === 0) return [];
+
+  const productIds = [...new Set(lastClosed.lines.map((line) => line.productId))];
+  const activeProducts = await tx.product.findMany({
+    where: { id: { in: productIds }, organizationId, status: "ACTIVE" },
+    select: { id: true },
+  });
+  return activeProducts.map((product) => product.id);
+}
+
 export async function createOrReuseOpenLoading(
   input: TruckLoadingCreateInput,
 ): Promise<{ loading: TruckLoadingDto; reused: boolean }> {
@@ -478,6 +507,18 @@ export async function createOrReuseOpenLoading(
 
         const { year, sequence } = await nextLoadingSequence(tx, user.organizationId);
 
+        // Prefill the fresh fiche with this driver's usual products,
+        // quantities reset to 0. A pre-shown line is UI-only: it removes no
+        // depot stock, adds no truck stock and records no StockMovement -
+        // charge initiale / rechargee still apply exactly as before, only
+        // once a real quantity is saved/closed through the normal flow
+        // (items 3 & 4). Never runs on the reused-open-fiche path above.
+        const prefillProductIds = await resolveDriverUsualProductIds(
+          tx,
+          user.organizationId,
+          driver.id,
+        );
+
         const created = await tx.truckLoading.create({
           data: {
             organizationId: user.organizationId,
@@ -490,6 +531,17 @@ export async function createOrReuseOpenLoading(
             depotId: truck.depotId,
             truckId: truck.id,
             createdByUserId: user.id,
+            ...(prefillProductIds.length > 0
+              ? {
+                  lines: {
+                    create: prefillProductIds.map((productId) => ({
+                      productId,
+                      quantity: 0,
+                      reloadedQuantity: 0,
+                    })),
+                  },
+                }
+              : {}),
           },
           include: loadingInclude,
         });

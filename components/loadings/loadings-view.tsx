@@ -522,6 +522,12 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
         toast.info(
           `Une fiche de chargement ouverte existe deja pour ${selectedTruck.code}. ${body.loading.displayNumber} a ete chargee.`,
         );
+      } else if (body.loading.lines.length > 0) {
+        // A brand-new fiche only ever has lines when they were prefilled
+        // from this driver's last closed fiche (quantities start at 0).
+        toast.success(
+          `${body.loading.displayNumber} cree - ${body.loading.lines.length} produit(s) repris du dernier chargement de ${selectedDriver.user.fullName}.`,
+        );
       } else {
         toast.success(`${body.loading.displayNumber} cree.`);
       }
