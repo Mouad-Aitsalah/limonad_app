@@ -27,7 +27,7 @@ const customerAccountPrefix = CUSTOMER_ACCOUNT_PREFIX;
 export const customerMutationSchema = z.object({
   code: optionalString(),
   name: z.string().trim().min(1, "Le nom est obligatoire."),
-  phone: z.string().trim().min(1, "Le telephone est obligatoire."),
+  phone: z.string().trim().nullable().optional().transform(normalizePhone),
   email: z
     .string()
     .trim()
@@ -206,8 +206,9 @@ export async function resolveCustomerByNumber(rawInput: string): Promise<Custome
     "cashier",
     "driver",
   ]);
-  const code = resolveCustomerCodeFromInput(rawInput ?? "");
-  if (!code) return null;
+  const input = rawInput.trim();
+  const legacyCode = resolveCustomerCodeFromInput(input);
+  if (!input && !legacyCode) return null;
 
   const driverScope =
     currentUser.role === "driver"
@@ -220,7 +221,13 @@ export async function resolveCustomerByNumber(rawInput: string): Promise<Custome
       : {};
 
   const customer = await prisma.customer.findFirst({
-    where: { organizationId: currentUser.organizationId, code, ...driverScope },
+    where: {
+      organizationId: currentUser.organizationId,
+      code: {
+        in: [...new Set([input, legacyCode].filter((value): value is string => Boolean(value)))],
+      },
+      ...driverScope,
+    },
     include: customerInclude,
   });
   return customer ? mapCustomerToDto(customer) : null;
@@ -439,11 +446,17 @@ export async function ensureUniqueCustomerCode(
   }
 }
 
+export function normalizePhone(value: string | null | undefined) {
+  const normalized = value?.trim() ?? "";
+  return normalized || null;
+}
+
 export async function ensureUniquePhone(
   organizationId: string,
-  phone: string,
+  phone: string | null,
   currentCustomerId?: string,
 ) {
+  if (!phone) return;
   const owner = await prisma.customer.findFirst({
     where: {
       phone,

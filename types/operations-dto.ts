@@ -434,7 +434,7 @@ export interface DriverTourCustomerDto {
   id: string;
   code: string;
   name: string;
-  phone: string;
+  phone: string | null;
   address: string;
   city: string;
   latitude?: number | null;
@@ -530,7 +530,7 @@ export interface CustomerDto {
   /** Presentation form of `code`, e.g. "3421/1" (see lib/customer-code.ts). Display only. */
   displayCode: string;
   name: string;
-  phone: string;
+  phone: string | null;
   email?: string | null;
   address: string;
   city: string;
@@ -605,7 +605,7 @@ export interface SupplierPartnerDto {
 export type CustomerMutationInput = {
   code?: string | null;
   name: string;
-  phone: string;
+  phone?: string | null;
   email?: string | null;
   address: string;
   city: string;

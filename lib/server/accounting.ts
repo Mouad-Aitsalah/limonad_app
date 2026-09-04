@@ -2011,6 +2011,12 @@ export function resolveCustomerAuxiliaryCode(code: string) {
     return normalizedCode;
   }
 
+  // Imported customers keep their commercial/POS number in Customer.code.
+  // Their auxiliary ledger account is the textual prefix "3421" plus it.
+  if (/^\d+$/.test(normalizedCode)) {
+    return `3421${normalizedCode}`;
+  }
+
   const legacyMatch = normalizedCode.match(/^CLI-0*(\d+)$/);
   if (legacyMatch) {
     return `${accountingSystemAccountCodes.customerGeneral}${Number(legacyMatch[1])}`;

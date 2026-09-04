@@ -15,7 +15,6 @@ import {
   resolveSupplierAuxiliaryCode,
 } from "@/lib/server/accounting";
 import { AuthServiceError } from "@/lib/server/auth";
-import { resolveOrCreateAccountingLink } from "@/lib/server/business-accounts";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { AccountingAccountType } from "@/types/accounting";
@@ -168,8 +167,7 @@ async function createAccount(
           creationOrigin: "ADMIN",
         },
       });
-      await resolveOrCreateAccountingLink(tx, organizationId, {
-        explicitAccountingAccountId: null,
+      await resolveAuxiliaryAccountId(tx, organizationId, {
         code: resolveCustomerAuxiliaryCode(created.code),
         name: created.name,
         type: "RECEIVABLE",
@@ -189,8 +187,7 @@ async function createAccount(
           active: true,
         },
       });
-      await resolveOrCreateAccountingLink(tx, organizationId, {
-        explicitAccountingAccountId: null,
+      await resolveAuxiliaryAccountId(tx, organizationId, {
         code: resolveSupplierAuxiliaryCode(created.code),
         name: created.name,
         type: "PAYABLE",
@@ -201,8 +198,7 @@ async function createAccount(
 
   if (row.type === "EXPENSE") {
     await prisma.$transaction(async (tx) => {
-      const accountingAccountId = await resolveOrCreateAccountingLink(tx, organizationId, {
-        explicitAccountingAccountId: null,
+      const accountingAccountId = await resolveAuxiliaryAccountId(tx, organizationId, {
         code: row.code,
         name: row.name,
         type: "EXPENSE",
@@ -223,8 +219,7 @@ async function createAccount(
 
   // TREASURY
   await prisma.$transaction(async (tx) => {
-    const accountingAccountId = await resolveOrCreateAccountingLink(tx, organizationId, {
-      explicitAccountingAccountId: null,
+    const accountingAccountId = await resolveAuxiliaryAccountId(tx, organizationId, {
       code: row.code,
       name: row.name,
       type: "TREASURY",
@@ -244,11 +239,58 @@ async function createAccount(
 }
 
 /**
+ * Resolve - or lazily create - the auxiliary chart-of-accounts row a business
+ * account links to. Same contract as the private helper of the same intent in
+ * lib/server/business-accounts.ts, kept local here so this route depends only
+ * on stable, long-exported helpers (normalizeAccountCode) and never on that
+ * module's internals:
+ *   - a non-numeric placeholder code (CHG-/TRE-...) has no ledger account -> null
+ *   - an existing code carrying a different type -> 409, surfaced per-row as CONFLICT
+ *   - otherwise the existing id, or a freshly created row's id
+ * Always scoped to the caller's organisation.
+ */
+async function resolveAuxiliaryAccountId(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  input: { code: string; name: string; type: AccountingAccountType },
+): Promise<string | null> {
+  const normalizedCode = normalizeAccountCode(input.code);
+  if (!/^\d+$/.test(normalizedCode)) return null;
+
+  const existing = await tx.accountingAccount.findFirst({
+    where: { code: normalizedCode, organizationId },
+    select: { id: true, type: true },
+  });
+  if (existing) {
+    if (existing.type !== input.type) {
+      throw new OperationsServiceError(
+        `Le compte comptable ${normalizedCode} existe deja avec un type incompatible.`,
+        409,
+        { code: `Le compte comptable ${normalizedCode} existe deja avec un type incompatible.` },
+      );
+    }
+    return existing.id;
+  }
+
+  const created = await tx.accountingAccount.create({
+    data: {
+      organizationId,
+      code: normalizedCode,
+      name: input.name,
+      type: input.type,
+      isActive: true,
+    },
+    select: { id: true },
+  });
+  return created.id;
+}
+
+/**
  * Organisation-scoped update; returns false when the row no longer exists.
  *
  * When the name changes, the linked auxiliary ledger account is renamed in
  * the SAME transaction (renaming customer "2" to "Yassine Naimi" also
- * renames account 34212). resolveOrCreateAccountingLink /
+ * renames account 34212). resolveAuxiliaryAccountId /
  * ensureAccountingAccountByCode only ever create that account, never rename
  * it, and neither updateCustomer nor updateBusinessAccount touches it - so
  * without this the ledger label would stay stale after an import update.
@@ -320,7 +362,7 @@ async function updateAccount(
 /**
  * Rename the auxiliary ledger account that mirrors a business account.
  * No-op when the code is not a real accounting number (no linked account was
- * ever created - same guard as resolveOrCreateAccountingLink) or when no such
+ * ever created - same guard as resolveAuxiliaryAccountId) or when no such
  * account exists. Scoped to the caller's organisation and to the account
  * type the link was created with, so it can never rename an unrelated row.
  */

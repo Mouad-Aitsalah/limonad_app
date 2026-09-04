@@ -233,7 +233,7 @@ export function CreditNoteForm({
       {selectedCustomer && (
         <div className="grid gap-4 rounded-2xl border border-border bg-muted/40 p-4 md:grid-cols-5">
           <Info label="Code client" value={selectedCustomer.code} />
-          <Info label="Telephone" value={selectedCustomer.phone} />
+          <Info label="Telephone" value={selectedCustomer.phone ?? ""} />
           <Info label="Ville" value={selectedCustomer.city} />
           <Info label="Statut" value={selectedCustomer.status} />
           <Info label="Solde" value={formatCurrency(selectedCustomer.currentBalance)} />

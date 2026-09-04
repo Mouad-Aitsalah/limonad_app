@@ -754,7 +754,7 @@ model Customer {
   id                 String                 @id @default(cuid())
   code               String
   name               String
-  phone              String
+  phone              String?
   email              String?
   address            String
   city               String
