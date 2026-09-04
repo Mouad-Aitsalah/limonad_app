@@ -87,8 +87,6 @@ export async function POST(request: Request) {
         suppliersUpdated: has("SUPPLIER", "UPDATED"),
         expensesCreated: has("EXPENSE", "CREATED"),
         expensesUpdated: has("EXPENSE", "UPDATED"),
-        treasuriesCreated: has("TREASURY", "CREATED"),
-        treasuriesUpdated: has("TREASURY", "UPDATED"),
       },
       rows: results,
     });
@@ -196,40 +194,18 @@ async function createAccount(
     return;
   }
 
-  if (row.type === "EXPENSE") {
-    await prisma.$transaction(async (tx) => {
-      const accountingAccountId = await resolveAuxiliaryAccountId(tx, organizationId, {
-        code: row.code,
-        name: row.name,
-        type: "EXPENSE",
-      });
-      await tx.expenseAccount.create({
-        data: {
-          organizationId,
-          code: row.code,
-          name: row.name,
-          balance: 0,
-          accountingAccountId,
-          active: true,
-        },
-      });
-    });
-    return;
-  }
-
-  // TREASURY
+  // EXPENSE (seul type restant : CUSTOMER et SUPPLIER ont retourné plus haut)
   await prisma.$transaction(async (tx) => {
     const accountingAccountId = await resolveAuxiliaryAccountId(tx, organizationId, {
       code: row.code,
       name: row.name,
-      type: "TREASURY",
+      type: "EXPENSE",
     });
-    await tx.treasuryAccount.create({
+    await tx.expenseAccount.create({
       data: {
         organizationId,
         code: row.code,
         name: row.name,
-        kind: "CASH",
         balance: 0,
         accountingAccountId,
         active: true,
@@ -337,23 +313,13 @@ async function updateAccount(
       return count > 0;
     }
 
-    if (row.type === "EXPENSE") {
-      const { count } = await tx.expenseAccount.updateMany({
-        where: { id, organizationId },
-        data: { name: row.name },
-      });
-      if (count > 0 && nameChanged) {
-        await syncAuxiliaryAccountName(tx, organizationId, row.code, "EXPENSE", row.name);
-      }
-      return count > 0;
-    }
-
-    const { count } = await tx.treasuryAccount.updateMany({
+    // EXPENSE (seul type restant : CUSTOMER et SUPPLIER ont retourné plus haut)
+    const { count } = await tx.expenseAccount.updateMany({
       where: { id, organizationId },
       data: { name: row.name },
     });
     if (count > 0 && nameChanged) {
-      await syncAuxiliaryAccountName(tx, organizationId, row.code, "TREASURY", row.name);
+      await syncAuxiliaryAccountName(tx, organizationId, row.code, "EXPENSE", row.name);
     }
     return count > 0;
   });

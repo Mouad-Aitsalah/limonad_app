@@ -18,7 +18,11 @@ import { normalizePhone } from "@/lib/server/customers";
  * there is no code path that reads or writes another organisation's rows.
  */
 
-export const accountImportTypes = ["CUSTOMER", "SUPPLIER", "EXPENSE", "TREASURY"] as const;
+// Import volontairement limité à ces 3 types. TREASURY existe dans
+// l'architecture mais n'est PAS importable depuis ce fichier Excel ; REVENUE
+// et EMPLOYEE non plus. Toute autre valeur de Type_Compte est rejetée en
+// amont (frontend -> ERROR) et refusée ici par accountImportRowSchema.
+export const accountImportTypes = ["CUSTOMER", "SUPPLIER", "EXPENSE"] as const;
 export type AccountImportType = (typeof accountImportTypes)[number];
 
 /** A file with more lines than this is rejected outright. */
@@ -43,7 +47,7 @@ export type AccountImportRow = z.infer<typeof accountImportRowSchema>;
  * and its accounting (auxiliary ledger) account is the textual prefix
  * "3421" + that number ("34212"). A code that is already a full "3421..."
  * number is returned unchanged, so an old "34212" never becomes "342134212".
- * Suppliers / charges / tresoreries keep their code exactly as written.
+ * Suppliers and charges keep their code exactly as written.
  * This mirrors accounting#resolveCustomerAuxiliaryCode, kept here so the
  * preview can display the target account without pulling in the whole
  * accounting module.
@@ -104,7 +108,7 @@ export async function classifyAccountImportRows(
     ...new Set(rows.flatMap((row) => (row.type === "CUSTOMER" && row.phone ? [row.phone] : []))),
   ];
 
-  const [customers, suppliers, expenses, treasuries] = await Promise.all([
+  const [customers, suppliers, expenses] = await Promise.all([
     prisma.customer.findMany({
       where: {
         organizationId,
@@ -124,10 +128,6 @@ export async function classifyAccountImportRows(
       where: { organizationId, code: { in: codes } },
       select: { id: true, code: true, name: true },
     }),
-    prisma.treasuryAccount.findMany({
-      where: { organizationId, code: { in: codes } },
-      select: { id: true, code: true, name: true },
-    }),
   ]);
 
   const by = (list: ExistingAccount[]) => new Map(list.map((row) => [row.code, row]));
@@ -135,7 +135,6 @@ export async function classifyAccountImportRows(
     CUSTOMER: by(customers),
     SUPPLIER: by(suppliers),
     EXPENSE: by(expenses),
-    TREASURY: by(treasuries),
   };
 
   const classified: ClassifiedAccountRow[] = rows.map((row) => {

@@ -6,7 +6,9 @@ import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/button";
 
 type Status = "VALID" | "WARNING" | "ERROR";
-type AccountType = "CUSTOMER" | "SUPPLIER" | "EXPENSE" | "TREASURY" | null;
+// Import volontairement limité à ces 3 types. Trésorerie / Produit /
+// Employé / etc. ne sont PAS importables depuis ce fichier -> ERROR.
+type AccountType = "CUSTOMER" | "SUPPLIER" | "EXPENSE" | null;
 type ImportableType = Exclude<AccountType, null>;
 type Row = { line: number; code: string; name: string; excelType: string; type: AccountType; phone: string | null; accountingCode: string; status: Status; message: string };
 type ServerStatus = "NEW" | "EXISTING_UNCHANGED" | "EXISTING_UPDATE" | "CONFLICT" | "ERROR";
@@ -20,16 +22,35 @@ type ImportReport = {
     customersCreated: number; customersUpdated: number;
     suppliersCreated: number; suppliersUpdated: number;
     expensesCreated: number; expensesUpdated: number;
-    treasuriesCreated: number; treasuriesUpdated: number;
   };
   rows: { excelRow: number; code: string; name: string; type: ImportableType; accountingCode: string; status: ImportRowStatus; message: string }[];
 };
 
 function text(value: unknown) { return value == null ? "" : String(value).trim(); }
 function phone(value: unknown) { const valueText = text(value); return valueText || null; }
+
+/**
+ * Normalise un libellé Type_Compte pour la comparaison : minuscules, trim,
+ * espaces internes réduits. " CHARGES", "Charge" -> "charges", "charge".
+ */
+function normalizeTypeLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+// Seuls libellés Excel importables -> type métier interne (singulier +
+// pluriel FR, code interne EN). Tout autre libellé (Produit, Trésorerie,
+// Employé, Vente, ...) n'est PAS mappé et devient une ERREUR dans la preview.
+const TYPE_BY_LABEL: Record<string, ImportableType> = {
+  client: "CUSTOMER", clients: "CUSTOMER", customer: "CUSTOMER", customers: "CUSTOMER",
+  fournisseur: "SUPPLIER", fournisseurs: "SUPPLIER", supplier: "SUPPLIER", suppliers: "SUPPLIER",
+  charge: "EXPENSE", charges: "EXPENSE", expense: "EXPENSE", expenses: "EXPENSE",
+};
+
 function mapType(value: string): AccountType {
-  const normalized = value.trim().toLocaleLowerCase("fr-FR");
-  return normalized === "client" ? "CUSTOMER" : normalized === "fournisseur" ? "SUPPLIER" : normalized === "charge" ? "EXPENSE" : normalized === "tresorerie" || normalized === "trésorerie" ? "TREASURY" : null;
+  return TYPE_BY_LABEL[normalizeTypeLabel(value)] ?? null;
 }
 function accountingCode(code: string, type: AccountType) { return type === "CUSTOMER" ? (/^3421\d+$/.test(code) ? code : `3421${code}`) : code; }
 function formatFileSize(bytes: number) {
@@ -91,7 +112,7 @@ export function AccountsImportPreview() {
       const source = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
       const parsed = source.map((item, index) => {
         const code = text(item.N_compte); const name = text(item.Nom_Compte); const excelType = text(item.Type_Compte); const type = mapType(excelType);
-        const messages = [!code && "N_compte vide", !name && "Nom_Compte vide", !excelType && "Type_Compte vide", excelType && !type && `Type_Compte inconnu : ${excelType}`].filter(Boolean) as string[];
+        const messages = [!code && "N_compte vide", !name && "Nom_Compte vide", !excelType && "Type_Compte vide", excelType && !type && `Type_Compte non importable : ${excelType}`].filter(Boolean) as string[];
         const phoneValue = phone(item.Tel);
         return { line: index + 2, code, name, excelType, type, phone: phoneValue, accountingCode: accountingCode(code, type), status: messages.length ? "ERROR" : phoneValue ? "VALID" : "WARNING", message: messages.join(" ; ") || (phoneValue ? "Valide" : "Telephone absent") } as Row;
       });
@@ -153,6 +174,10 @@ export function AccountsImportPreview() {
       <div>
         <h1 className="font-heading text-2xl font-semibold">Import des comptes</h1>
         <p className="text-sm text-muted-foreground">Feuille <code>Comptes</code> — colonnes N_compte, Nom_Compte, Type_Compte, Tel.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Types_Compte importables : <span className="font-medium text-foreground">Client</span>, <span className="font-medium text-foreground">Fournisseur</span>, <span className="font-medium text-foreground">Charge</span>.
+          Tout autre libellé (Produit, Trésorerie, Employé, Vente…) est refusé et marqué <span className="font-medium text-foreground">Erreur</span>.
+        </p>
       </div>
 
       <div>
@@ -237,7 +262,6 @@ export function AccountsImportPreview() {
                 <p>Clients — créés : {importReport.byType.customersCreated} · mis à jour : {importReport.byType.customersUpdated}</p>
                 <p>Fournisseurs — créés : {importReport.byType.suppliersCreated} · mis à jour : {importReport.byType.suppliersUpdated}</p>
                 <p>Charges — créées : {importReport.byType.expensesCreated} · mises à jour : {importReport.byType.expensesUpdated}</p>
-                <p>Trésoreries — créées : {importReport.byType.treasuriesCreated} · mises à jour : {importReport.byType.treasuriesUpdated}</p>
               </div>
               <p>Inchangés : {importReport.summary.unchanged} · Conflits : {importReport.summary.conflicts} · Erreurs : {importReport.summary.errors}</p>
               {problemRows.length > 0 && (
