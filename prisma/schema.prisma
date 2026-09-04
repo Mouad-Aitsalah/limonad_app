@@ -216,6 +216,25 @@ enum PurchaseStatus {
   CANCELLED
 }
 
+// BI Phase 2A - operating expenses (loyer, carburant, electricite...),
+// deliberately separate from Purchase (merchandise). Same 3-state shape as
+// PurchaseStatus/TruckLoadingStatus: DRAFT is editable, VALIDATED counts
+// toward the "Charges" KPI, CANCELLED never does. Ledger posting is NOT
+// wired yet (Phase 2A-bis, by decision) - see Expense.accountingEntryId.
+enum ExpenseStatus {
+  DRAFT
+  VALIDATED
+  CANCELLED
+}
+
+// BI Phase 2A - a customer settling (part of) their credit balance.
+// VALIDATED counts against receivables; CANCELLED is a reversed/undone
+// settlement and never does.
+enum CustomerSettlementStatus {
+  VALIDATED
+  CANCELLED
+}
+
 enum AccountingAccountType {
   ASSET
   LIABILITY
@@ -283,48 +302,53 @@ enum DiscrepancyStatus {
 }
 
 model User {
-  organizationId            String?
-  organization              Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  id                        String                @id @default(cuid())
-  firstName                 String
-  lastName                  String
-  fullName                  String
-  email                     String                @unique
-  passwordHash              String
-  phone                     String?
-  role                      UserRole
-  status                    UserStatus            @default(ACTIVE)
-  depotId                   String?
-  depot                     Depot?                @relation(fields: [depotId], references: [id], onDelete: SetNull)
-  driverProfile             Driver?
-  sessions                  Session[]
-  stockMovements            StockMovement[]       @relation("StockMovementCreatedBy")
-  createdCustomers          Customer[]            @relation("CustomerCreatedBy")
-  createdTours              Tour[]                @relation("TourCreatedBy")
-  createdLoadings           TruckLoading[]        @relation("TruckLoadingCreatedBy")
-  validatedLoadings         TruckLoading[]        @relation("TruckLoadingValidatedBy")
-  updatedLoadings           TruckLoading[]        @relation("TruckLoadingUpdatedBy")
-  createdSales              Sale[]                @relation("SaleCreatedBy")
-  openedPosSessions         PosSession[]          @relation("PosSessionOpenedBy")
-  createdInventories        Inventory[]           @relation("InventoryCreatedBy")
-  receivedPayments          Payment[]             @relation("PaymentReceivedBy")
-  createdCreditNotes        CreditNote[]          @relation("CreditNoteCreatedBy")
-  validatedCreditNotes      CreditNote[]          @relation("CreditNoteValidatedBy")
-  createdPurchases          Purchase[]            @relation("PurchaseCreatedBy")
-  validatedPurchases        Purchase[]            @relation("PurchaseValidatedBy")
-  createdCashDeposits       CashDeposit[]         @relation("CashDepositCreatedBy")
-  createdEmployeeTxns       EmployeeTransaction[] @relation("EmployeeTransactionCreatedBy")
-  validatedEmployeeTxns     EmployeeTransaction[] @relation("EmployeeTransactionValidatedBy")
-  cancelledEmployeeTxns     EmployeeTransaction[] @relation("EmployeeTransactionCancelledBy")
-  createdAccountingEntries  AccountingEntry[]     @relation("AccountingEntryCreatedBy")
-  updatedAccountingSettings AccountingSettings[]  @relation("AccountingSettingsUpdatedBy")
-  controlledClosures        TourClosure[]         @relation("TourClosureControlledBy")
-  validatedClosures         TourClosure[]         @relation("TourClosureValidatedBy")
-  declaredDiscrepancies     Discrepancy[]         @relation("DiscrepancyDeclaredBy")
-  validatedDiscrepancies    Discrepancy[]         @relation("DiscrepancyValidatedBy")
-  auditLogs                 AuditLog[]
-  createdAt                 DateTime              @default(now())
-  updatedAt                 DateTime              @updatedAt
+  organizationId               String?
+  organization                 Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  id                           String                @id @default(cuid())
+  firstName                    String
+  lastName                     String
+  fullName                     String
+  email                        String                @unique
+  passwordHash                 String
+  phone                        String?
+  role                         UserRole
+  status                       UserStatus            @default(ACTIVE)
+  depotId                      String?
+  depot                        Depot?                @relation(fields: [depotId], references: [id], onDelete: SetNull)
+  driverProfile                Driver?
+  sessions                     Session[]
+  stockMovements               StockMovement[]       @relation("StockMovementCreatedBy")
+  createdCustomers             Customer[]            @relation("CustomerCreatedBy")
+  createdTours                 Tour[]                @relation("TourCreatedBy")
+  createdLoadings              TruckLoading[]        @relation("TruckLoadingCreatedBy")
+  validatedLoadings            TruckLoading[]        @relation("TruckLoadingValidatedBy")
+  updatedLoadings              TruckLoading[]        @relation("TruckLoadingUpdatedBy")
+  createdSales                 Sale[]                @relation("SaleCreatedBy")
+  openedPosSessions            PosSession[]          @relation("PosSessionOpenedBy")
+  createdInventories           Inventory[]           @relation("InventoryCreatedBy")
+  receivedPayments             Payment[]             @relation("PaymentReceivedBy")
+  createdCreditNotes           CreditNote[]          @relation("CreditNoteCreatedBy")
+  validatedCreditNotes         CreditNote[]          @relation("CreditNoteValidatedBy")
+  createdPurchases             Purchase[]            @relation("PurchaseCreatedBy")
+  validatedPurchases           Purchase[]            @relation("PurchaseValidatedBy")
+  createdCashDeposits          CashDeposit[]         @relation("CashDepositCreatedBy")
+  createdEmployeeTxns          EmployeeTransaction[] @relation("EmployeeTransactionCreatedBy")
+  validatedEmployeeTxns        EmployeeTransaction[] @relation("EmployeeTransactionValidatedBy")
+  cancelledEmployeeTxns        EmployeeTransaction[] @relation("EmployeeTransactionCancelledBy")
+  createdAccountingEntries     AccountingEntry[]     @relation("AccountingEntryCreatedBy")
+  updatedAccountingSettings    AccountingSettings[]  @relation("AccountingSettingsUpdatedBy")
+  controlledClosures           TourClosure[]         @relation("TourClosureControlledBy")
+  validatedClosures            TourClosure[]         @relation("TourClosureValidatedBy")
+  declaredDiscrepancies        Discrepancy[]         @relation("DiscrepancyDeclaredBy")
+  validatedDiscrepancies       Discrepancy[]         @relation("DiscrepancyValidatedBy")
+  auditLogs                    AuditLog[]
+  createdExpenses              Expense[]             @relation("ExpenseCreatedBy")
+  validatedExpenses            Expense[]             @relation("ExpenseValidatedBy")
+  cancelledExpenses            Expense[]             @relation("ExpenseCancelledBy")
+  createdCustomerSettlements   CustomerSettlement[]  @relation("CustomerSettlementCreatedBy")
+  cancelledCustomerSettlements CustomerSettlement[]  @relation("CustomerSettlementCancelledBy")
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
 
   @@index([organizationId])
   @@index([depotId])
@@ -409,6 +433,8 @@ model Organization {
   discrepancies        Discrepancy[]
   auditLogs            AuditLog[]
   inventories          Inventory[]
+  expenses             Expense[]
+  customerSettlements  CustomerSettlement[]
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
 }
@@ -543,6 +569,7 @@ model Supplier {
   purchases      Purchase[]
   creditNotes    CreditNote[]
   contacts       Contact[]
+  expenses       Expense[]
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -596,6 +623,7 @@ model ExpenseAccount {
   accountingAccountId String?
   accountingAccount   AccountingAccount? @relation("ExpenseAccountLinkedAccountingAccount", fields: [accountingAccountId], references: [id], onDelete: SetNull)
   active              Boolean            @default(true)
+  expenses            Expense[]
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -603,6 +631,56 @@ model ExpenseAccount {
   @@index([organizationId])
   @@index([accountingAccountId])
   @@index([active])
+}
+
+// BI Phase 2A - a single operating-expense transaction (loyer, carburant,
+// electricite, telephone, reparation, transport...), deliberately separate
+// from Purchase (merchandise/stock). expenseAccountId is the charge
+// CATEGORY, reusing the existing ExpenseAccount directory rather than
+// inventing a second category concept. accountingEntryId is wired but never
+// populated yet - ledger posting is Phase 2A-bis by decision, kept optional
+// here so that follow-up needs no further migration.
+model Expense {
+  organizationId    String
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id                String           @id @default(cuid())
+  expenseNumber     String
+  expenseAccountId  String
+  expenseAccount    ExpenseAccount   @relation(fields: [expenseAccountId], references: [id], onDelete: Restrict)
+  date              DateTime         @db.Date
+  description       String
+  supplierId        String?
+  supplier          Supplier?        @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  amountHT          Decimal          @db.Decimal(12, 2)
+  taxAmount         Decimal          @default(0) @db.Decimal(12, 2)
+  amountTTC         Decimal          @db.Decimal(12, 2)
+  method            PaymentMethod?
+  reference         String?
+  note              String?
+  status            ExpenseStatus    @default(DRAFT)
+  idempotencyKey    String?
+  accountingEntryId String?          @unique
+  accountingEntry   AccountingEntry? @relation(fields: [accountingEntryId], references: [id], onDelete: SetNull)
+  createdByUserId   String
+  createdBy         User             @relation("ExpenseCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  validatedByUserId String?
+  validatedBy       User?            @relation("ExpenseValidatedBy", fields: [validatedByUserId], references: [id], onDelete: SetNull)
+  validatedAt       DateTime?
+  cancelledByUserId String?
+  cancelledBy       User?            @relation("ExpenseCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
+  cancelledAt       DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([organizationId, expenseNumber])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([expenseAccountId])
+  @@index([supplierId])
+  @@index([status])
+  // BI Phase 2A: the "Charges" KPI filters by organizationId + a date range
+  // and status = VALIDATED.
+  @@index([organizationId, date])
 }
 
 model TreasuryAccount {
@@ -780,6 +858,7 @@ model Customer {
   sales              Sale[]
   creditNotes        CreditNote[]
   tourVisits         TourCustomerVisit[]
+  settlements        CustomerSettlement[]
   createdAt          DateTime               @default(now())
   updatedAt          DateTime               @updatedAt
 
@@ -794,6 +873,48 @@ model Customer {
   // organizationId ORDER BY createdAt DESC LIMIT N) - measured ~90x faster
   // at 24k rows bench-scale (seq scan+sort -> index scan). Additive only.
   @@index([organizationId, createdAt(sort: Desc)])
+}
+
+// BI Phase 2A - a customer paying down (part of) their credit balance.
+// Deliberately its own model rather than reusing Payment: Payment.saleId is
+// mandatory (every payment is tied to one specific sale), so it cannot
+// represent a free-standing settlement against a customer's running balance.
+// The BI source of truth for receivables is NEVER Customer.currentBalance
+// (historically increment-only, never decremented - see
+// lib/server/customer-settlements.ts#getCustomerDebt) - it is always
+// recomputed from Sale.creditAmount minus VALIDATED settlements (minus
+// customer credit notes, see that same function's doc comment).
+// currentBalance is kept as an operational cache only (used by the credit
+// -limit check on new credit sales) and is decremented/incremented here.
+model CustomerSettlement {
+  organizationId    String
+  organization      Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id                String                   @id @default(cuid())
+  settlementNumber  String
+  customerId        String
+  customer          Customer                 @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  date              DateTime                 @db.Date
+  amount            Decimal                  @db.Decimal(12, 2)
+  method            PaymentMethod
+  reference         String?
+  note              String?
+  status            CustomerSettlementStatus @default(VALIDATED)
+  idempotencyKey    String?
+  accountingEntryId String?                  @unique
+  accountingEntry   AccountingEntry?         @relation(fields: [accountingEntryId], references: [id], onDelete: SetNull)
+  createdByUserId   String
+  createdBy         User                     @relation("CustomerSettlementCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  cancelledByUserId String?
+  cancelledBy       User?                    @relation("CustomerSettlementCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
+  cancelledAt       DateTime?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  @@unique([organizationId, settlementNumber])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([customerId])
+  @@index([organizationId, date])
 }
 
 model Tour {
@@ -921,20 +1042,20 @@ model TourStockCount {
 }
 
 model TourLocationPing {
-  id         String   @id @default(cuid())
-  tourId     String
-  tour       Tour     @relation(fields: [tourId], references: [id], onDelete: Cascade)
-  latitude   Decimal  @db.Decimal(10, 7)
-  longitude  Decimal  @db.Decimal(10, 7)
-  accuracy   Decimal? @db.Decimal(10, 2)
-  speed      Decimal? @db.Decimal(10, 2)
-  heading    Decimal? @db.Decimal(10, 2)
+  id           String   @id @default(cuid())
+  tourId       String
+  tour         Tour     @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  latitude     Decimal  @db.Decimal(10, 7)
+  longitude    Decimal  @db.Decimal(10, 7)
+  accuracy     Decimal? @db.Decimal(10, 2)
+  speed        Decimal? @db.Decimal(10, 2)
+  heading      Decimal? @db.Decimal(10, 2)
   // recordedAt = the moment the phone actually captured the fix (client
   // supplied). createdAt = the moment the server stored it. They differ when
   // an offline-queued point is synced later - the trace stays ordered by
   // recordedAt, so a 10:05 fix synced at 10:15 still sits at 10:05.
-  recordedAt DateTime @default(now())
-  createdAt  DateTime @default(now())
+  recordedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
   // Phone-generated stable id for one physical GPS fix, identical across
   // every (re)send. Lets the offline batch endpoint be idempotent: a retried
   // batch collides on @@unique([tourId, clientPingId]) and is skipped. NULL
@@ -989,33 +1110,33 @@ model PosSession {
 }
 
 model CashDeposit {
-  organizationId  String
-  organization    Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  id              String                    @id @default(cuid())
-  number          String
-  date            DateTime                  @db.Date
-  depotId         String
-  depot           Depot                     @relation(fields: [depotId], references: [id], onDelete: Restrict)
-  posSessionId    String?
-  posSession      PosSession?               @relation(fields: [posSessionId], references: [id], onDelete: SetNull)
-  cashTotal       Decimal                   @default(0) @db.Decimal(12, 2)
-  checkTotal      Decimal                   @default(0) @db.Decimal(12, 2)
-  total           Decimal                   @default(0) @db.Decimal(12, 2)
-  cashSales       Decimal?                  @db.Decimal(12, 2)
-  cashExpenses    Decimal?                  @db.Decimal(12, 2)
-  availableCash   Decimal?                  @db.Decimal(12, 2)
-  suggestedDeposit Decimal?                 @db.Decimal(12, 2)
-  suggestedCashReserve Decimal?             @db.Decimal(12, 2)
-  countedCash     Decimal?                  @db.Decimal(12, 2)
-  cashDifference  Decimal?                  @db.Decimal(12, 2)
-  cashRemaining   Decimal?                  @db.Decimal(12, 2)
-  status          CashDepositStatus         @default(VALIDATED)
-  notes           String?
-  createdByUserId String
-  createdBy       User                      @relation("CashDepositCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  denominations   CashDepositDenomination[]
-  createdAt       DateTime                  @default(now())
-  updatedAt       DateTime                  @updatedAt
+  organizationId       String
+  organization         Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id                   String                    @id @default(cuid())
+  number               String
+  date                 DateTime                  @db.Date
+  depotId              String
+  depot                Depot                     @relation(fields: [depotId], references: [id], onDelete: Restrict)
+  posSessionId         String?
+  posSession           PosSession?               @relation(fields: [posSessionId], references: [id], onDelete: SetNull)
+  cashTotal            Decimal                   @default(0) @db.Decimal(12, 2)
+  checkTotal           Decimal                   @default(0) @db.Decimal(12, 2)
+  total                Decimal                   @default(0) @db.Decimal(12, 2)
+  cashSales            Decimal?                  @db.Decimal(12, 2)
+  cashExpenses         Decimal?                  @db.Decimal(12, 2)
+  availableCash        Decimal?                  @db.Decimal(12, 2)
+  suggestedDeposit     Decimal?                  @db.Decimal(12, 2)
+  suggestedCashReserve Decimal?                  @db.Decimal(12, 2)
+  countedCash          Decimal?                  @db.Decimal(12, 2)
+  cashDifference       Decimal?                  @db.Decimal(12, 2)
+  cashRemaining        Decimal?                  @db.Decimal(12, 2)
+  status               CashDepositStatus         @default(VALIDATED)
+  notes                String?
+  createdByUserId      String
+  createdBy            User                      @relation("CashDepositCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  denominations        CashDepositDenomination[]
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
 
   @@unique([organizationId, number])
   @@index([organizationId])
@@ -1169,6 +1290,9 @@ model Sale {
   @@index([depotId])
   @@index([truckId])
   @@index([posSessionId])
+  // BI Phase 2A: covers the CA/marge/ventes/clients-actifs helpers, which
+  // all filter by organizationId + a validatedAt range.
+  @@index([organizationId, validatedAt])
 }
 
 model SaleLine {
@@ -1179,6 +1303,14 @@ model SaleLine {
   product         Product          @relation(fields: [productId], references: [id], onDelete: Restrict)
   quantity        Int
   unitPriceHT     Decimal          @db.Decimal(12, 2)
+  // BI Phase 2A: snapshot of Product.purchasePrice (HT) at the moment this
+  // line is created - never recomputed afterwards (a DRAFT collected later
+  // keeps the cost it was created with; see createCounterSale/
+  // createDriverSale). Historical rows created before this column existed
+  // were backfilled with the CURRENT purchasePrice at migration time (an
+  // approximation); every row created since carries the exact cost of the
+  // day. Gross margin must always read THIS column, never join Product.
+  unitCostHT      Decimal          @db.Decimal(12, 2)
   discountRate    Decimal          @default(0) @db.Decimal(5, 2)
   discountAmount  Decimal          @default(0) @db.Decimal(12, 2)
   taxRate         Decimal          @db.Decimal(5, 2)
@@ -1336,6 +1468,9 @@ model Purchase {
   @@index([supplierId])
   @@index([depotId])
   @@index([createdByUserId])
+  // BI Phase 2A: covers the "achats" helper, filtered by organizationId +
+  // an orderDate range.
+  @@index([organizationId, orderDate])
 }
 
 model PurchaseLine {
@@ -1412,6 +1547,11 @@ model AccountingEntry {
   reversedEntry       AccountingEntry?      @relation("AccountingEntryReversal", fields: [reversedEntryId], references: [id], onDelete: SetNull)
   reversalEntry       AccountingEntry?      @relation("AccountingEntryReversal")
   employeeTransaction EmployeeTransaction?
+  // BI Phase 2A: not populated yet - Expense/CustomerSettlement ledger
+  // posting is Phase 2A-bis by decision. The relation exists now so that
+  // follow-up needs no further migration.
+  expense             Expense?
+  customerSettlement  CustomerSettlement?
   lines               AccountingEntryLine[]
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
@@ -1640,13 +1780,11 @@ model InventoryLine {
  * Category, Driver employee codes, Supplier/ExpenseAccount/TreasuryAccount
  * codes - see the Phase 3 report for the full inventory and each one's
  * exact (documentType, scopeKey) mapping).
- *
  * scopeKey carries whatever sub-scope a given number format already used
  * (a calendar day "20260830", a year "2026", a payroll month "202608", or
  * "" when the format has no sub-scope beyond the organization) - the SAME
  * counter never mixes two different sub-scopes, exactly like the bespoke
  * per-type logic it replaces.
- *
  * Reservation is a single atomic
  * `INSERT ... ON CONFLICT (...) DO UPDATE SET "currentValue" = "currentValue" + 1 RETURNING "currentValue"`
  * (lib/server/document-sequence.ts's reserveDocumentSequence) - safe under

@@ -775,11 +775,16 @@ async function main() {
         lines: {
           create: invoice.lignes.map((line, index) => {
             const lineTotals = computeLineTotals(line);
+            // BI Phase 2A: seed data has no recorded historical cost either,
+            // so this mirrors the migration's own backfill - the product's
+            // current purchasePrice, an approximation for demo data.
+            const product = products.find((item) => item.id === line.productId);
             return {
               id: `sale-line-${invoice.id}-${index}`,
               productId: line.productId,
               quantity: line.quantite,
               unitPriceHT: line.prixUnitaire,
+              unitCostHT: product?.prixAchatHT ?? line.prixUnitaire,
               discountRate: line.remisePercent,
               discountAmount: round(line.prixUnitaire * line.quantite * (line.remisePercent / 100)),
               taxRate: line.tauxTVA,

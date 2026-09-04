@@ -104,4 +104,10 @@ export const DocumentType = {
   DriverEmployeeCode: "DRIVER_EMPLOYEE_CODE", // users.ts nextDriverEmployeeCode (DRV-0001, global per org)
   Inventory: "INVENTORY", // inventories.ts inline count()+1 (INV-0001, global per org)
   DepotCode: "DEPOT_CODE", // depots.ts provisionDepot (DEP-001, global per org; the linked StockLocation reuses it as SL-DEP-001)
+  // BI Phase 2A. NOTE: "CHG-" was NOT reused for Expense - it already means
+  // two different things in this codebase (ExpenseAccountCode's CHG-0001
+  // above, and TruckLoading's CHG/N/YYYY / CHG-000001 numbering) - a third
+  // meaning would make the same visible prefix ambiguous across screens.
+  ExpenseNumber: "EXPENSE_NUMBER", // expenses.ts nextExpenseNumber (DPN-000001, global per org)
+  CustomerSettlementNumber: "CUSTOMER_SETTLEMENT_NUMBER", // customer-settlements.ts nextSettlementNumber (REGL-000001, global per org)
 } as const;

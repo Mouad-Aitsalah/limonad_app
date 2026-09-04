@@ -283,6 +283,7 @@ export async function createCounterSale(
           id: true,
           salePrice: true,
           taxRate: true,
+          purchasePrice: true,
         },
       });
       if (products.length !== productIds.length) {
@@ -293,6 +294,11 @@ export async function createCounterSale(
         const product = products.find((item) => item.id === line.productId);
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
         const unitPriceHT = product.salePrice.toNumber();
+        // BI Phase 2A: snapshot of the cost of the day, frozen on the line
+        // forever - see SaleLine.unitCostHT's doc comment. Never touched
+        // again by collectSaleCore (DRAFT -> PAID/CREDIT only updates the
+        // Sale row, never SaleLine).
+        const unitCostHT = product.purchasePrice.toNumber();
         const discountRate = line.discountRate ?? 0;
         // F8-D: grossHT is a raw multiplication (unitPriceHT x quantity),
         // checked before rounding/further use - a large-but-otherwise-valid
@@ -313,6 +319,7 @@ export async function createCounterSale(
         return {
           ...line,
           unitPriceHT,
+          unitCostHT,
           discountRate,
           discountAmount,
           taxRate,
@@ -442,6 +449,7 @@ export async function createCounterSale(
               productId: line.productId,
               quantity: line.quantity,
               unitPriceHT: line.unitPriceHT,
+              unitCostHT: line.unitCostHT,
               discountRate: line.discountRate,
               discountAmount: line.discountAmount,
               taxRate: line.taxRate,
