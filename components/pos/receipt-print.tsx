@@ -10,6 +10,11 @@ type ReceiptPrintProps = {
   paperWidth?: "58" | "80";
 };
 
+// Nom affiché sous le logo sur le ticket / la facture imprimée du POS.
+// Volontairement figé ici : il ne suit pas le nom de l'organisation
+// (identity.tradeName / identity.name) - seul ce ticket doit dire ceci.
+const RECEIPT_BRAND_NAME = "AITSALAH STORE";
+
 const paymentLabels: Record<string, string> = {
   CASH: "Espèces",
   CARD: "Carte",
@@ -62,9 +67,6 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
   // A sale still DRAFT has not been collected yet: the payment method on the
   // row is only a placeholder, so the ticket must not look like a paid one.
   const awaitingPayment = sale.status === "DRAFT";
-  // Fall back to a readable hardcoded brand only until the identity loads,
-  // so a ticket never prints without a header.
-  const brandName = identity?.tradeName || identity?.name || "AITSALAH MARKET";
 
   return (
     <section
@@ -78,11 +80,11 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={identity.logoUrl}
-              alt={brandName}
+              alt={RECEIPT_BRAND_NAME}
               className="receipt-print-logo"
             />
           ) : null}
-          <p className="receipt-print-brand">{brandName}</p>
+          <p className="receipt-print-brand">{RECEIPT_BRAND_NAME}</p>
         </header>
 
         <div className="receipt-print-meta">
