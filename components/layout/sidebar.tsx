@@ -48,33 +48,32 @@ export function Sidebar() {
         )}
       >
         <div className={cn("border-b border-[var(--sidebar-border)] px-5 py-6", collapsed && "px-3")}>
-          <Link
-            href={homeHref}
-            className={cn("flex items-start gap-3", collapsed && "justify-center")}
-          >
+          <Link href={homeHref} className="flex flex-col items-center gap-3">
             {identity?.logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={identity.logoUrl}
                 alt={companyName}
-                className="h-12 w-12 shrink-0 rounded-[18px] bg-white/95 object-contain p-1 shadow-[0_18px_35px_rgba(9,21,36,0.28)]"
+                className={cn(
+                  "shrink-0 rounded-2xl bg-white/95 object-contain shadow-[0_18px_35px_rgba(9,21,36,0.28)]",
+                  collapsed ? "h-12 w-12 p-1" : "h-20 w-auto max-w-[200px] p-2",
+                )}
               />
             ) : (
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-[linear-gradient(135deg,#2b6cb0_0%,#0f7a5d_100%)] text-lg font-bold text-white shadow-[0_18px_35px_rgba(9,21,36,0.28)]">
+              <div
+                className={cn(
+                  "flex shrink-0 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#2b6cb0_0%,#0f7a5d_100%)] font-bold text-white shadow-[0_18px_35px_rgba(9,21,36,0.28)]",
+                  collapsed ? "h-12 w-12 text-lg" : "h-20 w-20 text-3xl",
+                )}
+              >
                 {companyName.charAt(0).toUpperCase() || "C"}
               </div>
             )}
 
             {!collapsed && (
-              <div className="min-w-0">
-                <p className="page-eyebrow truncate text-white/56">{companyName}</p>
-                <p className="mt-2 text-xl font-semibold tracking-[-0.03em] text-white">
-                  COMDIS MANAGER
-                </p>
-                <p className="mt-2 max-w-[190px] text-sm leading-6 text-white/60">
-                  Gestion du stock, des ventes, des chauffeurs et de la comptabilite.
-                </p>
-              </div>
+              <p className="text-center text-xl font-semibold tracking-[-0.03em] text-white">
+                COMDIS MANAGER
+              </p>
             )}
           </Link>
         </div>
