@@ -32,9 +32,18 @@ function mapType(value: string): AccountType {
   return normalized === "client" ? "CUSTOMER" : normalized === "fournisseur" ? "SUPPLIER" : normalized === "charge" ? "EXPENSE" : normalized === "tresorerie" || normalized === "trésorerie" ? "TREASURY" : null;
 }
 function accountingCode(code: string, type: AccountType) { return type === "CUSTOMER" ? (/^3421\d+$/.test(code) ? code : `3421${code}`) : code; }
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} o`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
+}
+
+const FILE_ACCEPT = ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel";
 
 export function AccountsImportPreview() {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = React.useState("");
+  const [fileSize, setFileSize] = React.useState<number | null>(null);
   const [rows, setRows] = React.useState<Row[]>([]);
   const [error, setError] = React.useState("");
   const [serverRows, setServerRows] = React.useState<Map<number, ServerRow>>(new Map());
@@ -63,8 +72,18 @@ export function AccountsImportPreview() {
     } finally { setServerLoading(false); }
   }
 
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0] ?? null;
+    // Réinitialise tout de suite : sans ça, resélectionner le même fichier
+    // ne redéclenche pas onChange (la value ne change pas).
+    input.value = "";
+    if (!file) return;
+    void readFile(file);
+  }
+
   async function readFile(file: File) {
-    setFileName(file.name); setError("");
+    setFileName(file.name); setFileSize(file.size); setError("");
     try {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", raw: true });
       const sheet = workbook.Sheets.Comptes;
@@ -136,11 +155,24 @@ export function AccountsImportPreview() {
         <p className="text-sm text-muted-foreground">Feuille <code>Comptes</code> — colonnes N_compte, Nom_Compte, Type_Compte, Tel.</p>
       </div>
 
-      <label className="inline-flex cursor-pointer">
-        <Button type="button">Choisir un fichier Excel</Button>
-        <input className="sr-only" type="file" accept=".xlsx,.xls" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readFile(file); }} />
-      </label>
-      {fileName && <p className="text-sm text-muted-foreground">Fichier : {fileName}</p>}
+      <div>
+        <Button type="button" onClick={() => fileInputRef.current?.click()}>
+          Choisir un fichier Excel
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={FILE_ACCEPT}
+          className="hidden"
+          onChange={handleFileChange}
+        />
+      </div>
+      {fileName && (
+        <p className="text-sm text-muted-foreground">
+          Fichier : {fileName}
+          {fileSize != null ? ` · ${formatFileSize(fileSize)}` : ""}
+        </p>
+      )}
 
       {serverLoading && <p className="text-sm text-muted-foreground">Vérification avec la base de données...</p>}
       {serverError && <p className="text-sm text-destructive">{serverError}</p>}
