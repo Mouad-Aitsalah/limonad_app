@@ -55,6 +55,14 @@ export const truckLoadingMutationSchema = z.object({
           .number()
           .int("La quantite doit etre un nombre entier.")
           .min(0, "La recharge ne peut pas etre negative."),
+        // "Restante reelle" saved progressively on a still-open fiche. null /
+        // omitted = not counted yet (a real 0 is kept as 0, never confused
+        // with "empty"). Persisted so it survives refresh and feeds close.
+        actualRemainingQuantity: z.coerce
+          .number()
+          .int("La quantite reelle doit etre un nombre entier.")
+          .min(0, "La quantite reelle ne peut pas etre negative.")
+          .nullish(),
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
@@ -105,6 +113,11 @@ type NormalizedLoadingLineInput = {
   initialQuantity: number;
   reloadedQuantity: number;
   quantity: number;
+  /** "Restante reelle" typed on a still-open fiche; null/omitted = not counted
+   * yet (kept distinct from a real 0). Only the standalone /chargements save
+   * path (validateLoadingLines -> updateOpenLoadingLines) carries it; the
+   * stock-delta helpers ignore it. */
+  actualRemainingQuantity?: number | null;
 };
 
 type PersistedLoadingLine = {
@@ -570,7 +583,7 @@ export async function updateOpenLoadingLines(
   input: TruckLoadingMutationInput,
 ): Promise<TruckLoadingDto> {
   const user = await requireOrganizationUser(["admin", "depot_manager"]);
-  const lines = validateLoadingLines(input);
+  const lines = validateLoadingLines(input, { allowZeroTotalLines: true });
 
   // F10: read-then-write on a single row already looked up by id inside the
   // transaction, so a retry after a Serializable conflict (P2034) simply
@@ -630,6 +643,10 @@ export async function updateOpenLoadingLines(
             productId: line.productId,
             quantity: line.quantity,
             reloadedQuantity: line.reloadedQuantity,
+            // BUG FIX: the "Restante reelle" typed on the draft was dropped
+            // here (recreate omitted it), so every save reset it to null.
+            // Persist it now - a real 0 stays 0, "not counted" stays null.
+            actualRemainingQuantity: line.actualRemainingQuantity ?? null,
           })),
         });
 
@@ -1676,7 +1693,10 @@ async function getLoadingRecordByTourId(tourId: string, organizationId: string) 
   });
 }
 
-function validateLoadingLines(input: TruckLoadingMutationInput): NormalizedLoadingLineInput[] {
+function validateLoadingLines(
+  input: TruckLoadingMutationInput,
+  options: { allowZeroTotalLines?: boolean } = {},
+): NormalizedLoadingLineInput[] {
   const parsed = truckLoadingMutationSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -1696,7 +1716,11 @@ function validateLoadingLines(input: TruckLoadingMutationInput): NormalizedLoadi
     if (seen.has(line.productId)) {
       throw new OperationsServiceError("Un produit ne peut apparaitre qu'une fois.", 422);
     }
-    if (line.initialQuantity + line.reloadedQuantity <= 0) {
+    // The standalone /chargements save allows a 0/0 line (a product prefilled
+    // from the driver's last fiche, or one the user hasn't loaded yet) - it
+    // moves no stock (applyLoadingStockDelta skips a 0 delta). The tour-scoped
+    // callers keep the original "strictly positive" rule.
+    if (!options.allowZeroTotalLines && line.initialQuantity + line.reloadedQuantity <= 0) {
       throw new OperationsServiceError(
         "Ajoutez une quantite strictement positive pour chaque produit.",
         422,
@@ -1713,6 +1737,7 @@ function validateLoadingLines(input: TruckLoadingMutationInput): NormalizedLoadi
     initialQuantity: line.initialQuantity,
     reloadedQuantity: line.reloadedQuantity,
     quantity: line.initialQuantity + line.reloadedQuantity,
+    actualRemainingQuantity: line.actualRemainingQuantity ?? null,
   }));
 }
 

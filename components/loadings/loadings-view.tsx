@@ -536,35 +536,42 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
     }
   }
 
-  // Item 9: progressive persistence - this is a plain save, never the first
-  // and only time data reaches the database.
-  async function saveDraft() {
-    if (!openLoading) return;
+  // Item 9: progressive persistence. Sends the CURRENT draft (including every
+  // "Restante reelle" typed so far - a real 0 is sent as 0, an untouched
+  // field as null) and returns the server's fresh fiche, or null on failure.
+  // On failure the on-screen values are left untouched (item 15).
+  async function persistDraft(): Promise<TruckLoadingDto | null> {
+    if (!openLoading) return null;
     if (draftLines.length === 0) {
       toast.error("Ajoutez au moins un produit.");
-      return;
+      return null;
     }
+    const response = await fetch(`/api/truck-loadings/${openLoading.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lines: draftLines.map((line) => ({
+          productId: line.productId,
+          initialQuantity: line.initialLoadQuantity,
+          reloadedQuantity: line.reloadedQuantity,
+          actualRemainingQuantity: line.actualRemainingQuantity,
+        })),
+      }),
+    });
+    const body = (await response.json()) as { loading?: TruckLoadingDto; message?: string };
+    if (!response.ok || !body.loading) {
+      toast.error(body.message ?? "Impossible d'enregistrer le brouillon.");
+      return null;
+    }
+    setOpenLoading(body.loading);
+    return body.loading;
+  }
 
+  async function saveDraft() {
     setBusy(true);
     try {
-      const response = await fetch(`/api/truck-loadings/${openLoading.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lines: draftLines.map((line) => ({
-            productId: line.productId,
-            initialQuantity: line.initialLoadQuantity,
-            reloadedQuantity: line.reloadedQuantity,
-          })),
-        }),
-      });
-      const body = (await response.json()) as { loading?: TruckLoadingDto; message?: string };
-      if (!response.ok || !body.loading) {
-        toast.error(body.message ?? "Impossible d'enregistrer le brouillon.");
-        return;
-      }
-      setOpenLoading(body.loading);
-      toast.success("Brouillon enregistre, stock camion et depot mis a jour.");
+      const saved = await persistDraft();
+      if (saved) toast.success("Brouillon enregistre, stock camion et depot mis a jour.");
     } finally {
       setBusy(false);
     }
@@ -572,6 +579,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
 
   async function closeLoading() {
     if (!openLoading) return;
+    // Item 9: 0 is a valid count; only null / empty blocks the close.
     const missingLine = draftLines.find((line) => line.actualRemainingQuantity === null);
     if (missingLine) {
       toast.error("Veuillez saisir la quantite restante reelle pour tous les produits.");
@@ -580,7 +588,13 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
 
     setBusy(true);
     try {
-      const response = await fetch(`/api/truck-loadings/${openLoading.id}/close`, {
+      // Item 8: auto-save the current draft FIRST, so the server validates the
+      // close against exactly what is on screen (line set + quantities). If
+      // the save fails, keep the values and leave the fiche open (item 15).
+      const saved = await persistDraft();
+      if (!saved) return;
+
+      const response = await fetch(`/api/truck-loadings/${saved.id}/close`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

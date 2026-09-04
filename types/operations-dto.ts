@@ -513,6 +513,10 @@ export type TruckLoadingMutationInput = {
     productId: string;
     initialQuantity: number;
     reloadedQuantity: number;
+    /** "Restante reelle" typed while the fiche is still a draft. null / omitted
+     * = not counted yet. Persisted on save so it survives a refresh and is
+     * reused at close. */
+    actualRemainingQuantity?: number | null;
   }[];
 };
 

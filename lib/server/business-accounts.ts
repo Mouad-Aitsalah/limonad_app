@@ -144,13 +144,6 @@ const businessAccountInputSchema = z
   })
   .superRefine((data, ctx) => {
     if (data.type === "CUSTOMER") {
-      if (!data.phone) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["phone"],
-          message: "Le telephone est obligatoire pour un client.",
-        });
-      }
       if (!data.city) {
         ctx.addIssue({
           code: "custom",
@@ -507,9 +500,9 @@ export async function createBusinessAccount(
 
   if (data.type === "CUSTOMER") {
     const customerData = await parseCustomerInput({
-      code: null,
+      code: data.code,
       name: data.name,
-      phone: data.phone ?? "",
+      phone: data.phone,
       email: data.email,
       address: data.address ?? "",
       city: data.city ?? "",
@@ -530,7 +523,7 @@ export async function createBusinessAccount(
     const customer = await withSerializableRetry(() =>
       prisma.$transaction(
         async (tx) => {
-          const code = await nextCustomerCode(tx, user.organizationId);
+          const code = data.code ?? (await nextCustomerCode(tx, user.organizationId));
           const created = await tx.customer.create({
             data: {
               organizationId: user.organizationId,
@@ -580,7 +573,7 @@ export async function createBusinessAccount(
     const supplier = await withSerializableRetry(() =>
       prisma.$transaction(
         async (tx) => {
-          const code = await nextSupplierCode(tx, user.organizationId);
+          const code = data.code ?? (await nextSupplierCode(tx, user.organizationId));
           const created = await tx.supplier.create({
             data: {
               organizationId: user.organizationId,
@@ -748,7 +741,7 @@ export async function updateBusinessAccount(
     const customer = await updateCustomer(sourceId, {
       code: null,
       name: data.name,
-      phone: data.phone ?? "",
+      phone: data.phone,
       email: data.email,
       address: data.address ?? "",
       city: data.city ?? "",
