@@ -122,6 +122,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   // never triggers a re-render and is guaranteed synchronously current the
   // instant confirmOperation reads it.
   const idempotencyKeyRef = React.useRef<string>(crypto.randomUUID());
+  // So a product added from a search result can clear the field and keep the
+  // caret ready for the next product (UX only - the add itself is unchanged).
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = React.useState(false);
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
 
@@ -274,6 +277,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       }
       return [...prev, { productId, quantity: 1, discountPercent: 0 }];
     });
+
+    // UX: reset the search so the grid returns to normal and the operator can
+    // type the next product straight away, caret kept in the field.
+    setSearch("");
+    searchInputRef.current?.focus();
   }
 
   function updateQuantity(productId: string, quantity: number) {
@@ -727,7 +735,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
       <div className="grid gap-4 lg:h-[calc(100vh-11rem)] lg:grid-cols-2 lg:gap-6">
       <div className="flex flex-col gap-4 lg:h-full lg:overflow-hidden">
-        <ProductSearch value={search} onChange={setSearch} />
+        <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
         <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1">
         <ProductGrid
           products={filteredProducts}
