@@ -1,58 +1,76 @@
 import type { Metadata } from "next";
 
-import { CategoryDonutChart } from "@/components/dashboard/category-donut-chart";
-import { KpiGrid } from "@/components/dashboard/kpi-grid";
-import { RecentSalesTable } from "@/components/dashboard/recent-sales-table";
-import { SalesTrendChart } from "@/components/dashboard/sales-trend-chart";
-import { StockAlertsCard } from "@/components/dashboard/stock-alerts-card";
-import { TopProductsTable } from "@/components/dashboard/top-products-table";
+import { DirectionCategoryChart } from "@/components/dashboard/direction-category-chart";
+import { DirectionEvolutionChart } from "@/components/dashboard/direction-evolution-chart";
+import { DirectionKpiCard } from "@/components/dashboard/direction-kpi-card";
+import { DirectionPeriodBar } from "@/components/dashboard/direction-period-bar";
+import { DirectionStockWatchCard } from "@/components/dashboard/direction-stock-watch";
+import { DirectionTopCustomersCard } from "@/components/dashboard/direction-top-customers";
+import { DirectionTopProductsCard } from "@/components/dashboard/direction-top-products";
+import { DirectionWatchlistCard } from "@/components/dashboard/direction-watchlist";
 import { AppPageHeader } from "@/components/ui/app-page-header";
-import { PageEyebrow } from "@/components/ui/page-eyebrow";
-import { SectionCard } from "@/components/ui/section-card";
-import { getDashboardData } from "@/lib/server/dashboard";
+import { getDirectionDashboardData } from "@/lib/server/dashboard-direction";
 
 export const metadata: Metadata = {
-  title: "Dashboard",
+  title: "Dashboard Direction",
 };
 
-export default async function DashboardPage() {
-  const data = await getDashboardData();
+export const dynamic = "force-dynamic";
+
+type DashboardPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function DashboardPage({ searchParams }: DashboardPageProps) {
+  const params = await searchParams;
+  const data = await getDirectionDashboardData(params);
+  const kpis = data.kpis;
 
   return (
-    <div className="space-y-8">
-      <div className="grid gap-4 xl:grid-cols-3">
-        {data.heroCards.map((card) => (
-          <SectionCard key={card.eyebrow} className="overflow-hidden" contentClassName="space-y-3">
-            <PageEyebrow>{card.eyebrow}</PageEyebrow>
-            <h2 className="font-heading text-2xl font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-              {card.title}
-            </h2>
-            <p className="text-sm leading-7 text-[var(--text-secondary)]">{card.description}</p>
-          </SectionCard>
-        ))}
-      </div>
-
+    <div className="space-y-6">
       <AppPageHeader
-        eyebrow="Overview"
-        title="Dashboard"
-        description="Suivez la performance commerciale, les tendances de ventes et les alertes en vous appuyant sur les donnees reelles de COMDIS."
+        eyebrow="Direction"
+        title="Dashboard Direction"
+        description="Vue synthetique des ventes, marges, charges, creances et stocks."
       />
 
-      <KpiGrid metrics={data.metrics} />
+      <DirectionPeriodBar activeKey={data.period.key} />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
-        <SalesTrendChart data={data.salesTrend} />
-        <CategoryDonutChart data={data.categorySales} />
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <DirectionKpiCard kpi={kpis.revenue} emphasis />
+        <DirectionKpiCard kpi={kpis.grossMargin} emphasis />
+        <DirectionKpiCard kpi={kpis.estimatedResult} emphasis />
+        <DirectionKpiCard kpi={kpis.customerReceivables} emphasis />
+        <DirectionKpiCard kpi={kpis.stockValue} emphasis />
+      </div>
+
+      <p className="text-xs text-muted-foreground italic">
+        {data.marginNote ? `Marge brute - ${data.marginNote} ` : ""}
+        Resultat estime : indicateur de gestion, hors elements comptables non integres.
+      </p>
+
+      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+        <DirectionKpiCard kpi={kpis.salesCount} />
+        <DirectionKpiCard kpi={kpis.avgBasket} />
+        <DirectionKpiCard kpi={kpis.purchasesHT} />
+        <DirectionKpiCard kpi={kpis.chargesHT} />
+        <DirectionKpiCard kpi={kpis.activeCustomers} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
-        <TopProductsTable rows={data.topProducts} />
-        <div id="stock-alerts">
-          <StockAlertsCard alerts={data.stockAlerts} />
-        </div>
+        <DirectionEvolutionChart granularity={data.salesEvolution.granularity} points={data.salesEvolution.points} />
+        <DirectionCategoryChart data={data.categoryBreakdown} />
       </div>
 
-      <RecentSalesTable rows={data.recentSales} />
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
+        <DirectionTopProductsCard data={data.topProducts} />
+        <DirectionStockWatchCard data={data.stockWatch} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
+        <DirectionTopCustomersCard rows={data.topCustomers} />
+        <DirectionWatchlistCard items={data.watchlist} />
+      </div>
     </div>
   );
 }
