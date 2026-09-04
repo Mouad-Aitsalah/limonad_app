@@ -765,18 +765,18 @@ export async function closeLoading(
         });
       }
 
-      const stockedProductIds = await tx.stockLevel.findMany({
-        where: {
-          organizationId: user.organizationId,
-          locationId: truckLocationId,
-          quantity: { gt: 0 },
-        },
-        select: { productId: true },
-      });
-      const requiredProductIds = new Set([
-        ...current.lines.map((line) => line.productId),
-        ...stockedProductIds.map((level) => level.productId),
-      ]);
+      // Closing a standalone /chargements fiche only requires a real count
+      // for the products ON THIS fiche - NOT for every product physically on
+      // the truck. The old rule (fiche lines UNION every truck StockLevel
+      // with quantity > 0) made a 2-line fiche impossible to close whenever
+      // the truck still held residual stock from earlier fiches/tours (e.g.
+      // 15 leftover products), throwing "Veuillez saisir la quantite restante
+      // reelle pour tous les produits." even though both fiche lines had been
+      // counted. Residual stock in products this fiche never loaded is left
+      // untouched - it belongs to whatever fiche/tour put it there. The
+      // tour-scoped close paths (updateLoadingLines / validateLoading) keep
+      // their own full-truck reconciliation rules.
+      const requiredProductIds = new Set(current.lines.map((line) => line.productId));
       const missingProductIds = [...requiredProductIds].filter(
         (productId) => !providedByProductId.has(productId),
       );
