@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { FileSpreadsheet } from "lucide-react";
 
 import { AccountDialog } from "@/components/comptes/account-dialog";
 import {
@@ -109,7 +111,19 @@ export function AccountsView({ initialPage, accountingAccounts }: AccountsViewPr
           </p>
         </div>
 
-        <AccountDialog accountingAccounts={accountingAccounts} onSaved={refreshAccounts} />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            className="w-full sm:w-auto"
+            render={<Link href="/comptes/import" />}
+          >
+            <FileSpreadsheet aria-hidden="true" className="h-4 w-4" />
+            Importer des comptes
+          </Button>
+          <AccountDialog accountingAccounts={accountingAccounts} onSaved={refreshAccounts} />
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
