@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 
 import { ProductDialog } from "@/components/produits/product-dialog";
@@ -135,13 +137,25 @@ export function ProductsView({
         title="Produits"
         description="Pilotez le catalogue COMDIS, les prix, les statuts et les visuels produits depuis une vue unique."
         actions={
-          <ProductDialog
-            categories={categories}
-            brands={brands}
-            suppliers={suppliers}
-            onSave={saveProduct}
-            onRefresh={refreshProducts}
-          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="w-full sm:w-auto"
+              render={<Link href="/produits/import" />}
+            >
+              <FileSpreadsheet aria-hidden="true" className="h-4 w-4" />
+              Importer des produits
+            </Button>
+            <ProductDialog
+              categories={categories}
+              brands={brands}
+              suppliers={suppliers}
+              onSave={saveProduct}
+              onRefresh={refreshProducts}
+            />
+          </div>
         }
       />
 

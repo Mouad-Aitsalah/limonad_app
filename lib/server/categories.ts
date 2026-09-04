@@ -205,7 +205,13 @@ function mapCategoryToListItem(category: {
   };
 }
 
-async function nextCategoryCode(
+/**
+ * Concurrency-safe next category code (CAT-001, CAT-002, ...). Exported so
+ * the products Excel import can allocate a code for an auto-created category
+ * inside its own per-row Prisma transaction, instead of re-implementing the
+ * DocumentSequence logic and risking two divergent generators.
+ */
+export async function nextCategoryCode(
   tx: Pick<typeof prisma, "category" | "$queryRaw">,
   organizationId: string,
 ) {
