@@ -64,6 +64,15 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
   const customerCode = sale.customer ? formatCustomerCode(sale.customer.code) : null;
   const cashierName = sale.driver?.name ?? sale.createdByUserName;
   const paymentLabel = paymentLabels[sale.paymentMethod] ?? sale.paymentMethod;
+  // MIXED sales persist as two Payment rows (CASH + CHECK) - see
+  // createMixedPayments in lib/server/sales-shared.ts - so the split shown
+  // here always reflects what was actually recorded, never recomputed.
+  const cashAmount = sale.payments
+    .filter((item) => item.method === "CASH")
+    .reduce((sum, item) => sum + item.amount, 0);
+  const chequeAmount = sale.payments
+    .filter((item) => item.method === "CHECK")
+    .reduce((sum, item) => sum + item.amount, 0);
   // A sale still DRAFT has not been collected yet: the payment method on the
   // row is only a placeholder, so the ticket must not look like a paid one.
   const awaitingPayment = sale.status === "DRAFT";
@@ -160,6 +169,12 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
           ) : (
             <>
               <p>Paiement : {paymentLabel}</p>
+              {sale.paymentMethod === "MIXED" ? (
+                <>
+                  <p>Espèces : {formatCurrency(cashAmount)}</p>
+                  <p>Chèque : {formatCurrency(chequeAmount)}</p>
+                </>
+              ) : null}
               <p>Statut : Réglée</p>
             </>
           )}

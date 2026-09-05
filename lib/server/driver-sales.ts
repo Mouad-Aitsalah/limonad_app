@@ -35,7 +35,8 @@ import type {
 
 const driverSaleSchema = z.object({
   customerId: z.string().trim().nullable().optional(),
-  paymentMethod: z.enum(["CASH", "CARD", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
+  // CARD removed: see counter-sales.ts's counterSaleSchema comment.
+  paymentMethod: z.enum(["CASH", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
   // F8-D: input-level sanity bound only, not the real protection - a value
   // right at this bound can still overflow once combined with other lines/
   // tax (see assertMoneyRange calls below, the actual gate).

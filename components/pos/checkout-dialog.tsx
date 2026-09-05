@@ -26,6 +26,7 @@ type CheckoutDialogProps = {
   operationType: PosOperationType;
   destinationLabel: string;
   submitting?: boolean;
+  mixedAmounts?: { cash: number; cheque: number };
   onConfirm: (paidAmount?: number) => Promise<void> | void;
 };
 
@@ -37,6 +38,7 @@ type CheckoutFormProps = {
   operationType: PosOperationType;
   destinationLabel: string;
   submitting?: boolean;
+  mixedAmounts?: { cash: number; cheque: number };
   onCancel: () => void;
   onConfirm: (paidAmount?: number) => Promise<void> | void;
 };
@@ -49,16 +51,21 @@ function CheckoutForm({
   operationType,
   destinationLabel,
   submitting = false,
+  mixedAmounts,
   onCancel,
   onConfirm,
 }: CheckoutFormProps) {
   const [montantRecu, setMontantRecu] = React.useState(netAPayer);
   const monnaieARendre = Math.max(0, montantRecu - netAPayer);
   const isTransfer = operationType === "transfer";
+  const isMixed = paymentMethod === "MIXED";
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void onConfirm(paymentMethod === "MIXED" ? montantRecu : undefined);
+    // MIXED already carries its own cashAmount/chequeAmount (see
+    // PaymentSelector) - paidAmount is only meaningful for the legacy
+    // driver-POS MIXED flow, which this dialog is never used for.
+    void onConfirm(undefined);
   }
 
   if (isTransfer) {
@@ -101,30 +108,52 @@ function CheckoutForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-2">
-        <Label htmlFor="montantRecu">Montant reçu</Label>
-        <Input
-          id="montantRecu"
-          type="number"
-          min={0}
-          step="0.01"
-          autoFocus
-          value={montantRecu}
-          onChange={(event) => setMontantRecu(Number(event.target.value))}
-        />
-      </div>
-
-      <div className="space-y-2">
-        <Label>Monnaie à rendre</Label>
-        <div
-          className={cn(
-            "flex h-9 items-center rounded-lg border border-input bg-muted px-3 text-sm font-medium tabular-nums",
-            monnaieARendre > 0 ? "text-emerald-700" : "text-muted-foreground",
-          )}
-        >
-          {formatCurrency(monnaieARendre)}
+      {isMixed ? (
+        <div className="space-y-2">
+          <Label>Répartition du règlement</Label>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-lg border border-input bg-muted px-3 py-2">
+              <p className="text-xs text-muted-foreground">Espèces</p>
+              <p className="text-sm font-medium tabular-nums">
+                {formatCurrency(mixedAmounts?.cash ?? 0)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-input bg-muted px-3 py-2">
+              <p className="text-xs text-muted-foreground">Chèque</p>
+              <p className="text-sm font-medium tabular-nums">
+                {formatCurrency(mixedAmounts?.cheque ?? 0)}
+              </p>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <>
+          <div className="space-y-2">
+            <Label htmlFor="montantRecu">Montant reçu</Label>
+            <Input
+              id="montantRecu"
+              type="number"
+              min={0}
+              step="0.01"
+              autoFocus
+              value={montantRecu}
+              onChange={(event) => setMontantRecu(Number(event.target.value))}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Monnaie à rendre</Label>
+            <div
+              className={cn(
+                "flex h-9 items-center rounded-lg border border-input bg-muted px-3 text-sm font-medium tabular-nums",
+                monnaieARendre > 0 ? "text-emerald-700" : "text-muted-foreground",
+              )}
+            >
+              {formatCurrency(monnaieARendre)}
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="space-y-2">
         <Label>Mode de règlement</Label>
@@ -155,6 +184,7 @@ export function CheckoutDialog({
   operationType,
   destinationLabel,
   submitting = false,
+  mixedAmounts,
   onConfirm,
 }: CheckoutDialogProps) {
   const isTransfer = operationType === "transfer";
@@ -182,6 +212,7 @@ export function CheckoutDialog({
           operationType={operationType}
           destinationLabel={destinationLabel}
           submitting={submitting}
+          mixedAmounts={mixedAmounts}
           onCancel={() => onOpenChange(false)}
           onConfirm={onConfirm}
         />

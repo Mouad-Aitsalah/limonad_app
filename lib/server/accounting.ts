@@ -149,6 +149,15 @@ type SaleAccountingPayload = {
   paymentMethod: string;
   paymentId?: string | null;
   paymentReference?: string | null;
+  /**
+   * Set only for a counter-POS MIXED sale (cash+cheque split covering the
+   * full total). When present, the settlement posts TWO debit lines (cash
+   * to the usual cash account, cheque to 51111) instead of the single
+   * treasury line every other payment method uses - see
+   * resolveMixedPaymentSplit in sales-shared.ts for how these numbers are
+   * validated before reaching here.
+   */
+  paymentSplit?: { cashAmount: DecimalInput; chequeAmount: DecimalInput } | null;
   createdByUserId: string;
 };
 
@@ -458,6 +467,17 @@ export async function updateAccountingSettings(
   return mapSettingsToDto(settings);
 }
 
+// P2028 audit (POS timeout chantier): this function never reads or writes
+// AccountingAccount/AccountingSettings - it is a pure percentage
+// calculation - so it must NOT call ensureAccountingBootstrap (3 DB round
+// trips: two AccountingAccount findMany + one AccountingSettings
+// findUnique). That call was pure dead weight here: postSaleAccountingEntry
+// (called later in the very same sale-creation transaction, whenever
+// collectNow) already runs the one bootstrap that is actually needed before
+// any account gets referenced. Removing it here does not change this
+// function's return value in any case - see the 3 call sites in
+// counter-sales.ts/driver-sales.ts/pending-sales.ts, none of which relied
+// on this side effect.
 export async function computeCashSaleStampAmount(
   db: DbClient,
   input: {
@@ -466,10 +486,6 @@ export async function computeCashSaleStampAmount(
     paymentMethod: string;
   },
 ) {
-  const organizationId = await resolveOrganizationId({
-    explicitOrganizationId: input.organizationId,
-  });
-  await ensureAccountingBootstrap(db, organizationId);
   if (input.paymentMethod !== "CASH") {
     return toMoneyDecimal(0);
   }
@@ -589,10 +605,64 @@ export async function createManualAccountingEntry(
   return mapEntryToDto(entry);
 }
 
+/**
+ * Same core logic as createPostedEntry (validate, verify accounts,
+ * reserve the entry number, insert) but selects only `id` on the created
+ * row instead of the full entryInclude (createdBy + reversalEntry + lines
+ * with account, each resolved as its own round trip under the driver-
+ * adapter's compiled-query mode). P2028 audit: postSaleAccountingEntry's
+ * own return value is discarded by all 3 of its callers (counter-sales.ts,
+ * driver-sales.ts, pending-sales.ts all `await` it without capturing the
+ * result), so paying for that full include on every sale bought nothing.
+ * Used ONLY here - every other createPostedEntry caller (manual entries,
+ * purchases, credit notes, payroll) keeps using the full version unchanged,
+ * since several of them do return the entry to their own caller.
+ */
+async function createPostedEntryLean(db: DbClient, input: CreatePostedEntryInput) {
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: input.organizationId,
+    createdByUserId: input.createdByUserId,
+  });
+  const normalizedLines = normalizeEntryLines(input.lines);
+  assertBalancedEntry(normalizedLines);
+  await assertAccountsExist(
+    db,
+    organizationId,
+    normalizedLines.map((line) => line.accountId),
+  );
+
+  const entryNumber = await nextAccountingEntryNumber(db, organizationId, input.date);
+
+  await db.accountingEntry.create({
+    data: {
+      organizationId,
+      entryNumber,
+      date: input.date,
+      reference: input.reference ?? null,
+      description: input.description,
+      journalType: input.journalType,
+      status: "POSTED",
+      sourceType: input.sourceType ?? null,
+      sourceId: input.sourceId ?? (input.sourceType === "MANUAL_ENTRY" ? entryNumber : null),
+      createdByUserId: input.createdByUserId ?? null,
+      lines: {
+        create: normalizedLines.map((line) => ({
+          accountId: line.accountId,
+          label: line.label,
+          debit: line.debit,
+          credit: line.credit,
+          position: line.position,
+        })),
+      },
+    },
+    select: { id: true },
+  });
+}
+
 export async function postSaleAccountingEntry(
   db: Prisma.TransactionClient,
   payload: SaleAccountingPayload,
-) {
+): Promise<void> {
   const organizationId = await resolveOrganizationId({
     explicitOrganizationId: payload.organizationId,
     createdByUserId: payload.createdByUserId,
@@ -614,31 +684,38 @@ export async function postSaleAccountingEntry(
     payload.customerId ?? null,
     settings.customerAccountId,
   );
-  const stampExpenseAccountId = await requireSystemAccountIdByCode(
-    db,
-    organizationId,
-    accountingSystemAccountCodes.stampExpense,
-  );
-  const stampTaxPayableAccountId = await requireSystemAccountIdByCode(
-    db,
-    organizationId,
-    accountingSystemAccountCodes.stampTaxPayable,
-  );
   const paidAmount = toMoneyDecimal(payload.paidAmount);
   const subtotalHT = toMoneyDecimal(payload.subtotalHT);
   const taxAmount = toMoneyDecimal(payload.taxAmount);
   const stampAmount = toMoneyDecimal(payload.stampAmount ?? 0);
+  // P2028 audit: these two accounts are only ever referenced inside the
+  // stampAmount.gt(0) branches below - resolving them (2 round trips each,
+  // see requireSystemAccountIdByCode) for every sale regardless of whether
+  // it actually carries a stamp wasted 4 round trips on the common case
+  // (CHECK/MIXED/BANK_TRANSFER never stamp; most CASH sales don't either).
+  const stampExpenseAccountId = stampAmount.gt(0)
+    ? await requireSystemAccountIdByCode(db, organizationId, accountingSystemAccountCodes.stampExpense)
+    : null;
+  const stampTaxPayableAccountId = stampAmount.gt(0)
+    ? await requireSystemAccountIdByCode(db, organizationId, accountingSystemAccountCodes.stampTaxPayable)
+    : null;
 
-  const invoiceEntry =
-    (await db.accountingEntry.findFirst({
-      where: {
-        organizationId,
-        sourceType: "SALE",
-        sourceId: payload.saleId,
-      },
-      include: entryInclude,
-    })) ??
-    (await createPostedEntry(db, {
+  // P2028 audit: this existence check used to fetch the full entryInclude
+  // relation tree (createdBy/reversalEntry/lines+account) even on the
+  // overwhelmingly common "no entry yet" path (0 matching rows still fired
+  // every relation's own round trip under the driver-adapter's compiled-
+  // query mode) - for a value nothing here or in any of this function's
+  // callers ever read beyond "does it exist". A plain id lookup is enough.
+  const existingInvoiceEntry = await db.accountingEntry.findFirst({
+    where: {
+      organizationId,
+      sourceType: "SALE",
+      sourceId: payload.saleId,
+    },
+    select: { id: true },
+  });
+  if (!existingInvoiceEntry) {
+    await createPostedEntryLean(db, {
       organizationId,
       date: payload.date,
       reference: payload.invoiceNumber,
@@ -657,7 +734,11 @@ export async function postSaleAccountingEntry(
         ...(stampAmount.gt(0)
           ? [
               {
-                accountId: stampExpenseAccountId,
+                // Non-null by construction: stampExpenseAccountId is only
+                // ever null when stampAmount is not >0 (see its own
+                // resolution above), the exact same condition gating this
+                // branch.
+                accountId: stampExpenseAccountId!,
                 label: buildSaleStampExpenseLabel(payload.invoiceNumber),
                 debit: stampAmount,
                 credit: 0,
@@ -687,7 +768,9 @@ export async function postSaleAccountingEntry(
         ...(stampAmount.gt(0)
           ? [
               {
-                accountId: stampTaxPayableAccountId,
+                // Non-null by construction - see stampExpenseAccountId's
+                // own comment above.
+                accountId: stampTaxPayableAccountId!,
                 label: buildSaleStampPayableLabel(),
                 debit: 0,
                 credit: stampAmount,
@@ -695,14 +778,15 @@ export async function postSaleAccountingEntry(
             ]
           : []),
       ],
-    }));
+    });
+  }
 
   if (
     paidAmount.lte(0) ||
     payload.paymentMethod === "CREDIT" ||
     !payload.paymentId
   ) {
-    return invoiceEntry;
+    return;
   }
 
   const settlementSourceId = payload.paymentId;
@@ -712,17 +796,34 @@ export async function postSaleAccountingEntry(
       sourceType: "CUSTOMER_PAYMENT",
       sourceId: settlementSourceId,
     },
-    include: entryInclude,
+    select: { id: true },
   });
   if (existingSettlement) {
-    return invoiceEntry;
+    return;
   }
 
-  const treasuryAccountId = usesBankAccount(payload.paymentMethod)
-    ? settings.bankAccountId
-    : settings.cashAccountId;
+  const debitLines = payload.paymentSplit
+    ? await buildMixedSettlementDebitLines(db, organizationId, settings.cashAccountId, payload.paymentSplit)
+    : [
+        {
+          accountId:
+            payload.paymentMethod === "CHECK"
+              ? await requireExistingAccountByCode(
+                  db,
+                  organizationId,
+                  accountingSystemAccountCodes.chequeInPortfolio,
+                  "Cheque en portefeuille",
+                )
+              : usesBankAccount(payload.paymentMethod)
+                ? settings.bankAccountId
+                : settings.cashAccountId,
+          label: buildSaleSettlementLabel(),
+          debit: paidAmount,
+          credit: 0,
+        },
+      ];
 
-  await createPostedEntry(db, {
+  await createPostedEntryLean(db, {
     organizationId,
     date: payload.date,
     reference: payload.invoiceNumber,
@@ -732,12 +833,7 @@ export async function postSaleAccountingEntry(
     sourceId: settlementSourceId,
     createdByUserId: payload.createdByUserId,
     lines: [
-      {
-        accountId: treasuryAccountId,
-        label: buildSaleSettlementLabel(),
-        debit: paidAmount,
-        credit: 0,
-      },
+      ...debitLines,
       {
         accountId: customerAccountId,
         label: buildSaleSettlementLabel(),
@@ -746,8 +842,6 @@ export async function postSaleAccountingEntry(
       },
     ],
   });
-
-  return invoiceEntry;
 }
 
 export async function postPurchaseAccountingEntry(
@@ -1512,6 +1606,83 @@ async function resolveSupplierAuxiliaryAccountId(
   });
 }
 
+/**
+ * Strict, non-auto-creating lookup - unlike requireSystemAccountIdByCode
+ * (which bootstraps a missing code from defaultAccountingAccounts), this
+ * throws a clear business error when the account is missing rather than
+ * silently creating a generic placeholder or falling back to another
+ * account. Used for 51111 Cheque en portefeuille: a chart-of-accounts
+ * account the org must configure themselves, never invented on the fly
+ * (see accountingSystemAccountCodes.chequeInPortfolio's own doc comment).
+ */
+async function requireExistingAccountByCode(
+  db: DbClient,
+  organizationId: string,
+  code: string,
+  label: string,
+) {
+  const normalizedCode = normalizeAccountCode(code);
+  const account = await db.accountingAccount.findFirst({
+    where: { code: normalizedCode, organizationId },
+    select: { id: true, isActive: true },
+  });
+  if (!account) {
+    throw new OperationsServiceError(
+      `Le compte ${code} ${label} doit etre configure dans le plan comptable avant d'utiliser ce mode de reglement.`,
+      409,
+    );
+  }
+  if (!account.isActive) {
+    throw new OperationsServiceError(`Le compte comptable ${code} est inactif.`, 409);
+  }
+  return account.id;
+}
+
+/**
+ * Cash + cheque settlement debit lines for a counter-POS MIXED sale - cash
+ * always uses the org's existing cash account, cheque always resolves
+ * 51111 via the strict lookup above (never 5141 Banque, never
+ * auto-created). cashAccountId is passed in (already resolved by
+ * postSaleAccountingEntry's own requireSettings call moments earlier)
+ * rather than re-queried here - P2028 audit: this used to run its own
+ * redundant requireSettings(["cashAccountId"]) for a value the caller
+ * already had.
+ */
+async function buildMixedSettlementDebitLines(
+  db: DbClient,
+  organizationId: string,
+  cashAccountId: string,
+  split: { cashAmount: DecimalInput; chequeAmount: DecimalInput },
+) {
+  const cashAmount = toMoneyDecimal(split.cashAmount);
+  const chequeAmount = toMoneyDecimal(split.chequeAmount);
+  const lines: Array<{ accountId: string; label: string; debit: Prisma.Decimal; credit: number }> = [];
+
+  if (cashAmount.gt(0)) {
+    lines.push({
+      accountId: cashAccountId,
+      label: buildSaleSettlementLabel(),
+      debit: cashAmount,
+      credit: 0,
+    });
+  }
+  if (chequeAmount.gt(0)) {
+    const chequeAccountId = await requireExistingAccountByCode(
+      db,
+      organizationId,
+      accountingSystemAccountCodes.chequeInPortfolio,
+      "Cheque en portefeuille",
+    );
+    lines.push({
+      accountId: chequeAccountId,
+      label: buildSaleSettlementLabel(),
+      debit: chequeAmount,
+      credit: 0,
+    });
+  }
+  return lines;
+}
+
 async function requireSystemAccountIdByCode(
   db: DbClient,
   organizationId: string,
@@ -1996,8 +2167,11 @@ function toMoneyDecimal(value: DecimalInput) {
   }
 }
 
+// CHECK is deliberately excluded - postSaleAccountingEntry resolves it to
+// 51111 (Cheque en portefeuille) via its own dedicated branch before this
+// function is ever consulted, never to the generic bank account.
 function usesBankAccount(paymentMethod: string) {
-  return paymentMethod === "CARD" || paymentMethod === "CHECK" || paymentMethod === "BANK_TRANSFER";
+  return paymentMethod === "CARD" || paymentMethod === "BANK_TRANSFER";
 }
 
 function usesPurchaseBankAccount(paymentMethod: string) {

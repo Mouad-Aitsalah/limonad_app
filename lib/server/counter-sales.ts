@@ -13,12 +13,14 @@ import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import {
+  createMixedPayments,
   mapSaleToDto,
   nextInvoiceNumber,
   nextMovementNumber,
   nextPaymentNumber,
   nextPendingSaleRef,
   normalizeSaleLines,
+  resolveMixedPaymentSplit,
   resolvePaymentAmounts,
   resolvePosSession,
   resolveSaleSequencing,
@@ -34,11 +36,18 @@ import type {
 
 const counterSaleSchema = z.object({
   customerId: z.string().trim().nullable().optional(),
-  paymentMethod: z.enum(["CASH", "CARD", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
+  // CARD removed: bank-card payments are no longer accepted for new sales
+  // at the counter POS (old CARD sales stay fully readable - see
+  // types/pos.ts's own comment on this decision).
+  paymentMethod: z.enum(["CASH", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
   // F8-D: input-level sanity bound only, not the real protection - a value
   // right at this bound can still overflow once combined with other lines/
   // tax (see assertMoneyRange calls below, the actual gate).
   paidAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
+  // MIXED-only: cash+cheque split covering the full total - see
+  // resolveMixedPaymentSplit in sales-shared.ts.
+  cashAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
+  chequeAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   reference: z.string().trim().nullable().optional(),
   stampAmount: z.coerce.number().min(0).optional(),
   // Client-generated, stable for one logical sale attempt (see
@@ -211,15 +220,28 @@ export async function createCounterSale(
       // from the authenticated session, never from the client, so one
       // organization can never look up - let alone reuse - another
       // organization's idempotency key.
+      //
+      // P2028 audit: a plain findFirst with `include: saleInclude` here
+      // fires ~9 extra round trips to resolve every relation (customer,
+      // depot, driver+user, truck, tour, createdBy, lines+product,
+      // payments) EVEN WHEN NO ROW MATCHES - which is the overwhelming
+      // common case (a brand-new idempotencyKey on every normal sale). A
+      // cheap existence check first (one tiny query) means that cost is
+      // only ever paid on a genuine retry/double-submit, not on every sale.
       if (parsed.data.idempotencyKey) {
-        const existingSale = await tx.sale.findFirst({
+        const existingSaleId = await tx.sale.findFirst({
           where: {
             organizationId: sessionUser.organizationId,
             idempotencyKey: parsed.data.idempotencyKey,
           },
-          include: saleInclude,
+          select: { id: true },
         });
-        if (existingSale) return existingSale;
+        if (existingSaleId) {
+          return tx.sale.findUniqueOrThrow({
+            where: { id: existingSaleId.id },
+            include: saleInclude,
+          });
+        }
       }
 
       const user = await tx.user.findFirst({
@@ -349,9 +371,18 @@ export async function createCounterSale(
 
       // A pending (not-yet-collected) sale has no payment split and no credit
       // exposure yet - the payment method is only chosen at collection.
-      const payment = collectNow
-        ? resolvePaymentAmounts(parsed.data.paymentMethod, totalTTC, parsed.data.paidAmount)
-        : { paidAmount: 0, creditAmount: 0 };
+      // mixedSplit is kept as its own fully-typed variable (rather than a
+      // union member of `payment`) so cashAmount/chequeAmount stay type-safe
+      // wherever they're read below, with no "in" narrowing on a union.
+      const mixedSplit =
+        collectNow && parsed.data.paymentMethod === "MIXED"
+          ? resolveMixedPaymentSplit(totalTTC, parsed.data.cashAmount, parsed.data.chequeAmount)
+          : null;
+      const payment =
+        mixedSplit ??
+        (collectNow
+          ? resolvePaymentAmounts(parsed.data.paymentMethod, totalTTC, parsed.data.paidAmount)
+          : { paidAmount: 0, creditAmount: 0 });
       assertMoneyRange(payment.paidAmount, "paidAmount");
       assertMoneyRange(payment.creditAmount, "creditAmount");
       if (collectNow && payment.creditAmount > 0 && !customer) {
@@ -467,21 +498,30 @@ export async function createCounterSale(
       // of them until collectCounterSale runs.
       const createdPayment =
         collectNow && payment.paidAmount > 0
-          ? await tx.payment.create({
-              data: {
+          ? mixedSplit
+            ? await createMixedPayments(tx, {
                 organizationId: sessionUser.organizationId,
-                paymentNumber: await nextPaymentNumber(tx, sessionUser.organizationId),
                 saleId: sale.id,
-                amount: payment.paidAmount,
-                method:
-                  parsed.data.paymentMethod === "CREDIT" ? "CASH" : parsed.data.paymentMethod,
-                status: "VALIDATED",
+                cashAmount: mixedSplit.cashAmount,
+                chequeAmount: mixedSplit.chequeAmount,
                 reference: parsed.data.reference ?? null,
                 receivedByUserId: sessionUser.id,
-                receivedAt: new Date(),
-              },
-            select: { id: true, reference: true },
-          })
+              })
+            : await tx.payment.create({
+                data: {
+                  organizationId: sessionUser.organizationId,
+                  paymentNumber: await nextPaymentNumber(tx, sessionUser.organizationId),
+                  saleId: sale.id,
+                  amount: payment.paidAmount,
+                  method:
+                    parsed.data.paymentMethod === "CREDIT" ? "CASH" : parsed.data.paymentMethod,
+                  status: "VALIDATED",
+                  reference: parsed.data.reference ?? null,
+                  receivedByUserId: sessionUser.id,
+                  receivedAt: new Date(),
+                },
+                select: { id: true, reference: true },
+              })
           : null;
       if (collectNow && customer && payment.creditAmount > 0) {
         await tx.customer.update({
@@ -504,6 +544,9 @@ export async function createCounterSale(
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
           paymentMethod: parsed.data.paymentMethod,
+          paymentSplit: mixedSplit
+            ? { cashAmount: mixedSplit.cashAmount, chequeAmount: mixedSplit.chequeAmount }
+            : null,
           paymentId: createdPayment?.id ?? null,
           paymentReference: createdPayment?.reference ?? null,
           createdByUserId: sessionUser.id,
@@ -531,12 +574,24 @@ export async function createCounterSale(
 
       return tx.sale.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
       },
-      // 15s: this transaction chains several sequential lookups plus the
-      // accounting entry posting, which can exceed Prisma's 5s default
-      // interactive-transaction timeout (P2028) against Neon's serverless
-      // connection latency, even with no real conflict (same fix already
-      // applied to the equivalent driver-sales.ts transaction).
-      { isolationLevel: "Serializable", timeout: 15000 },
+      // P2028 audit (POS timeout chantier, 2026-09-05): this budget was
+      // raised from 15000 to 20000ms only AFTER cutting this transaction's
+      // own round-trip count by ~43% (82 -> ~47 queries for a MIXED sale,
+      // measured with PRISMA_DEBUG_QUERIES=1 against the real
+      // org-comdis-principal org - see that chantier's report for the full
+      // query-by-query breakdown). That optimization alone took typical
+      // wall time from ~15-24s (frequently exceeding 15000ms) down to
+      // ~9-13s. The remaining 5000ms is headroom against this dev
+      // machine's own observed Neon round-trip variance (individual
+      // queries occasionally spiking to 1-8s instead of their usual
+      // ~150-200ms, independent of query count) - a live browser test
+      // still hit one 25.3s outlier even after optimization, which a
+      // higher budget absorbs without disguising any remaining
+      // inefficiency (the query count itself is already lean). Not raised
+      // further: an even larger budget would start masking genuine
+      // problems rather than tolerating normal network jitter, which is
+      // exactly what this chantier's own instructions warned against.
+      { isolationLevel: "Serializable", timeout: 20000 },
     ),
   );
 

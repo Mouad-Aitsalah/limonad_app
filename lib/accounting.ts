@@ -98,6 +98,17 @@ export const accountingSystemAccountCodes = {
   customerCashCreditNoteTransit: "117",
   /** VAT recoverable on cash-refunded supplier credit notes (avoir fournisseur especes). */
   supplierCashCreditNoteVat: "34552",
+  /**
+   * Cheque en portefeuille - dedicated treasury account for CHECK/cheque
+   * settlements (never 5141 Banque, see postSaleAccountingEntry). Unlike
+   * every other code in this object, this one is NOT in
+   * defaultAccountingAccounts and must NEVER be added there: it is resolved
+   * by a strict, non-auto-creating lookup (requireExistingAccountByCode in
+   * lib/server/accounting.ts) that throws a clear error if the org hasn't
+   * configured it yet, rather than silently bootstrapping a generic
+   * placeholder account under this code.
+   */
+  chequeInPortfolio: "51111",
 } as const;
 
 export const accountingStampCalculationMethodLabels: Record<
@@ -146,7 +157,8 @@ export const accountingSettingsFieldDefinitions: Array<{
   {
     key: "bankAccountId",
     label: "Banque",
-    hint: "Compte de tresorerie pour carte, cheque et virement.",
+    // Cheque no longer settles here - see accountingSystemAccountCodes.chequeInPortfolio (51111).
+    hint: "Compte de tresorerie pour carte et virement.",
   },
   {
     key: "customerAccountId",

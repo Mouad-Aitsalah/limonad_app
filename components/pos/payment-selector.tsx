@@ -9,7 +9,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatCurrency } from "@/lib/utils";
 import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
+
+export type MixedPaymentAmounts = { cash: number; cheque: number };
+
+/** Same rounding-to-2-decimals comparison as the server's
+ * resolveMixedPaymentSplit (lib/server/sales-shared.ts) - this is a UI hint
+ * only, the real enforcement always happens server-side. */
+export function describeMixedPaymentError(
+  amounts: MixedPaymentAmounts,
+  total: number,
+): string | null {
+  const sum = Math.round((amounts.cash + amounts.cheque) * 100) / 100;
+  const target = Math.round(total * 100) / 100;
+  if (sum < target) return "Le montant saisi est inférieur au total à régler.";
+  if (sum > target) return "Le montant saisi dépasse le total à régler.";
+  return null;
+}
 
 type PaymentSelectorProps = {
   paymentMethod: PosPaymentMethodValue;
@@ -20,6 +37,9 @@ type PaymentSelectorProps = {
   onBanqueChange: (value: string) => void;
   dateEcheance: string;
   onDateEcheanceChange: (value: string) => void;
+  mixedAmounts: MixedPaymentAmounts;
+  onMixedAmountsChange: (value: MixedPaymentAmounts) => void;
+  mixedTotal: number;
 };
 
 export function PaymentSelector({
@@ -31,8 +51,13 @@ export function PaymentSelector({
   onBanqueChange,
   dateEcheance,
   onDateEcheanceChange,
+  mixedAmounts,
+  onMixedAmountsChange,
+  mixedTotal,
 }: PaymentSelectorProps) {
   const selected = posPaymentMethods.find((method) => method.value === paymentMethod);
+  const mixedError =
+    paymentMethod === "MIXED" ? describeMixedPaymentError(mixedAmounts, mixedTotal) : null;
 
   return (
     <div className="space-y-3">
@@ -80,6 +105,42 @@ export function PaymentSelector({
               placeholder="Attijariwafa Bank"
             />
           </div>
+        </div>
+      )}
+
+      {paymentMethod === "MIXED" && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="mixedCash">Espèces</Label>
+              <Input
+                id="mixedCash"
+                type="number"
+                min={0}
+                step="0.01"
+                value={mixedAmounts.cash}
+                onChange={(event) =>
+                  onMixedAmountsChange({ ...mixedAmounts, cash: Number(event.target.value) })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="mixedCheque">Chèque</Label>
+              <Input
+                id="mixedCheque"
+                type="number"
+                min={0}
+                step="0.01"
+                value={mixedAmounts.cheque}
+                onChange={(event) =>
+                  onMixedAmountsChange({ ...mixedAmounts, cheque: Number(event.target.value) })
+                }
+              />
+            </div>
+          </div>
+          <p className={mixedError ? "text-xs font-medium text-red-600" : "text-xs text-muted-foreground"}>
+            {mixedError ?? `Total saisi : ${formatCurrency(mixedAmounts.cash + mixedAmounts.cheque)}`}
+          </p>
         </div>
       )}
 

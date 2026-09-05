@@ -100,6 +100,18 @@ export function normalizeSaleLines<T extends RawSaleLineInput>(lines: T[]) {
   });
 }
 
+/**
+ * LEGACY MIXED handling: "some cash now, the rest on credit" - a single
+ * paidAmount with no record of which instrument it was paid in. Kept
+ * exactly as-is for the driver POS (components/driver-pos), which still
+ * offers MIXED with this single-amount semantics and never sends the new
+ * cashAmount/chequeAmount fields. The counter POS (components/pos) no
+ * longer uses this branch for MIXED - see resolveMixedPaymentSplit below,
+ * which callers use instead whenever those fields are present (audit: 0
+ * MIXED sales existed in DEV under this legacy behaviour before the
+ * cash+cheque split feature was added, so this is dead in practice for the
+ * counter POS, only kept for the untouched driver flow).
+ */
 export function resolvePaymentAmounts(
   method: string,
   totalTTC: number,
@@ -114,6 +126,51 @@ export function resolvePaymentAmounts(
     return { paidAmount, creditAmount: roundMoney(totalTTC - paidAmount) };
   }
   return { paidAmount: totalTTC, creditAmount: 0 };
+}
+
+/**
+ * Counter-POS MIXED: cash + cheque covering the FULL total, never a credit
+ * remainder (a real business decision, not a schema limitation - see the
+ * "MODIFICATION POS + PAIEMENT MIXTE" chantier). Both amounts persist as
+ * two separate Payment rows (one CASH, one CHECK) so the split survives for
+ * the journal, reports, the ticket and future Power BI export - see
+ * createCounterSale / collectSaleCore's Payment.createMany calls.
+ */
+export function resolveMixedPaymentSplit(
+  totalTTC: number,
+  cashAmountInput: number | undefined,
+  chequeAmountInput: number | undefined,
+): { paidAmount: number; creditAmount: number; cashAmount: number; chequeAmount: number } {
+  const cashAmount = roundMoney(cashAmountInput ?? 0);
+  const chequeAmount = roundMoney(chequeAmountInput ?? 0);
+  if (
+    !Number.isFinite(cashAmount) ||
+    !Number.isFinite(chequeAmount) ||
+    cashAmount < 0 ||
+    chequeAmount < 0
+  ) {
+    throw new OperationsServiceError(
+      "Les montants Especes et Cheque doivent etre des nombres positifs.",
+      422,
+    );
+  }
+  if (cashAmount <= 0 || chequeAmount <= 0) {
+    throw new OperationsServiceError(
+      "Pour un paiement mixte, les montants Especes et Cheque doivent tous les deux etre superieurs a 0.",
+      422,
+    );
+  }
+
+  const sum = roundMoney(cashAmount + chequeAmount);
+  const target = roundMoney(totalTTC);
+  if (sum < target) {
+    throw new OperationsServiceError("Le montant saisi est inferieur au total a regler.", 422);
+  }
+  if (sum > target) {
+    throw new OperationsServiceError("Le montant saisi depasse le total a regler.", 422);
+  }
+
+  return { paidAmount: target, creditAmount: 0, cashAmount, chequeAmount };
 }
 
 /**
@@ -253,6 +310,61 @@ export async function nextPaymentNumber(
     DocumentType.Payment,
   );
   return `PAY-${String(number).padStart(6, "0")}`;
+}
+
+/**
+ * A counter-POS MIXED sale persists as TWO Payment rows (one CASH, one
+ * CHECK) rather than a single row with method=MIXED - Payment.saleId was
+ * never unique, so this needed no schema change. This is how the split
+ * survives for the journal, sales history, the ticket and future exports:
+ * anything reading SaleDto.payments already sees both rows with their own
+ * method/amount/reference.
+ */
+export async function createMixedPayments(
+  tx: Pick<typeof prisma, "payment" | "$queryRaw">,
+  input: {
+    organizationId: string;
+    saleId: string;
+    cashAmount: number;
+    chequeAmount: number;
+    reference: string | null;
+    receivedByUserId: string;
+  },
+): Promise<{ id: string; reference: string | null }> {
+  const receivedAt = new Date();
+  const cashPayment = await tx.payment.create({
+    data: {
+      organizationId: input.organizationId,
+      paymentNumber: await nextPaymentNumber(tx, input.organizationId),
+      saleId: input.saleId,
+      amount: input.cashAmount,
+      method: "CASH",
+      status: "VALIDATED",
+      reference: null,
+      receivedByUserId: input.receivedByUserId,
+      receivedAt,
+    },
+    select: { id: true, reference: true },
+  });
+  // The settlement entry's dedup key only needs ONE stable, non-null
+  // payment id for this sale - the cash payment's id is reused for that
+  // purpose (see postSaleAccountingEntry's settlementSourceId), the cheque
+  // payment's own id is never referenced elsewhere.
+  await tx.payment.create({
+    data: {
+      organizationId: input.organizationId,
+      paymentNumber: await nextPaymentNumber(tx, input.organizationId),
+      saleId: input.saleId,
+      amount: input.chequeAmount,
+      method: "CHECK",
+      status: "VALIDATED",
+      reference: input.reference,
+      receivedByUserId: input.receivedByUserId,
+      receivedAt,
+    },
+    select: { id: true },
+  });
+  return cashPayment;
 }
 
 export async function nextMovementNumber(

@@ -20,7 +20,11 @@ import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { InvoiceHeader } from "@/components/pos/invoice-header";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { CustomerNumberInput } from "@/components/pos/customer-number-input";
-import { PaymentSelector } from "@/components/pos/payment-selector";
+import {
+  describeMixedPaymentError,
+  PaymentSelector,
+  type MixedPaymentAmounts,
+} from "@/components/pos/payment-selector";
 import { CartTable } from "@/components/pos/cart-table";
 import { CartSummary } from "@/components/pos/cart-summary";
 import { InvoiceActions } from "@/components/pos/invoice-actions";
@@ -115,6 +119,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [chequeNumber, setChequeNumber] = React.useState("");
   const [banque, setBanque] = React.useState("");
   const [dateEcheance, setDateEcheance] = React.useState("");
+  // Paiement mixte: espèces + chèque doivent couvrir exactement le total,
+  // saisis côte à côte dès que ce mode est choisi (voir PaymentSelector).
+  const [mixedAmounts, setMixedAmounts] = React.useState<MixedPaymentAmounts>({
+    cash: 0,
+    cheque: 0,
+  });
   const [checkoutOpen, setCheckoutOpen] = React.useState(false);
   // Stable for one sale attempt (F5): kept identical across a network retry
   // of confirmOperation, only ever replaced in resetOperation() once a sale
@@ -342,6 +352,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setChequeNumber("");
     setBanque("");
     setDateEcheance("");
+    setMixedAmounts({ cash: 0, cheque: 0 });
     idempotencyKeyRef.current = crypto.randomUUID();
   }
 
@@ -399,6 +410,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           : paymentMethod === "BANK_TRANSFER"
             ? banque || null
             : null,
+      ...(paymentMethod === "MIXED"
+        ? { cashAmount: mixedAmounts.cash, chequeAmount: mixedAmounts.cheque }
+        : {}),
       lines: cartLines.map((line) => ({
         productId: line.productId,
         quantity: line.quantity,
@@ -551,6 +565,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
               : paymentMethod === "BANK_TRANSFER"
                 ? banque || null
                 : null,
+          ...(paymentMethod === "MIXED"
+            ? { cashAmount: mixedAmounts.cash, chequeAmount: mixedAmounts.cheque }
+            : {}),
         }),
       });
       const payload = await response.json();
@@ -651,6 +668,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setChequeNumber("");
     setBanque("");
     setDateEcheance("");
+    setMixedAmounts({ cash: 0, cheque: 0 });
     setCart([]);
     setOpenPendingSale(sale);
     setLastSale(sale);
@@ -769,6 +787,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             onBanqueChange={setBanque}
             dateEcheance={dateEcheance}
             onDateEcheanceChange={setDateEcheance}
+            mixedAmounts={mixedAmounts}
+            onMixedAmountsChange={setMixedAmounts}
+            mixedTotal={totals.netAPayer}
           />
         </div>
 
@@ -791,7 +812,16 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           operationType={operationType}
           disabled={cartLines.length === 0}
           loading={submitting || collecting}
-          onCheckout={() => setCheckoutOpen(true)}
+          onCheckout={() => {
+            if (paymentMethod === "MIXED") {
+              const mixedError = describeMixedPaymentError(mixedAmounts, totals.netAPayer);
+              if (mixedError) {
+                toast.error(mixedError);
+                return;
+              }
+            }
+            setCheckoutOpen(true);
+          }}
           onPrint={() => {
             void printInvoice();
           }}
@@ -831,6 +861,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         operationType={operationType}
         destinationLabel={selectedCustomer?.name ?? "Client comptoir"}
         submitting={submitting || collecting}
+        mixedAmounts={mixedAmounts}
         onConfirm={confirmOperation}
       />
       <ReceiptPrint sale={lastSale} />

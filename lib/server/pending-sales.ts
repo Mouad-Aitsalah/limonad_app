@@ -11,10 +11,12 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import {
+  createMixedPayments,
   mapSaleToDto,
   nextInvoiceNumber,
   nextPaymentNumber,
   posDayStart,
+  resolveMixedPaymentSplit,
   resolvePaymentAmounts,
   saleInclude,
 } from "@/lib/server/sales-shared";
@@ -47,8 +49,15 @@ import type { SaleDto } from "@/types/operations-dto";
  */
 
 const collectSchema = z.object({
-  paymentMethod: z.enum(["CASH", "CARD", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
+  // CARD removed: see counter-sales.ts's counterSaleSchema comment - no new
+  // collection (counter or driver) may settle as CARD anymore.
+  paymentMethod: z.enum(["CASH", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
   paidAmount: z.coerce.number().min(0).optional(),
+  // Counter-POS MIXED only - see resolveMixedPaymentSplit. The driver POS
+  // never sends these and keeps using the legacy single-paidAmount MIXED
+  // behaviour via resolvePaymentAmounts below.
+  cashAmount: z.coerce.number().min(0).optional(),
+  chequeAmount: z.coerce.number().min(0).optional(),
   reference: z.string().trim().nullable().optional(),
 });
 
@@ -144,6 +153,14 @@ async function collectSaleCore(
   const collected = await withSerializableRetry(() =>
     prisma.$transaction(
       async (tx) => {
+        // P2028 audit: a findFirst with `include: saleInclude` here fires
+        // ~9 extra round trips to resolve every relation (customer, depot,
+        // driver+user, truck, tour, createdBy, lines+product, payments) -
+        // but the actual collection logic below only ever reads this sale's
+        // own scalar fields (status/totalTTC/subtotalHT/taxAmount/
+        // customerId). The full include is only genuinely needed for the
+        // rare "already collected" early-return path, which now re-fetches
+        // it there instead of paying that cost on every normal collection.
         const sale = await tx.sale.findFirst({
           where: {
             id: saleId,
@@ -151,7 +168,14 @@ async function collectSaleCore(
             origin: scope.origin,
             ...(scope.origin === "TRUCK" ? { driverId: scope.driverId } : {}),
           },
-          include: saleInclude,
+          select: {
+            id: true,
+            status: true,
+            totalTTC: true,
+            subtotalHT: true,
+            taxAmount: true,
+            customerId: true,
+          },
         });
         if (!sale) throw new OperationsServiceError("Facture introuvable.", 404);
 
@@ -159,11 +183,23 @@ async function collectSaleCore(
         // collect, a retried request) - return it untouched, never a second
         // payment / movement / number.
         if (sale.status !== "DRAFT") {
-          return sale;
+          return tx.sale.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
         }
 
         const totalTTC = sale.totalTTC.toNumber();
-        const payment = resolvePaymentAmounts(paymentMethod, totalTTC, parsed.data.paidAmount);
+        // The counter POS always sends both split fields together for
+        // MIXED; the driver POS never sends either and keeps the legacy
+        // single-paidAmount behaviour (see collectSchema's own comment).
+        // mixedSplit is its own fully-typed variable (not a union member of
+        // `payment`) so cashAmount/chequeAmount stay type-safe below.
+        const mixedSplit =
+          paymentMethod === "MIXED" &&
+          parsed.data.cashAmount !== undefined &&
+          parsed.data.chequeAmount !== undefined
+            ? resolveMixedPaymentSplit(totalTTC, parsed.data.cashAmount, parsed.data.chequeAmount)
+            : null;
+        const payment =
+          mixedSplit ?? resolvePaymentAmounts(paymentMethod, totalTTC, parsed.data.paidAmount);
 
         if (payment.creditAmount > 0 && !sale.customerId) {
           throw new OperationsServiceError("Client obligatoire pour une vente a credit.", 422);
@@ -216,20 +252,29 @@ async function collectSaleCore(
 
         const createdPayment =
           payment.paidAmount > 0
-            ? await tx.payment.create({
-                data: {
+            ? mixedSplit
+              ? await createMixedPayments(tx, {
                   organizationId,
-                  paymentNumber: await nextPaymentNumber(tx, organizationId),
                   saleId: sale.id,
-                  amount: payment.paidAmount,
-                  method: paymentMethod === "CREDIT" ? "CASH" : paymentMethod,
-                  status: "VALIDATED",
+                  cashAmount: mixedSplit.cashAmount,
+                  chequeAmount: mixedSplit.chequeAmount,
                   reference: parsed.data.reference ?? null,
                   receivedByUserId: collectedByUserId,
-                  receivedAt: new Date(),
-                },
-                select: { id: true, reference: true },
-              })
+                })
+              : await tx.payment.create({
+                  data: {
+                    organizationId,
+                    paymentNumber: await nextPaymentNumber(tx, organizationId),
+                    saleId: sale.id,
+                    amount: payment.paidAmount,
+                    method: paymentMethod === "CREDIT" ? "CASH" : paymentMethod,
+                    status: "VALIDATED",
+                    reference: parsed.data.reference ?? null,
+                    receivedByUserId: collectedByUserId,
+                    receivedAt: new Date(),
+                  },
+                  select: { id: true, reference: true },
+                })
             : null;
 
         if (customer && payment.creditAmount > 0) {
@@ -251,6 +296,9 @@ async function collectSaleCore(
           stampAmount,
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
+          paymentSplit: mixedSplit
+            ? { cashAmount: mixedSplit.cashAmount, chequeAmount: mixedSplit.chequeAmount }
+            : null,
           paymentMethod,
           paymentId: createdPayment?.id ?? null,
           paymentReference: createdPayment?.reference ?? null,
@@ -286,7 +334,14 @@ async function collectSaleCore(
 
         return tx.sale.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
       },
-      { isolationLevel: "Serializable", timeout: 15000 },
+      // Raised from 15000 to 20000ms alongside the same fix in
+      // counter-sales.ts's createCounterSale - see that file's own comment
+      // for the full justification (P2028 audit, 2026-09-05): a ~43%
+      // round-trip reduction was applied first (this collect transaction
+      // shares the same idempotency-check and accounting-posting
+      // optimizations), this extra headroom only covers genuine leftover
+      // Neon latency variance, not remaining inefficiency.
+      { isolationLevel: "Serializable", timeout: 20000 },
     ),
   );
 
