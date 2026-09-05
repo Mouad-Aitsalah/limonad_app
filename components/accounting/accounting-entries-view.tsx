@@ -2,10 +2,10 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import type {
   AccountingAccountOptionDto,
   AccountingEntryDto,
@@ -85,6 +85,21 @@ function formFromEntry(entry: AccountingEntryDto): ManualEntryForm {
   };
 }
 
+/** A stable fingerprint of the form's meaningful content (ignores the
+ * client-only row ids and "0" vs "" vs "0.00" noise). Used to tell whether
+ * the current form has unsaved changes before navigating between drafts. */
+function snapshot(form: ManualEntryForm): string {
+  return JSON.stringify({
+    date: form.date,
+    lines: form.lines.map((line) => ({
+      numCompt: line.numCompt.trim(),
+      label: line.label.trim(),
+      debit: String(Number(line.debit || 0)),
+      credit: String(Number(line.credit || 0)),
+    })),
+  });
+}
+
 function isLineMeaningful(line: ManualLineForm) {
   return (
     line.numCompt.trim() !== "" ||
@@ -109,15 +124,6 @@ function resolveAccountByCode(
   return { status: "resolved", account: match };
 }
 
-function formatModified(iso: string) {
-  return new Intl.DateTimeFormat("fr-MA", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(iso));
-}
-
 export function AccountingEntriesView({
   accounts,
   canManage,
@@ -129,14 +135,19 @@ export function AccountingEntriesView({
 
   const [saving, setSaving] = React.useState(false);
   const [drafts, setDrafts] = React.useState<AccountingEntryDto[]>(initialDrafts);
+  /** null = composing a brand-new (not yet archived) entry. Otherwise the
+   * id of the DRAFT AccountingEntry currently loaded in the form. */
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null);
-  const [busyDraftId, setBusyDraftId] = React.useState<string | null>(null);
+  const [confirmDeleteActive, setConfirmDeleteActive] = React.useState(false);
   const [form, setForm] = React.useState<ManualEntryForm>(() =>
     reviseEntry ? formFromEntry(reviseEntry) : defaultForm(),
   );
+  /** Fingerprint of the form as it was last loaded/saved - the form is
+   * "dirty" when the current fingerprint no longer matches. */
+  const [loadedSnapshot, setLoadedSnapshot] = React.useState<string>(() =>
+    snapshot(reviseEntry ? formFromEntry(reviseEntry) : defaultForm()),
+  );
   const pendingFocusRowIdRef = React.useRef<string | null>(null);
-  const formCardRef = React.useRef<HTMLDivElement | null>(null);
 
   const rowFieldRefs = React.useRef(
     new Map<string, Record<LineField, HTMLInputElement | null>>(),
@@ -179,6 +190,28 @@ export function AccountingEntriesView({
   const unresolvedLines = meaningfulLines.filter(
     (line) => resolveAccountByCode(accounts, line.numCompt).status !== "resolved",
   );
+
+  const activeDraftIndex = editingId
+    ? drafts.findIndex((draft) => draft.id === editingId)
+    : -1;
+  const composingNew = editingId === null || activeDraftIndex === -1;
+  /** editingId, but null whenever it no longer points at a live draft. */
+  const activeDraftId = composingNew ? null : editingId;
+  type NavTab = { key: string; position: number; draftId: string | null; isNew: boolean };
+  const navTabs: NavTab[] = [
+    ...drafts.map((draft, index) => ({
+      key: draft.id,
+      position: index + 1,
+      draftId: draft.id,
+      isNew: false,
+    })),
+    ...(composingNew
+      ? [{ key: "__new__", position: drafts.length + 1, draftId: null, isNew: true }]
+      : []),
+  ];
+  const totalPositions = navTabs.length;
+  const activePosition = composingNew ? drafts.length + 1 : activeDraftIndex + 1;
+  const dirty = snapshot(form) !== loadedSnapshot;
 
   function updateLine(index: number, field: keyof ManualLineForm, value: string) {
     setForm((prev) => ({
@@ -253,20 +286,36 @@ export function AccountingEntriesView({
     }
   }
 
-  function resetForm() {
-    setForm(defaultForm());
+  function loadDraft(entry: AccountingEntryDto) {
+    const next = formFromEntry(entry);
+    setForm(next);
+    setEditingId(entry.id);
     rowFieldRefs.current.clear();
-    setEditingId(null);
+    setConfirmDeleteActive(false);
+    setLoadedSnapshot(snapshot(next));
   }
 
-  async function refreshDrafts() {
+  function startNewForm() {
+    const next = defaultForm();
+    setForm(next);
+    setEditingId(null);
+    rowFieldRefs.current.clear();
+    setConfirmDeleteActive(false);
+    setLoadedSnapshot(snapshot(next));
+  }
+
+  async function refreshDrafts(): Promise<AccountingEntryDto[]> {
     try {
       const response = await fetch("/api/accounting/entries/drafts", { cache: "no-store" });
       const body = (await response.json()) as { entries?: AccountingEntryDto[] };
-      if (response.ok && body.entries) setDrafts(body.entries);
+      if (response.ok && Array.isArray(body.entries)) {
+        setDrafts(body.entries);
+        return body.entries;
+      }
     } catch {
       /* keep the current list on a transient error */
     }
+    return drafts;
   }
 
   /** Lines to send: only those with a real resolved account. */
@@ -288,6 +337,12 @@ export function AccountingEntriesView({
       description: NEUTRAL_ENTRY_DESCRIPTION,
       lines: payloadLines(),
     };
+  }
+
+  /** Can the current form be saved as a DRAFT without a fight (at least one
+   * real line, every account number resolves)? */
+  function canPersistCleanly() {
+    return meaningfulLines.length >= 1 && unresolvedLines.length === 0;
   }
 
   function checkBalanced(): boolean {
@@ -324,12 +379,64 @@ export function AccountingEntriesView({
     return true;
   }
 
+  /** Before leaving the current form for another tab: silently keep whatever
+   * has been typed so no line is lost. An unchanged form, or one that cannot
+   * be saved cleanly yet, is left untouched. */
+  async function persistCurrentIfDirty(): Promise<AccountingEntryDto[]> {
+    if (!canManage || saving || reviseMode) return drafts;
+    if (!dirty || !canPersistCleanly()) return drafts;
+    setSaving(true);
+    try {
+      if (activeDraftId) {
+        await fetch(`/api/accounting/entries/${activeDraftId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "draft", ...basePayload() }),
+        });
+      } else {
+        await fetch("/api/accounting/entries", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "DRAFT", ...basePayload() }),
+        });
+      }
+      return await refreshDrafts();
+    } catch {
+      return drafts;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function goToPosition(position: number) {
+    if (saving) return;
+    const target = navTabs.find((tab) => tab.position === position);
+    if (!target || target.position === activePosition) return;
+    const targetDraftId = target.draftId;
+    const fresh = await persistCurrentIfDirty();
+    if (targetDraftId === null) {
+      startNewForm();
+      return;
+    }
+    const entry =
+      fresh.find((draft) => draft.id === targetDraftId) ??
+      drafts.find((draft) => draft.id === targetDraftId);
+    if (entry) loadDraft(entry);
+    else startNewForm();
+  }
+
+  async function startNewEntry() {
+    if (saving) return;
+    await persistCurrentIfDirty();
+    startNewForm();
+  }
+
   async function saveDraft() {
     if (!canManage || saving || !checkDraftMinimum()) return;
     setSaving(true);
     try {
-      const response = editingId
-        ? await fetch(`/api/accounting/entries/${editingId}`, {
+      const response = activeDraftId
+        ? await fetch(`/api/accounting/entries/${activeDraftId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mode: "draft", ...basePayload() }),
@@ -344,9 +451,12 @@ export function AccountingEntriesView({
         toast.error(body.message ?? "Impossible d'archiver l'écriture.");
         return;
       }
-      toast.success("Écriture archivée.");
-      resetForm();
-      await refreshDrafts();
+      toast.success(activeDraftId ? "Écriture non validée mise à jour." : "Écriture archivée.");
+      const savedId = body.entry.id;
+      const fresh = await refreshDrafts();
+      const saved = fresh.find((draft) => draft.id === savedId);
+      if (saved) loadDraft(saved);
+      else startNewForm();
     } finally {
       setSaving(false);
     }
@@ -356,26 +466,28 @@ export function AccountingEntriesView({
     if (!canManage || saving || !checkBalanced()) return;
     setSaving(true);
     try {
-      if (editingId) {
-        const patch = await fetch(`/api/accounting/entries/${editingId}`, {
+      let removedDraftId: string | null = null;
+      if (activeDraftId) {
+        const patch = await fetch(`/api/accounting/entries/${activeDraftId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: "draft", ...basePayload() }),
         });
         const patchBody = (await patch.json()) as { message?: string };
         if (!patch.ok) {
-          toast.error(patchBody.message ?? "Impossible de mettre à jour l'écriture archivée.");
+          toast.error(patchBody.message ?? "Impossible de mettre à jour l'écriture non validée.");
           return;
         }
-        const validate = await fetch(`/api/accounting/entries/${editingId}/validate`, {
+        const validate = await fetch(`/api/accounting/entries/${activeDraftId}/validate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         });
         const validateBody = (await validate.json()) as { message?: string };
         if (!validate.ok) {
-          toast.error(validateBody.message ?? "Impossible de valider l'écriture archivée.");
+          toast.error(validateBody.message ?? "Impossible de valider l'écriture non validée.");
           return;
         }
+        removedDraftId = activeDraftId;
       } else {
         const response = await fetch("/api/accounting/entries", {
           method: "POST",
@@ -388,9 +500,19 @@ export function AccountingEntriesView({
           return;
         }
       }
-      toast.success("Écriture enregistrée avec succès.");
-      resetForm();
-      await refreshDrafts();
+      toast.success("Écriture validée : elle apparaît dans le Journal.");
+      const before = drafts;
+      const fresh = await refreshDrafts();
+      if (removedDraftId) {
+        if (fresh.length === 0) {
+          startNewForm();
+        } else {
+          const oldIndex = Math.max(0, before.findIndex((draft) => draft.id === removedDraftId));
+          loadDraft(fresh[Math.min(oldIndex, fresh.length - 1)]);
+        }
+      } else {
+        startNewForm();
+      }
     } finally {
       setSaving(false);
     }
@@ -417,51 +539,29 @@ export function AccountingEntriesView({
     }
   }
 
-  function startEditDraft(entry: AccountingEntryDto) {
-    setEditingId(entry.id);
-    setForm(formFromEntry(entry));
-    rowFieldRefs.current.clear();
-    setConfirmDeleteId(null);
-    formCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  async function validateDraftFromList(id: string) {
-    if (busyDraftId) return;
-    setBusyDraftId(id);
+  async function deleteActiveDraft() {
+    if (!activeDraftId || saving) return;
+    const removedId = activeDraftId;
+    setSaving(true);
     try {
-      const response = await fetch(`/api/accounting/entries/${id}/validate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
+      const response = await fetch(`/api/accounting/entries/${removedId}`, { method: "DELETE" });
       const body = (await response.json()) as { message?: string };
       if (!response.ok) {
-        toast.error(body.message ?? "Impossible de valider l'écriture archivée.");
+        toast.error(body.message ?? "Impossible de supprimer cette écriture.");
         return;
       }
-      toast.success("Écriture validée : elle apparaît dans le Journal.");
-      if (editingId === id) resetForm();
-      await refreshDrafts();
-    } finally {
-      setBusyDraftId(null);
-    }
-  }
-
-  async function deleteDraft(id: string) {
-    if (busyDraftId) return;
-    setBusyDraftId(id);
-    try {
-      const response = await fetch(`/api/accounting/entries/${id}`, { method: "DELETE" });
-      const body = (await response.json()) as { message?: string };
-      if (!response.ok) {
-        toast.error(body.message ?? "Impossible de supprimer l'écriture archivée.");
-        return;
+      toast.success("Écriture non validée supprimée.");
+      setConfirmDeleteActive(false);
+      const before = drafts;
+      const fresh = await refreshDrafts();
+      if (fresh.length === 0) {
+        startNewForm();
+      } else {
+        const oldIndex = Math.max(0, before.findIndex((draft) => draft.id === removedId));
+        loadDraft(fresh[Math.min(oldIndex, fresh.length - 1)]);
       }
-      toast.success("Écriture archivée supprimée.");
-      setConfirmDeleteId(null);
-      if (editingId === id) resetForm();
-      await refreshDrafts();
     } finally {
-      setBusyDraftId(null);
+      setSaving(false);
     }
   }
 
@@ -475,6 +575,79 @@ export function AccountingEntriesView({
       </div>
     );
   }
+
+  const draftNav = (
+    <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:px-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            className="shrink-0"
+            disabled={saving || activePosition <= 1}
+            onClick={() => void goToPosition(activePosition - 1)}
+            aria-label="Écriture précédente"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+
+          <div className="flex items-center gap-1 overflow-x-auto">
+            {navTabs.map((tab) => {
+              const active = tab.position === activePosition;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => void goToPosition(tab.position)}
+                  aria-current={active ? "true" : undefined}
+                  className={cn(
+                    "h-9 min-w-9 shrink-0 rounded-xl px-3 text-sm font-semibold tabular-nums transition-colors",
+                    active
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "bg-muted text-muted-foreground hover:bg-muted/70",
+                    tab.isNew && !active && "border border-dashed border-border bg-transparent",
+                  )}
+                >
+                  {tab.position}
+                </button>
+              );
+            })}
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            className="shrink-0"
+            disabled={saving || activePosition >= totalPositions}
+            onClick={() => void goToPosition(activePosition + 1)}
+            aria-label="Écriture suivante"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 sm:ml-auto"
+          disabled={saving || (composingNew && !dirty)}
+          onClick={() => void startNewEntry()}
+        >
+          <Plus className="h-4 w-4" />
+          Nouvelle écriture
+        </Button>
+      </div>
+
+      <p className="mt-2 text-xs text-muted-foreground">
+        {composingNew
+          ? "Nouvelle écriture en cours — « Archiver » pour la garder sans la comptabiliser."
+          : `Écriture non validée ${activePosition} / ${drafts.length} — absente du Journal tant qu'elle n'est pas validée.`}
+      </p>
+    </div>
+  );
 
   const linesEditor = (
     <>
@@ -651,11 +824,42 @@ export function AccountingEntriesView({
                 {saving ? "Enregistrement..." : "Enregistrer la correction"}
               </Button>
             </>
+          ) : confirmDeleteActive ? (
+            <>
+              <span className="text-sm text-muted-foreground">
+                Supprimer cette écriture non validée ?
+              </span>
+              <Button
+                type="button"
+                variant="destructive"
+                size="lg"
+                disabled={saving}
+                onClick={() => void deleteActiveDraft()}
+              >
+                Supprimer
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="lg"
+                disabled={saving}
+                onClick={() => setConfirmDeleteActive(false)}
+              >
+                Annuler
+              </Button>
+            </>
           ) : (
             <>
-              {editingId ? (
-                <Button type="button" variant="ghost" size="lg" onClick={resetForm} disabled={saving}>
-                  Annuler
+              {activeDraftId ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="lg"
+                  disabled={saving}
+                  onClick={() => setConfirmDeleteActive(true)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Supprimer cette écriture
                 </Button>
               ) : null}
               <Button
@@ -689,129 +893,13 @@ export function AccountingEntriesView({
             Journal, marquée REVERSED) et cette version corrigée sera comptabilisée.
           </p>
         </div>
-      ) : editingId ? (
-        <div className="rounded-xl border border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
-          Modification d&apos;une écriture archivée en cours. Archivez-la de nouveau ou
-          validez-la pour la comptabiliser.
-        </div>
-      ) : null}
+      ) : (
+        draftNav
+      )}
 
-      <div
-        ref={formCardRef}
-        className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-7"
-      >
+      <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-7">
         {linesEditor}
       </div>
-
-      {!reviseMode ? (
-        <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-7">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="font-heading text-lg font-semibold text-foreground">
-              Écritures archivées
-            </h2>
-            <span className="text-sm text-muted-foreground">
-              {drafts.length} en attente de validation
-            </span>
-          </div>
-
-          {drafts.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-              Aucune écriture archivée. Utilisez « Archiver » pour préparer une écriture
-              sans la comptabiliser.
-            </p>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border border-border">
-              <Table className="min-w-[720px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                    <TableHead className="text-right">Lignes</TableHead>
-                    <TableHead>Dernière modification</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {drafts.map((draft) => {
-                    const total = Math.max(draft.totalDebit, draft.totalCredit);
-                    const isConfirming = confirmDeleteId === draft.id;
-                    const busy = busyDraftId === draft.id;
-                    return (
-                      <TableRow key={draft.id}>
-                        <TableCell className="tabular-nums">
-                          {new Date(draft.date).toLocaleDateString("fr-FR")}
-                        </TableCell>
-                        <TableCell className="text-right font-semibold tabular-nums">
-                          {formatCurrency(total)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {draft.lines.length}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground tabular-nums">
-                          {formatModified(draft.updatedAt)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {isConfirming ? (
-                            <div className="flex items-center justify-end gap-2">
-                              <span className="text-xs text-muted-foreground">
-                                Supprimer cette écriture archivée ?
-                              </span>
-                              <Button
-                                type="button"
-                                variant="destructive"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() => deleteDraft(draft.id)}
-                              >
-                                Oui
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setConfirmDeleteId(null)}
-                              >
-                                Annuler
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-end gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => startEditDraft(draft)}
-                              >
-                                Modifier
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() => validateDraftFromList(draft.id)}
-                              >
-                                Valider
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setConfirmDeleteId(draft.id)}
-                              >
-                                Supprimer
-                              </Button>
-                            </div>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </div>
-      ) : null}
     </div>
   );
 }

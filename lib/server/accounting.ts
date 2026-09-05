@@ -697,7 +697,9 @@ export async function getManualAccountingEntry(
   return entry ? mapEntryToDto(entry) : null;
 }
 
-/** The Écritures page's "Écritures archivées" section - only un-validated manual entries. */
+/** The Écritures page's numbered draft navigation - only un-validated manual
+ * entries, kept in creation order so a draft's position number stays stable
+ * as it is edited. */
 export async function listAccountingDraftEntries(): Promise<AccountingEntryDto[]> {
   const user = await requireOrganizationUser(["admin"]);
   const entries = await prisma.accountingEntry.findMany({
@@ -707,7 +709,7 @@ export async function listAccountingDraftEntries(): Promise<AccountingEntryDto[]
       sourceType: "MANUAL_ENTRY",
     },
     include: entryInclude,
-    orderBy: [{ updatedAt: "desc" }],
+    orderBy: [{ createdAt: "asc" }, { entryNumber: "asc" }],
   });
   return entries.map(mapEntryToDto);
 }
