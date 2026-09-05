@@ -21,6 +21,7 @@ import type {
   AccountingAccountSettingsKey,
   AccountingAccountType,
   AccountingEntryDto,
+  AccountingEntryStatus,
   AccountingJournalLineDto,
   AccountingJournalType,
   AccountingSettingsDto,
@@ -93,16 +94,21 @@ const manualEntrySchema = z.object({
   reference: z.string().trim().nullable().optional(),
   description: z.string().trim().min(1, "La description est obligatoire."),
   journalType: z.enum(journalTypeValues).optional(),
+  status: z.enum(["DRAFT", "POSTED"]).optional(),
   lines: z
     .array(
       z.object({
         accountId: z.string().trim().min(1, "Le compte est obligatoire."),
-        label: z.string().trim().min(1, "Le libelle est obligatoire."),
+        // The line "désignation" is optional and stored verbatim (may be
+        // ""). A validated entry still needs to balance, but a blank label
+        // never blocks anything - see assertBalancedEntry / the Journal's
+        // "—" fallback.
+        label: z.string().trim().optional().default(""),
         debit: z.union([z.number(), z.string()]),
         credit: z.union([z.number(), z.string()]),
       }),
     )
-    .min(2, "Ajoutez au moins deux lignes."),
+    .min(1, "Ajoutez au moins une ligne."),
 });
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
@@ -493,12 +499,17 @@ export async function computeCashSaleStampAmount(
   return totalTTC.mul("0.0025").toDecimalPlaces(2);
 }
 
-export async function listAccountingEntries(): Promise<AccountingEntryDto[]> {
+export async function listAccountingEntries(
+  opts?: { statuses?: AccountingEntryStatus[] },
+): Promise<AccountingEntryDto[]> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   await ensureAccountingBootstrap(prisma, currentUser.organizationId);
 
   const entries = await prisma.accountingEntry.findMany({
-    where: { organizationId: currentUser.organizationId },
+    where: {
+      organizationId: currentUser.organizationId,
+      ...(opts?.statuses ? { status: { in: opts.statuses } } : {}),
+    },
     include: entryInclude,
     orderBy: [{ date: "desc" }, { createdAt: "desc" }, { entryNumber: "desc" }],
   });
@@ -508,7 +519,10 @@ export async function listAccountingEntries(): Promise<AccountingEntryDto[]> {
 
 export async function listAccountingJournalLines(): Promise<AccountingJournalLineDto[]> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
-  const entries = await listAccountingEntries();
+  // The Journal only shows comptabilised movements: POSTED entries and the
+  // REVERSED originals + their POSTED contra entries. DRAFT (archived) manual
+  // entries live only on the Écritures page.
+  const entries = await listAccountingEntries({ statuses: ["POSTED", "REVERSED"] });
   const metadata = await buildJournalMetadata(
     prisma,
     currentUser.organizationId,
@@ -565,36 +579,100 @@ function compareJournalLines(
   return left.position - right.position;
 }
 
+type ParsedManualEntry = {
+  date: Date;
+  reference: string | null;
+  description: string;
+  journalType: AccountingJournalType;
+  lines: NormalizedEntryLine[];
+};
+
+function parseManualEntryInput(input: ManualAccountingEntryInput): ParsedManualEntry {
+  const parsed = manualEntrySchema.safeParse(input);
+  if (!parsed.success) {
+    throw new OperationsServiceError("Ecriture comptable invalide.", 422);
+  }
+  return {
+    date: parseAccountingDate(parsed.data.date),
+    reference: parsed.data.reference?.trim() || null,
+    description: parsed.data.description.trim(),
+    journalType: parsed.data.journalType ?? "MANUAL",
+    lines: normalizeEntryLines(parsed.data.lines),
+  };
+}
+
+function lineCreateData(lines: NormalizedEntryLine[]) {
+  return lines.map((line) => ({
+    accountId: line.accountId,
+    label: line.label,
+    debit: line.debit,
+    credit: line.credit,
+    position: line.position,
+  }));
+}
+
+async function nextDraftEntryNumber(db: DbClient, organizationId: string, date: Date) {
+  const scopeDate = formatSequenceDate(date);
+  const number = await reserveDocumentSequence(
+    db,
+    organizationId,
+    DocumentType.AccountingEntryDraft,
+    scopeDate,
+  );
+  return `BR-${scopeDate}-${String(number).padStart(6, "0")}`;
+}
+
+/**
+ * "Valider l'écriture" straight from the form (status POSTED, default) OR
+ * "Archiver" (status DRAFT). A DRAFT is never balanced-
+ * checked and never carries an official EC- number - it gets a throwaway
+ * BR-<date>-NNNNNN ref (same convention as SALE_PENDING_REF) and only shows
+ * on the Écritures page, never in the Journal.
+ */
 export async function createManualAccountingEntry(
   input: ManualAccountingEntryInput,
 ): Promise<AccountingEntryDto> {
   const user = await requireOrganizationUser(["admin"]);
   await ensureAccountingBootstrap(prisma, user.organizationId);
 
-  const parsed = manualEntrySchema.safeParse(input);
-  if (!parsed.success) {
-    throw new OperationsServiceError("Ecriture comptable invalide.", 422);
-  }
-
-  const entryDate = parseAccountingDate(parsed.data.date);
-  const normalizedLines = normalizeEntryLines(parsed.data.lines);
-  assertBalancedEntry(normalizedLines);
-
+  const parsed = parseManualEntryInput(input);
   await assertAccountsExist(
     prisma,
     user.organizationId,
-    normalizedLines.map((line) => line.accountId),
+    parsed.lines.map((line) => line.accountId),
   );
 
+  if ((input.status ?? "POSTED") === "DRAFT") {
+    const entryNumber = await nextDraftEntryNumber(prisma, user.organizationId, parsed.date);
+    const draft = await prisma.accountingEntry.create({
+      data: {
+        organizationId: user.organizationId,
+        entryNumber,
+        date: parsed.date,
+        reference: parsed.reference,
+        description: parsed.description,
+        journalType: parsed.journalType,
+        status: "DRAFT",
+        sourceType: "MANUAL_ENTRY",
+        sourceId: entryNumber,
+        createdByUserId: user.id,
+        lines: { create: lineCreateData(parsed.lines) },
+      },
+      include: entryInclude,
+    });
+    return mapEntryToDto(draft);
+  }
+
+  assertBalancedEntry(parsed.lines);
   const entry = await createPostedEntry(prisma, {
     organizationId: user.organizationId,
-    date: entryDate,
-    reference: parsed.data.reference?.trim() || null,
-    description: parsed.data.description.trim(),
-    journalType: parsed.data.journalType ?? "MANUAL",
+    date: parsed.date,
+    reference: parsed.reference,
+    description: parsed.description,
+    journalType: parsed.journalType,
     sourceType: "MANUAL_ENTRY",
     createdByUserId: user.id,
-    lines: normalizedLines.map((line) => ({
+    lines: parsed.lines.map((line) => ({
       accountId: line.accountId,
       label: line.label,
       debit: line.debit,
@@ -603,6 +681,222 @@ export async function createManualAccountingEntry(
   });
 
   return mapEntryToDto(entry);
+}
+
+/** One manual entry by id (any status), for the Écritures page's revise
+ * flow reached from the Journal. Returns null for anything that is not a
+ * manual entry so the caller can refuse politely. */
+export async function getManualAccountingEntry(
+  id: string,
+): Promise<AccountingEntryDto | null> {
+  const user = await requireOrganizationUser(["admin"]);
+  const entry = await prisma.accountingEntry.findFirst({
+    where: { id, organizationId: user.organizationId, sourceType: "MANUAL_ENTRY" },
+    include: entryInclude,
+  });
+  return entry ? mapEntryToDto(entry) : null;
+}
+
+/** The Écritures page's "Écritures archivées" section - only un-validated manual entries. */
+export async function listAccountingDraftEntries(): Promise<AccountingEntryDto[]> {
+  const user = await requireOrganizationUser(["admin"]);
+  const entries = await prisma.accountingEntry.findMany({
+    where: {
+      organizationId: user.organizationId,
+      status: "DRAFT",
+      sourceType: "MANUAL_ENTRY",
+    },
+    include: entryInclude,
+    orderBy: [{ updatedAt: "desc" }],
+  });
+  return entries.map(mapEntryToDto);
+}
+
+async function requireOwnedManualEntry(
+  organizationId: string,
+  id: string,
+  expected: { status?: AccountingEntryStatus; message: string },
+) {
+  const entry = await prisma.accountingEntry.findFirst({
+    where: { id, organizationId },
+    include: entryInclude,
+  });
+  if (!entry) throw new OperationsServiceError("Ecriture introuvable.", 404);
+  if (entry.sourceType !== "MANUAL_ENTRY") {
+    throw new OperationsServiceError(
+      "Cette ecriture est generee automatiquement et ne peut pas etre modifiee directement.",
+      409,
+    );
+  }
+  if (expected.status && entry.status !== expected.status) {
+    throw new OperationsServiceError(expected.message, 409);
+  }
+  return entry;
+}
+
+/** Edit an un-validated draft in place (still not posted, still absent from the Journal). */
+export async function updateManualDraftEntry(
+  id: string,
+  input: ManualAccountingEntryInput,
+): Promise<AccountingEntryDto> {
+  const user = await requireOrganizationUser(["admin"]);
+  await requireOwnedManualEntry(user.organizationId, id, {
+    status: "DRAFT",
+    message: "Seule une ecriture archivee peut etre modifiee ici.",
+  });
+
+  const parsed = parseManualEntryInput(input);
+  await assertAccountsExist(
+    prisma,
+    user.organizationId,
+    parsed.lines.map((line) => line.accountId),
+  );
+
+  const entry = await prisma.$transaction(async (tx) => {
+    await tx.accountingEntryLine.deleteMany({ where: { entryId: id } });
+    return tx.accountingEntry.update({
+      where: { id },
+      data: {
+        date: parsed.date,
+        reference: parsed.reference,
+        description: parsed.description,
+        journalType: parsed.journalType,
+        lines: { create: lineCreateData(parsed.lines) },
+      },
+      include: entryInclude,
+    });
+  });
+  return mapEntryToDto(entry);
+}
+
+/** DRAFT -> POSTED. Re-runs the full balance check, then reserves the real
+ * EC- number and comptabilises. The entry then leaves the archived list
+ * and appears in the Journal. */
+export async function validateDraftAccountingEntry(id: string): Promise<AccountingEntryDto> {
+  const user = await requireOrganizationUser(["admin"]);
+  const existing = await requireOwnedManualEntry(user.organizationId, id, {
+    status: "DRAFT",
+    message: "Cette ecriture n'est pas archivee.",
+  });
+
+  const normalized: NormalizedEntryLine[] = [...existing.lines]
+    .sort((a, b) => a.position - b.position)
+    .map((line, index) => ({
+      accountId: line.accountId,
+      label: line.label,
+      debit: line.debit,
+      credit: line.credit,
+      position: index,
+    }));
+  assertBalancedEntry(normalized);
+  await assertAccountsExist(
+    prisma,
+    user.organizationId,
+    normalized.map((line) => line.accountId),
+  );
+
+  const entry = await prisma.$transaction(async (tx) => {
+    const entryNumber = await nextAccountingEntryNumber(tx, user.organizationId, existing.date);
+    return tx.accountingEntry.update({
+      where: { id },
+      data: { status: "POSTED", entryNumber, sourceId: entryNumber },
+      include: entryInclude,
+    });
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      organizationId: user.organizationId,
+      userId: user.id,
+      action: "ACCOUNTING_ENTRY_DRAFT_VALIDATED",
+      entityType: "AccountingEntry",
+      entityId: id,
+      oldValue: { status: "DRAFT", entryNumber: existing.entryNumber },
+      newValue: { status: "POSTED", entryNumber: entry.entryNumber },
+    },
+  });
+
+  return mapEntryToDto(entry);
+}
+
+/** Hard-delete a draft. Only ever a DRAFT manual entry - a POSTED/REVERSED
+ * entry is never deletable from anywhere. */
+export async function deleteDraftAccountingEntry(id: string): Promise<void> {
+  const user = await requireOrganizationUser(["admin"]);
+  await requireOwnedManualEntry(user.organizationId, id, {
+    status: "DRAFT",
+    message: "Seule une ecriture archivee peut etre supprimee.",
+  });
+  await prisma.accountingEntry.delete({ where: { id } });
+}
+
+/** Correct a POSTED manual entry from the Journal without destroying the
+ * trail: the original is contre-passée (status REVERSED + a POSTED contra
+ * entry) and a fresh corrected POSTED entry is created. */
+export async function reviseManualAccountingEntry(
+  id: string,
+  input: ManualAccountingEntryInput,
+): Promise<AccountingEntryDto> {
+  const user = await requireOrganizationUser(["admin"]);
+  await ensureAccountingBootstrap(prisma, user.organizationId);
+  const existing = await requireOwnedManualEntry(user.organizationId, id, {
+    status: "POSTED",
+    message: "Seule une ecriture manuelle comptabilisee peut etre corrigee ici.",
+  });
+
+  const parsed = parseManualEntryInput(input);
+  assertBalancedEntry(parsed.lines);
+  await assertAccountsExist(
+    prisma,
+    user.organizationId,
+    parsed.lines.map((line) => line.accountId),
+  );
+
+  const created = await prisma.$transaction(async (tx) => {
+    await reverseAccountingEntryForSource(tx, {
+      organizationId: user.organizationId,
+      sourceType: "MANUAL_ENTRY",
+      sourceId: existing.entryNumber,
+      date: new Date(),
+      reference: existing.reference,
+      description: `Contre-passation de l'ecriture ${existing.entryNumber}`,
+      createdByUserId: user.id,
+    });
+
+    const entryNumber = await nextAccountingEntryNumber(tx, user.organizationId, parsed.date);
+    const entry = await tx.accountingEntry.create({
+      data: {
+        organizationId: user.organizationId,
+        entryNumber,
+        date: parsed.date,
+        reference: parsed.reference,
+        description: parsed.description,
+        journalType: parsed.journalType,
+        status: "POSTED",
+        sourceType: "MANUAL_ENTRY",
+        sourceId: entryNumber,
+        createdByUserId: user.id,
+        lines: { create: lineCreateData(parsed.lines) },
+      },
+      include: entryInclude,
+    });
+
+    await tx.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        userId: user.id,
+        action: "ACCOUNTING_ENTRY_MANUAL_REVISED",
+        entityType: "AccountingEntry",
+        entityId: id,
+        oldValue: { entryNumber: existing.entryNumber, status: "POSTED" },
+        newValue: { entryNumber, status: "POSTED", revisionOf: existing.entryNumber },
+      },
+    });
+
+    return entry;
+  });
+
+  return mapEntryToDto(created);
 }
 
 /**

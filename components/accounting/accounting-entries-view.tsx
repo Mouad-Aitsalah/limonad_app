@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -25,6 +26,8 @@ import {
 type AccountingEntriesViewProps = {
   accounts: AccountingAccountOptionDto[];
   canManage: boolean;
+  initialDrafts: AccountingEntryDto[];
+  reviseEntry: AccountingEntryDto | null;
 };
 
 type ManualLineForm = {
@@ -39,10 +42,14 @@ type ManualLineForm = {
 
 type ManualEntryForm = {
   date: string;
-  reference: string;
-  description: string;
   lines: ManualLineForm[];
 };
+
+// The server (manualEntrySchema) still requires a non-empty entry-level
+// description; it is never shown to the user or in the Journal, so a fixed
+// neutral value is sent. Line "désignations" are stored exactly as typed
+// (may be "") - no auto-fill.
+const NEUTRAL_ENTRY_DESCRIPTION = "Ecriture manuelle";
 
 type ResolvedAccount =
   | { status: "empty" }
@@ -59,9 +66,22 @@ function emptyLine(): ManualLineForm {
 function defaultForm(): ManualEntryForm {
   return {
     date: new Date().toISOString().slice(0, 10),
-    reference: "",
-    description: "",
     lines: [emptyLine(), emptyLine()],
+  };
+}
+
+function formFromEntry(entry: AccountingEntryDto): ManualEntryForm {
+  return {
+    date: entry.date.slice(0, 10),
+    lines: entry.lines.length
+      ? entry.lines.map((line) => ({
+          id: crypto.randomUUID(),
+          numCompt: line.accountCode,
+          label: line.label,
+          debit: line.debit ? String(line.debit) : "0",
+          credit: line.credit ? String(line.credit) : "0",
+        }))
+      : [emptyLine(), emptyLine()],
   };
 }
 
@@ -76,7 +96,7 @@ function isLineMeaningful(line: ManualLineForm) {
 
 /** The account number is only ever a search key into the real chart of
  * accounts - the resolved AccountingAccount.id is what actually gets sent
- * to the server, exactly like the previous select-based flow did. */
+ * to the server. */
 function resolveAccountByCode(
   accounts: AccountingAccountOptionDto[],
   rawCode: string,
@@ -89,10 +109,34 @@ function resolveAccountByCode(
   return { status: "resolved", account: match };
 }
 
-export function AccountingEntriesView({ accounts, canManage }: AccountingEntriesViewProps) {
+function formatModified(iso: string) {
+  return new Intl.DateTimeFormat("fr-MA", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(iso));
+}
+
+export function AccountingEntriesView({
+  accounts,
+  canManage,
+  initialDrafts,
+  reviseEntry,
+}: AccountingEntriesViewProps) {
+  const router = useRouter();
+  const reviseMode = Boolean(reviseEntry);
+
   const [saving, setSaving] = React.useState(false);
-  const [form, setForm] = React.useState<ManualEntryForm>(defaultForm);
+  const [drafts, setDrafts] = React.useState<AccountingEntryDto[]>(initialDrafts);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null);
+  const [busyDraftId, setBusyDraftId] = React.useState<string | null>(null);
+  const [form, setForm] = React.useState<ManualEntryForm>(() =>
+    reviseEntry ? formFromEntry(reviseEntry) : defaultForm(),
+  );
   const pendingFocusRowIdRef = React.useRef<string | null>(null);
+  const formCardRef = React.useRef<HTMLDivElement | null>(null);
 
   const rowFieldRefs = React.useRef(
     new Map<string, Record<LineField, HTMLInputElement | null>>(),
@@ -117,9 +161,6 @@ export function AccountingEntriesView({ accounts, canManage }: AccountingEntries
     node?.select();
   }
 
-  // A new row created after pressing Enter in "Credit" mounts a brand new
-  // DOM node in the same render that appends it to form.lines, so by the
-  // time this effect runs (always after commit) the ref is populated.
   React.useEffect(() => {
     const id = pendingFocusRowIdRef.current;
     if (!id) return;
@@ -203,7 +244,6 @@ export function AccountingEntriesView({ accounts, canManage }: AccountingEntries
       return;
     }
 
-    // field === "credit": finish this line, then move to (or create) the next.
     const isLastRow = index === form.lines.length - 1;
     if (isLastRow) {
       addLine(true);
@@ -216,58 +256,212 @@ export function AccountingEntriesView({ accounts, canManage }: AccountingEntries
   function resetForm() {
     setForm(defaultForm());
     rowFieldRefs.current.clear();
+    setEditingId(null);
   }
 
-  async function handleCreateEntry(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canManage || saving) return;
-
-    if (meaningfulLines.length < 2 || !formBalanced || currentDebit <= 0) {
-      toast.error("L'écriture comptable doit être équilibrée.");
-      return;
+  async function refreshDrafts() {
+    try {
+      const response = await fetch("/api/accounting/entries/drafts", { cache: "no-store" });
+      const body = (await response.json()) as { entries?: AccountingEntryDto[] };
+      if (response.ok && body.entries) setDrafts(body.entries);
+    } catch {
+      /* keep the current list on a transient error */
     }
+  }
+
+  /** Lines to send: only those with a real resolved account. */
+  function payloadLines() {
+    return meaningfulLines.map((line) => {
+      const resolved = resolveAccountByCode(accounts, line.numCompt);
+      return {
+        accountId: resolved.status === "resolved" ? resolved.account.id : "",
+        label: line.label.trim(),
+        debit: Number(line.debit || 0),
+        credit: Number(line.credit || 0),
+      };
+    });
+  }
+
+  function basePayload() {
+    return {
+      date: form.date,
+      description: NEUTRAL_ENTRY_DESCRIPTION,
+      lines: payloadLines(),
+    };
+  }
+
+  function checkBalanced(): boolean {
     if (unresolvedLines.length > 0) {
       toast.error("Certains numéros de compte sont introuvables ou inactifs.");
-      return;
+      return false;
     }
-    if (!form.description.trim()) {
-      toast.error("Le libellé général est obligatoire.");
-      return;
+    const eachLineHasOneSide = meaningfulLines.every((line) => {
+      const hasDebit = Number(line.debit || 0) > 0;
+      const hasCredit = Number(line.credit || 0) > 0;
+      return hasDebit !== hasCredit;
+    });
+    if (
+      meaningfulLines.length < 2 ||
+      !eachLineHasOneSide ||
+      currentDebit <= 0 ||
+      !formBalanced
+    ) {
+      toast.error("L'écriture comptable doit être équilibrée.");
+      return false;
     }
+    return true;
+  }
 
+  function checkDraftMinimum(): boolean {
+    if (unresolvedLines.length > 0) {
+      toast.error("Certains numéros de compte sont introuvables ou inactifs.");
+      return false;
+    }
+    if (meaningfulLines.length < 1) {
+      toast.error("Renseignez au moins une ligne comptable.");
+      return false;
+    }
+    return true;
+  }
+
+  async function saveDraft() {
+    if (!canManage || saving || !checkDraftMinimum()) return;
     setSaving(true);
     try {
-      const response = await fetch("/api/accounting/entries", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date: form.date,
-          reference: form.reference || null,
-          description: form.description,
-          lines: meaningfulLines.map((line) => {
-            const resolved = resolveAccountByCode(accounts, line.numCompt);
-            return {
-              accountId: resolved.status === "resolved" ? resolved.account.id : "",
-              label: line.label,
-              debit: Number(line.debit || 0),
-              credit: Number(line.credit || 0),
-            };
-          }),
-        }),
-      });
-      const result = (await response.json()) as {
-        entry?: AccountingEntryDto;
-        message?: string;
-      };
-      if (!response.ok || !result.entry) {
-        toast.error(result.message ?? "Impossible de créer l'écriture.");
+      const response = editingId
+        ? await fetch(`/api/accounting/entries/${editingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: "draft", ...basePayload() }),
+          })
+        : await fetch("/api/accounting/entries", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "DRAFT", ...basePayload() }),
+          });
+      const body = (await response.json()) as { entry?: AccountingEntryDto; message?: string };
+      if (!response.ok || !body.entry) {
+        toast.error(body.message ?? "Impossible d'archiver l'écriture.");
         return;
       }
-
-      toast.success("Écriture enregistrée avec succès.");
+      toast.success("Écriture archivée.");
       resetForm();
+      await refreshDrafts();
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function validateFromForm() {
+    if (!canManage || saving || !checkBalanced()) return;
+    setSaving(true);
+    try {
+      if (editingId) {
+        const patch = await fetch(`/api/accounting/entries/${editingId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "draft", ...basePayload() }),
+        });
+        const patchBody = (await patch.json()) as { message?: string };
+        if (!patch.ok) {
+          toast.error(patchBody.message ?? "Impossible de mettre à jour l'écriture archivée.");
+          return;
+        }
+        const validate = await fetch(`/api/accounting/entries/${editingId}/validate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        const validateBody = (await validate.json()) as { message?: string };
+        if (!validate.ok) {
+          toast.error(validateBody.message ?? "Impossible de valider l'écriture archivée.");
+          return;
+        }
+      } else {
+        const response = await fetch("/api/accounting/entries", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "POSTED", ...basePayload() }),
+        });
+        const body = (await response.json()) as { entry?: AccountingEntryDto; message?: string };
+        if (!response.ok || !body.entry) {
+          toast.error(body.message ?? "Impossible de créer l'écriture.");
+          return;
+        }
+      }
+      toast.success("Écriture enregistrée avec succès.");
+      resetForm();
+      await refreshDrafts();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function submitRevision() {
+    if (!canManage || saving || !reviseEntry || !checkBalanced()) return;
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/accounting/entries/${reviseEntry.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "revise", ...basePayload() }),
+      });
+      const body = (await response.json()) as { entry?: AccountingEntryDto; message?: string };
+      if (!response.ok || !body.entry) {
+        toast.error(body.message ?? "Impossible d'enregistrer la correction.");
+        return;
+      }
+      toast.success("Correction enregistrée : l'écriture d'origine a été contre-passée.");
+      router.push("/comptabilite/journal");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function startEditDraft(entry: AccountingEntryDto) {
+    setEditingId(entry.id);
+    setForm(formFromEntry(entry));
+    rowFieldRefs.current.clear();
+    setConfirmDeleteId(null);
+    formCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  async function validateDraftFromList(id: string) {
+    if (busyDraftId) return;
+    setBusyDraftId(id);
+    try {
+      const response = await fetch(`/api/accounting/entries/${id}/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const body = (await response.json()) as { message?: string };
+      if (!response.ok) {
+        toast.error(body.message ?? "Impossible de valider l'écriture archivée.");
+        return;
+      }
+      toast.success("Écriture validée : elle apparaît dans le Journal.");
+      if (editingId === id) resetForm();
+      await refreshDrafts();
+    } finally {
+      setBusyDraftId(null);
+    }
+  }
+
+  async function deleteDraft(id: string) {
+    if (busyDraftId) return;
+    setBusyDraftId(id);
+    try {
+      const response = await fetch(`/api/accounting/entries/${id}`, { method: "DELETE" });
+      const body = (await response.json()) as { message?: string };
+      if (!response.ok) {
+        toast.error(body.message ?? "Impossible de supprimer l'écriture archivée.");
+        return;
+      }
+      toast.success("Écriture archivée supprimée.");
+      setConfirmDeleteId(null);
+      if (editingId === id) resetForm();
+      await refreshDrafts();
+    } finally {
+      setBusyDraftId(null);
     }
   }
 
@@ -282,46 +476,17 @@ export function AccountingEntriesView({ accounts, canManage }: AccountingEntries
     );
   }
 
-  return (
-    <form
-      onSubmit={handleCreateEntry}
-      className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-7"
-    >
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="entry-date">Date</Label>
-          <Input
-            id="entry-date"
-            type="date"
-            value={form.date}
-            onChange={(event) => setForm((prev) => ({ ...prev, date: event.target.value }))}
-            className="h-11"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="entry-reference">Référence</Label>
-          <Input
-            id="entry-reference"
-            value={form.reference}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, reference: event.target.value }))
-            }
-            placeholder="FACT-39060"
-            className="h-11"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="entry-description">Libellé général</Label>
-          <Input
-            id="entry-description"
-            value={form.description}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, description: event.target.value }))
-            }
-            placeholder="Régularisation / écriture diverse"
-            className="h-11"
-          />
-        </div>
+  const linesEditor = (
+    <>
+      <div className="space-y-1.5 sm:max-w-xs">
+        <Label htmlFor="entry-date">Date</Label>
+        <Input
+          id="entry-date"
+          type="date"
+          value={form.date}
+          onChange={(event) => setForm((prev) => ({ ...prev, date: event.target.value }))}
+          className="h-11"
+        />
       </div>
 
       <div className="mt-6 overflow-hidden rounded-xl border border-border">
@@ -380,7 +545,7 @@ export function AccountingEntriesView({ accounts, canManage }: AccountingEntries
                         value={line.label}
                         onChange={(event) => updateLine(index, "label", event.target.value)}
                         onKeyDown={(event) => handleLineKeyDown(index, "label", event)}
-                        placeholder="Désignation de la ligne"
+                        placeholder="Facultatif"
                         className="h-11"
                       />
                     </TableCell>
@@ -470,10 +635,183 @@ export function AccountingEntriesView({ accounts, canManage }: AccountingEntries
           ) : null}
         </div>
 
-        <Button type="submit" size="lg" disabled={saving}>
-          {saving ? "Enregistrement..." : "Valider l'écriture"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {reviseMode ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                disabled={saving}
+                onClick={() => router.push("/comptabilite/journal")}
+              >
+                Annuler
+              </Button>
+              <Button type="button" size="lg" disabled={saving} onClick={submitRevision}>
+                {saving ? "Enregistrement..." : "Enregistrer la correction"}
+              </Button>
+            </>
+          ) : (
+            <>
+              {editingId ? (
+                <Button type="button" variant="ghost" size="lg" onClick={resetForm} disabled={saving}>
+                  Annuler
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                disabled={saving}
+                onClick={saveDraft}
+              >
+                Archiver
+              </Button>
+              <Button type="button" size="lg" disabled={saving} onClick={validateFromForm}>
+                {saving ? "Enregistrement..." : "Valider l'écriture"}
+              </Button>
+            </>
+          )}
+        </div>
       </div>
-    </form>
+    </>
+  );
+
+  return (
+    <div className="space-y-6">
+      {reviseMode ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-medium">
+            Correction de l&apos;écriture {reviseEntry?.entryNumber}
+          </p>
+          <p>
+            En enregistrant, la version actuelle sera contre-passée (elle reste dans le
+            Journal, marquée REVERSED) et cette version corrigée sera comptabilisée.
+          </p>
+        </div>
+      ) : editingId ? (
+        <div className="rounded-xl border border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
+          Modification d&apos;une écriture archivée en cours. Archivez-la de nouveau ou
+          validez-la pour la comptabiliser.
+        </div>
+      ) : null}
+
+      <div
+        ref={formCardRef}
+        className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-7"
+      >
+        {linesEditor}
+      </div>
+
+      {!reviseMode ? (
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-7">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="font-heading text-lg font-semibold text-foreground">
+              Écritures archivées
+            </h2>
+            <span className="text-sm text-muted-foreground">
+              {drafts.length} en attente de validation
+            </span>
+          </div>
+
+          {drafts.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+              Aucune écriture archivée. Utilisez « Archiver » pour préparer une écriture
+              sans la comptabiliser.
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-border">
+              <Table className="min-w-[720px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right">Lignes</TableHead>
+                    <TableHead>Dernière modification</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {drafts.map((draft) => {
+                    const total = Math.max(draft.totalDebit, draft.totalCredit);
+                    const isConfirming = confirmDeleteId === draft.id;
+                    const busy = busyDraftId === draft.id;
+                    return (
+                      <TableRow key={draft.id}>
+                        <TableCell className="tabular-nums">
+                          {new Date(draft.date).toLocaleDateString("fr-FR")}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">
+                          {formatCurrency(total)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {draft.lines.length}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground tabular-nums">
+                          {formatModified(draft.updatedAt)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isConfirming ? (
+                            <div className="flex items-center justify-end gap-2">
+                              <span className="text-xs text-muted-foreground">
+                                Supprimer cette écriture archivée ?
+                              </span>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => deleteDraft(draft.id)}
+                              >
+                                Oui
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setConfirmDeleteId(null)}
+                              >
+                                Annuler
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => startEditDraft(draft)}
+                              >
+                                Modifier
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => validateDraftFromList(draft.id)}
+                              >
+                                Valider
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setConfirmDeleteId(draft.id)}
+                              >
+                                Supprimer
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }

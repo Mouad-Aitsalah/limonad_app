@@ -177,7 +177,8 @@ export type AccountingAccountInput = {
 
 export type ManualAccountingEntryLineInput = {
   accountId: string;
-  label: string;
+  /** Optional - the line "désignation". Stored verbatim (may be ""). */
+  label?: string;
   debit: number | string;
   credit: number | string;
 };
@@ -187,5 +188,8 @@ export type ManualAccountingEntryInput = {
   reference?: string | null;
   description: string;
   journalType?: AccountingJournalType;
+  /** "DRAFT" saves an un-posted brouillon (not shown in the Journal);
+   * "POSTED" (default) comptabilises it immediately. */
+  status?: "DRAFT" | "POSTED";
   lines: ManualAccountingEntryLineInput[];
 };
