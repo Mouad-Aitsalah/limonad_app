@@ -215,6 +215,12 @@ export const navItems: NavItem[] = [
         roles: ["admin", "depot_manager", "cashier"],
       },
       {
+        label: "Reglements clients",
+        href: "/comptabilite/reglements-clients",
+        description: "Soldes et encaissements clients",
+        roles: ["admin", "depot_manager", "cashier"],
+      },
+      {
         label: "Parametres comptables",
         href: "/comptabilite/parametres",
         description: "Comptes systeme",

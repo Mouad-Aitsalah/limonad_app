@@ -4,13 +4,19 @@ import { z } from "zod";
 
 import { MONEY_RANGE_MAX_NUMBER, roundMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
-import { postCustomerSettlementAccountingEntry } from "@/lib/server/accounting";
+import {
+  postCustomerSettlementAccountingEntry,
+  resolveCustomerAuxiliaryCode,
+} from "@/lib/server/accounting";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { Prisma } from "@/lib/generated/prisma/client";
+import type { AccountingEntryStatus } from "@/types/accounting";
 import type {
   CustomerDebtDto,
+  CustomerJournalDto,
+  CustomerJournalOperationDto,
   CustomerSettlementDto,
   CustomerSettlementInput,
 } from "@/types/customer-settlement";
@@ -163,6 +169,183 @@ export async function getCustomerDebt(customerId: string): Promise<CustomerDebtD
   });
   if (!customer) throw new OperationsServiceError("Client introuvable.", 404);
   return computeCustomerDebt(prisma, user.organizationId, customerId);
+}
+
+const CUSTOMER_JOURNAL_PAGE_SIZE = 20;
+const JOURNAL_LINE_STATUSES: AccountingEntryStatus[] = ["POSTED", "REVERSED"];
+
+/**
+ * The /comptabilite/reglements-clients page: the customer's "solde à régler"
+ * (computeCustomerDebt - the reliable business figure, unchanged) PLUS the
+ * accounting Journal lines that can be **reliably attributed** to this exact
+ * Customer.
+ *
+ * A FILTERED READ of the same AccountingEntry / AccountingEntryLine the
+ * Journal uses (same POSTED+REVERSED scope) - nothing is copied into a new
+ * table, nothing is created.
+ *
+ * MITIGATION (Option C): `resolveCustomerAuxiliaryCode` is NOT injective -
+ * "CLI-0002", "2" and "34212" all resolve to account 34212, so several
+ * customers can share one auxiliary account. `accountId` alone is therefore
+ * NOT proof of ownership. Each line is kept only when its entry's real
+ * business source ties it to `customerId`:
+ *   - SALE entry           -> sourceId is a Sale.id       -> Sale.customerId
+ *   - CUSTOMER_PAYMENT      -> sourceId is a Payment.id    -> Payment.sale.customerId
+ *   - CUSTOMER_CREDIT_NOTE  -> sourceId is a CreditNote.id -> CreditNote.customerId
+ *   - a customer settlement -> CustomerSettlement.accountingEntryId (sourceType is NULL)
+ *   - a contre-passation    -> inherits its reversedEntry's attribution
+ * Anything else on the account (manual entries, un-linkable contra entries,
+ * or another customer's lines) is EXCLUDED and only counted in
+ * `notAttributable`. No guessing from label / description / reference.
+ */
+export async function getCustomerJournal(
+  customerId: string,
+  opts?: { page?: number; pageSize?: number },
+): Promise<CustomerJournalDto> {
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const customer = await prisma.customer.findFirst({
+    where: { id: customerId, organizationId: user.organizationId },
+    select: { id: true, code: true },
+  });
+  if (!customer) throw new OperationsServiceError("Client introuvable.", 404);
+
+  const org = user.organizationId;
+  const pageSize = Math.min(
+    100,
+    Math.max(1, Math.trunc(opts?.pageSize ?? CUSTOMER_JOURNAL_PAGE_SIZE)),
+  );
+  const requestedPage = Math.max(1, Math.trunc(opts?.page ?? 1));
+
+  const debt = await computeCustomerDebt(prisma, org, customerId);
+
+  const auxCode = resolveCustomerAuxiliaryCode(customer.code);
+  const account = await prisma.accountingAccount.findFirst({
+    where: { organizationId: org, code: auxCode },
+    select: { id: true, code: true, name: true },
+  });
+
+  if (!account) {
+    return {
+      debt,
+      account: null,
+      operations: [],
+      totals: { debit: 0, credit: 0, balance: 0 },
+      pagination: { page: 1, pageSize, total: 0, pageCount: 0 },
+      notAttributable: { count: 0 },
+    };
+  }
+
+  // --- the business documents that belong to this exact customer (read-only) ---
+  const [sales, payments, creditNotes, settlementEntries] = await Promise.all([
+    prisma.sale.findMany({ where: { organizationId: org, customerId }, select: { id: true } }),
+    prisma.payment.findMany({
+      where: { organizationId: org, sale: { is: { customerId } } },
+      select: { id: true },
+    }),
+    prisma.creditNote.findMany({
+      where: { organizationId: org, customerId, partyType: "CUSTOMER" },
+      select: { id: true },
+    }),
+    prisma.customerSettlement.findMany({
+      where: {
+        organizationId: org,
+        customerId,
+        status: "VALIDATED",
+        accountingEntryId: { not: null },
+      },
+      select: { accountingEntryId: true },
+    }),
+  ]);
+
+  const saleIds = sales.map((s) => s.id);
+  const paymentIds = payments.map((p) => p.id);
+  const creditNoteIds = creditNotes.map((c) => c.id);
+  const settlementEntryIds = settlementEntries
+    .map((s) => s.accountingEntryId)
+    .filter((id): id is string => Boolean(id));
+
+  const ownedEntryOr: Prisma.AccountingEntryWhereInput[] = [
+    { sourceType: "SALE", sourceId: { in: saleIds } },
+    { sourceType: "CUSTOMER_PAYMENT", sourceId: { in: paymentIds } },
+    { sourceType: "CUSTOMER_CREDIT_NOTE", sourceId: { in: creditNoteIds } },
+    { id: { in: settlementEntryIds } },
+  ];
+
+  const attributedWhere: Prisma.AccountingEntryLineWhereInput = {
+    accountId: account.id,
+    entry: {
+      organizationId: org,
+      status: { in: JOURNAL_LINE_STATUSES },
+      OR: [
+        ...ownedEntryOr,
+        // A contre-passation carries no source of its own - inherit the
+        // attribution of the original entry it reverses.
+        { reversedEntry: { is: { OR: ownedEntryOr } } },
+      ],
+    },
+  };
+
+  const onAccountWhere: Prisma.AccountingEntryLineWhereInput = {
+    accountId: account.id,
+    entry: { organizationId: org, status: { in: JOURNAL_LINE_STATUSES } },
+  };
+
+  const [attributedTotal, sums, onAccountTotal] = await Promise.all([
+    prisma.accountingEntryLine.count({ where: attributedWhere }),
+    prisma.accountingEntryLine.aggregate({
+      where: attributedWhere,
+      _sum: { debit: true, credit: true },
+    }),
+    prisma.accountingEntryLine.count({ where: onAccountWhere }),
+  ]);
+
+  const pageCount = attributedTotal ? Math.max(1, Math.ceil(attributedTotal / pageSize)) : 0;
+  const page = pageCount ? Math.min(requestedPage, pageCount) : 1;
+
+  const rows = attributedTotal
+    ? await prisma.accountingEntryLine.findMany({
+        where: attributedWhere,
+        select: {
+          id: true,
+          operationNumber: true,
+          label: true,
+          debit: true,
+          credit: true,
+          entry: { select: { entryNumber: true, date: true } },
+        },
+        orderBy: [{ entry: { date: "desc" } }, { operationNumber: "desc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      })
+    : [];
+
+  const operations: CustomerJournalOperationDto[] = rows.map((row) => ({
+    id: row.id,
+    date: row.entry.date.toISOString(),
+    entryNumber: row.entry.entryNumber,
+    operationNumber: row.operationNumber,
+    accountCode: account.code,
+    accountName: account.name,
+    label: row.label,
+    debit: row.debit.toNumber(),
+    credit: row.credit.toNumber(),
+  }));
+
+  const totalDebit = roundMoney(sums._sum.debit?.toNumber() ?? 0);
+  const totalCredit = roundMoney(sums._sum.credit?.toNumber() ?? 0);
+
+  return {
+    debt,
+    account: { code: account.code, name: account.name },
+    operations,
+    totals: {
+      debit: totalDebit,
+      credit: totalCredit,
+      balance: roundMoney(totalDebit - totalCredit),
+    },
+    pagination: { page, pageSize, total: attributedTotal, pageCount },
+    notAttributable: { count: Math.max(0, onAccountTotal - attributedTotal) },
+  };
 }
 
 async function nextSettlementNumber(
