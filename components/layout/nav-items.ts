@@ -211,7 +211,7 @@ export const navItems: NavItem[] = [
       {
         label: "Ecritures",
         href: "/comptabilite/ecritures",
-        description: "Pieces et mouvements",
+        description: "Saisir une ecriture manuelle",
         roles: ["admin", "depot_manager", "cashier"],
       },
       {
