@@ -201,9 +201,6 @@ async function collectSaleCore(
         const payment =
           mixedSplit ?? resolvePaymentAmounts(paymentMethod, totalTTC, parsed.data.paidAmount);
 
-        if (payment.creditAmount > 0 && !sale.customerId) {
-          throw new OperationsServiceError("Client obligatoire pour une vente a credit.", 422);
-        }
         let customer: { id: string; currentBalance: number; creditLimit: number } | null = null;
         if (sale.customerId) {
           const row = await tx.customer.findFirst({
@@ -219,10 +216,21 @@ async function collectSaleCore(
             currentBalance: row.currentBalance.toNumber(),
             creditLimit: row.creditLimit.toNumber(),
           };
-          if (payment.creditAmount > 0) {
-            if (customer.currentBalance + payment.creditAmount > customer.creditLimit) {
-              throw new OperationsServiceError("Plafond de credit depasse.", 409);
-            }
+        }
+
+        if (payment.creditAmount > 0) {
+          // Same hard rule as createCounterSale: a partly-paid MIXED sale
+          // leaves a receivable, so a customer is mandatory.
+          if (!customer) {
+            throw new OperationsServiceError(
+              paymentMethod === "MIXED"
+                ? "Veuillez selectionner un client pour enregistrer le reste a credit."
+                : "Client obligatoire pour une vente a credit.",
+              422,
+            );
+          }
+          if (customer.currentBalance + payment.creditAmount > customer.creditLimit) {
+            throw new OperationsServiceError("Plafond de credit depasse.", 409);
           }
         }
 

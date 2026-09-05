@@ -109,23 +109,42 @@ function CheckoutForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {isMixed ? (
-        <div className="space-y-2">
-          <Label>Répartition du règlement</Label>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg border border-input bg-muted px-3 py-2">
-              <p className="text-xs text-muted-foreground">Espèces</p>
-              <p className="text-sm font-medium tabular-nums">
-                {formatCurrency(mixedAmounts?.cash ?? 0)}
-              </p>
+        (() => {
+          const cash = mixedAmounts?.cash ?? 0;
+          const cheque = mixedAmounts?.cheque ?? 0;
+          const paid = Math.round((cash + cheque) * 100) / 100;
+          const remaining = Math.max(0, Math.round((netAPayer - paid) * 100) / 100);
+          return (
+            <div className="space-y-2">
+              <Label>Répartition du règlement</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-input bg-muted px-3 py-2">
+                  <p className="text-xs text-muted-foreground">Espèces</p>
+                  <p className="text-sm font-medium tabular-nums">{formatCurrency(cash)}</p>
+                </div>
+                <div className="rounded-lg border border-input bg-muted px-3 py-2">
+                  <p className="text-xs text-muted-foreground">Chèque</p>
+                  <p className="text-sm font-medium tabular-nums">{formatCurrency(cheque)}</p>
+                </div>
+              </div>
+              <div className="space-y-1 rounded-lg border border-input bg-muted px-3 py-2 text-sm tabular-nums">
+                <div className="flex items-center justify-between font-medium">
+                  <span>Montant payé</span>
+                  <span>{formatCurrency(paid)}</span>
+                </div>
+                <div
+                  className={cn(
+                    "flex items-center justify-between font-semibold",
+                    remaining > 0 ? "text-amber-700" : "text-emerald-700",
+                  )}
+                >
+                  <span>Reste à crédit</span>
+                  <span>{formatCurrency(remaining)}</span>
+                </div>
+              </div>
             </div>
-            <div className="rounded-lg border border-input bg-muted px-3 py-2">
-              <p className="text-xs text-muted-foreground">Chèque</p>
-              <p className="text-sm font-medium tabular-nums">
-                {formatCurrency(mixedAmounts?.cheque ?? 0)}
-              </p>
-            </div>
-          </div>
-        </div>
+          );
+        })()
       ) : (
         <>
           <div className="space-y-2">

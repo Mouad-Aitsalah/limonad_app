@@ -129,12 +129,16 @@ export function resolvePaymentAmounts(
 }
 
 /**
- * Counter-POS MIXED: cash + cheque covering the FULL total, never a credit
- * remainder (a real business decision, not a schema limitation - see the
- * "MODIFICATION POS + PAIEMENT MIXTE" chantier). Both amounts persist as
- * two separate Payment rows (one CASH, one CHECK) so the split survives for
- * the journal, reports, the ticket and future Power BI export - see
- * createCounterSale / collectSaleCore's Payment.createMany calls.
+ * Counter-POS MIXED: cash + cheque covering ALL OR PART of the total. The
+ * paid part is `cash + cheque`; whatever is left (`total - paid`) becomes a
+ * customer receivable (`Sale.creditAmount`), exactly like a partial CREDIT
+ * sale - so a mixed payment can now settle a sale only partially.
+ *   - Allowed: `0 < cash + cheque <= total`.
+ *   - Refused: `cash + cheque > total` (overpayment) or `cash = cheque = 0`.
+ *   - Either side alone may be 0 (cheque-only or cash-only), but not both.
+ * Both non-zero amounts persist as their own Payment row (one CASH, one
+ * CHECK) so the split survives for the journal, reports, the ticket and
+ * future exports - see createMixedPayments below.
  */
 export function resolveMixedPaymentSplit(
   totalTTC: number,
@@ -154,23 +158,25 @@ export function resolveMixedPaymentSplit(
       422,
     );
   }
-  if (cashAmount <= 0 || chequeAmount <= 0) {
+  if (cashAmount <= 0 && chequeAmount <= 0) {
     throw new OperationsServiceError(
-      "Pour un paiement mixte, les montants Especes et Cheque doivent tous les deux etre superieurs a 0.",
+      "Saisissez un montant en especes ou en cheque.",
       422,
     );
   }
 
-  const sum = roundMoney(cashAmount + chequeAmount);
+  const paidAmount = roundMoney(cashAmount + chequeAmount);
   const target = roundMoney(totalTTC);
-  if (sum < target) {
-    throw new OperationsServiceError("Le montant saisi est inferieur au total a regler.", 422);
-  }
-  if (sum > target) {
+  if (paidAmount > target) {
     throw new OperationsServiceError("Le montant saisi depasse le total a regler.", 422);
   }
 
-  return { paidAmount: target, creditAmount: 0, cashAmount, chequeAmount };
+  return {
+    paidAmount,
+    creditAmount: roundMoney(target - paidAmount),
+    cashAmount,
+    chequeAmount,
+  };
 }
 
 /**
@@ -313,12 +319,18 @@ export async function nextPaymentNumber(
 }
 
 /**
- * A counter-POS MIXED sale persists as TWO Payment rows (one CASH, one
- * CHECK) rather than a single row with method=MIXED - Payment.saleId was
- * never unique, so this needed no schema change. This is how the split
- * survives for the journal, sales history, the ticket and future exports:
- * anything reading SaleDto.payments already sees both rows with their own
- * method/amount/reference.
+ * A counter-POS MIXED sale persists ONE Payment row per instrument actually
+ * used (a CASH row iff cashAmount > 0, a CHECK row iff chequeAmount > 0) -
+ * never a zero-amount row, never a single row with method=MIXED
+ * (Payment.saleId was never unique, so this needed no schema change). This
+ * is how the split survives for the journal, sales history, the ticket and
+ * future exports. At least one of the two amounts is > 0 (guaranteed by
+ * resolveMixedPaymentSplit).
+ *
+ * Returns one stable, non-null `{ id, reference }` for the sale's
+ * settlement-entry dedup key (see postSaleAccountingEntry's
+ * settlementSourceId) - the CASH row when there is one, otherwise the CHECK
+ * row.
  */
 export async function createMixedPayments(
   tx: Pick<typeof prisma, "payment" | "$queryRaw">,
@@ -332,39 +344,48 @@ export async function createMixedPayments(
   },
 ): Promise<{ id: string; reference: string | null }> {
   const receivedAt = new Date();
-  const cashPayment = await tx.payment.create({
-    data: {
-      organizationId: input.organizationId,
-      paymentNumber: await nextPaymentNumber(tx, input.organizationId),
-      saleId: input.saleId,
-      amount: input.cashAmount,
-      method: "CASH",
-      status: "VALIDATED",
-      reference: null,
-      receivedByUserId: input.receivedByUserId,
-      receivedAt,
-    },
-    select: { id: true, reference: true },
-  });
-  // The settlement entry's dedup key only needs ONE stable, non-null
-  // payment id for this sale - the cash payment's id is reused for that
-  // purpose (see postSaleAccountingEntry's settlementSourceId), the cheque
-  // payment's own id is never referenced elsewhere.
-  await tx.payment.create({
-    data: {
-      organizationId: input.organizationId,
-      paymentNumber: await nextPaymentNumber(tx, input.organizationId),
-      saleId: input.saleId,
-      amount: input.chequeAmount,
-      method: "CHECK",
-      status: "VALIDATED",
-      reference: input.reference,
-      receivedByUserId: input.receivedByUserId,
-      receivedAt,
-    },
-    select: { id: true },
-  });
-  return cashPayment;
+  let dedupPayment: { id: string; reference: string | null } | null = null;
+
+  if (input.cashAmount > 0) {
+    dedupPayment = await tx.payment.create({
+      data: {
+        organizationId: input.organizationId,
+        paymentNumber: await nextPaymentNumber(tx, input.organizationId),
+        saleId: input.saleId,
+        amount: input.cashAmount,
+        method: "CASH",
+        status: "VALIDATED",
+        reference: null,
+        receivedByUserId: input.receivedByUserId,
+        receivedAt,
+      },
+      select: { id: true, reference: true },
+    });
+  }
+
+  if (input.chequeAmount > 0) {
+    const chequePayment = await tx.payment.create({
+      data: {
+        organizationId: input.organizationId,
+        paymentNumber: await nextPaymentNumber(tx, input.organizationId),
+        saleId: input.saleId,
+        amount: input.chequeAmount,
+        method: "CHECK",
+        status: "VALIDATED",
+        reference: input.reference,
+        receivedByUserId: input.receivedByUserId,
+        receivedAt,
+      },
+      select: { id: true, reference: true },
+    });
+    dedupPayment ??= chequePayment;
+  }
+
+  if (!dedupPayment) {
+    // Unreachable: resolveMixedPaymentSplit rejects cash = cheque = 0.
+    throw new OperationsServiceError("Paiement mixte sans montant.", 422);
+  }
+  return dedupPayment;
 }
 
 export async function nextMovementNumber(

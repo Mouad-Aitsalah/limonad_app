@@ -173,9 +173,20 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
                 <>
                   <p>Espèces : {formatCurrency(cashAmount)}</p>
                   <p>Chèque : {formatCurrency(chequeAmount)}</p>
+                  <p>Payé : {formatCurrency(sale.paidAmount)}</p>
+                  {sale.creditAmount > 0 ? (
+                    <p>Reste à crédit : {formatCurrency(sale.creditAmount)}</p>
+                  ) : null}
                 </>
               ) : null}
-              <p>Statut : Réglée</p>
+              <p>
+                Statut :{" "}
+                {sale.creditAmount <= 0
+                  ? "Réglée"
+                  : sale.paidAmount > 0
+                    ? "Partiellement réglée"
+                    : "À crédit"}
+              </p>
             </>
           )}
           <p>Caisse : {cashierName}</p>

@@ -386,7 +386,17 @@ export async function createCounterSale(
       assertMoneyRange(payment.paidAmount, "paidAmount");
       assertMoneyRange(payment.creditAmount, "creditAmount");
       if (collectNow && payment.creditAmount > 0 && !customer) {
-        throw new OperationsServiceError("Client obligatoire pour une vente a credit.", 422);
+        // A partly-paid MIXED sale leaves a receivable, so a customer is
+        // mandatory - same hard rule as a pure CREDIT sale (audit: the
+        // seeded "Client Comptoir" is itself a real, followable Customer
+        // row, and customer.type is not a reliable "generic walk-in"
+        // marker on this data, so no type-based block).
+        throw new OperationsServiceError(
+          parsed.data.paymentMethod === "MIXED"
+            ? "Veuillez selectionner un client pour enregistrer le reste a credit."
+            : "Client obligatoire pour une vente a credit.",
+          422,
+        );
       }
       if (collectNow && customer && payment.creditAmount > 0) {
         const nextBalance = customer.currentBalance.toNumber() + payment.creditAmount;

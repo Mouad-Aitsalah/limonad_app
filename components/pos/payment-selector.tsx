@@ -16,14 +16,17 @@ export type MixedPaymentAmounts = { cash: number; cheque: number };
 
 /** Same rounding-to-2-decimals comparison as the server's
  * resolveMixedPaymentSplit (lib/server/sales-shared.ts) - this is a UI hint
- * only, the real enforcement always happens server-side. */
+ * only, the real enforcement always happens server-side. A mixed payment
+ * may now cover only PART of the total (the rest becomes a customer
+ * receivable), so `sum < target` is no longer an error - only overpayment
+ * and a completely empty split are refused. */
 export function describeMixedPaymentError(
   amounts: MixedPaymentAmounts,
   total: number,
 ): string | null {
   const sum = Math.round((amounts.cash + amounts.cheque) * 100) / 100;
   const target = Math.round(total * 100) / 100;
-  if (sum < target) return "Le montant saisi est inférieur au total à régler.";
+  if (sum <= 0) return "Saisissez un montant en espèces ou en chèque.";
   if (sum > target) return "Le montant saisi dépasse le total à régler.";
   return null;
 }
@@ -138,9 +141,40 @@ export function PaymentSelector({
               />
             </div>
           </div>
-          <p className={mixedError ? "text-xs font-medium text-red-600" : "text-xs text-muted-foreground"}>
-            {mixedError ?? `Total saisi : ${formatCurrency(mixedAmounts.cash + mixedAmounts.cheque)}`}
-          </p>
+
+          {(() => {
+            const paid = Math.round((mixedAmounts.cash + mixedAmounts.cheque) * 100) / 100;
+            const remaining = Math.max(0, Math.round((mixedTotal - paid) * 100) / 100);
+            return (
+              <div className="space-y-1 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs tabular-nums">
+                <div className="flex items-center justify-between text-muted-foreground">
+                  <span>Espèces</span>
+                  <span>{formatCurrency(mixedAmounts.cash)}</span>
+                </div>
+                <div className="flex items-center justify-between text-muted-foreground">
+                  <span>Chèque</span>
+                  <span>{formatCurrency(mixedAmounts.cheque)}</span>
+                </div>
+                <div className="flex items-center justify-between border-t border-border pt-1 font-medium text-foreground">
+                  <span>Montant payé</span>
+                  <span>{formatCurrency(paid)}</span>
+                </div>
+                <div
+                  className={
+                    "flex items-center justify-between font-semibold " +
+                    (remaining > 0 ? "text-amber-700" : "text-emerald-700")
+                  }
+                >
+                  <span>Reste à crédit</span>
+                  <span>{formatCurrency(remaining)}</span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {mixedError ? (
+            <p className="text-xs font-medium text-red-600">{mixedError}</p>
+          ) : null}
         </div>
       )}
 
