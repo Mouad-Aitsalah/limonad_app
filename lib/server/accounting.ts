@@ -633,7 +633,7 @@ async function createPostedEntryLean(db: DbClient, input: CreatePostedEntryInput
 
   const entryNumber = await nextAccountingEntryNumber(db, organizationId, input.date);
 
-  await db.accountingEntry.create({
+  return db.accountingEntry.create({
     data: {
       organizationId,
       entryNumber,
@@ -842,6 +842,87 @@ export async function postSaleAccountingEntry(
       },
     ],
   });
+}
+
+/**
+ * BI Phase 2A-bis - a customer paying down (part of) their debt outside of
+ * any single invoice (see recordCustomerSettlement in
+ * lib/server/customer-settlements.ts). Debits the treasury account for the
+ * chosen method, credits the customer's own auxiliary account (the same
+ * resolveCustomerAuxiliaryAccountId every sale already posts to), so a
+ * settlement moves the exact same "solde comptable" a sale would have
+ * increased.
+ *
+ * sourceType/sourceId are deliberately left null: CustomerSettlement has its
+ * own dedicated accountingEntryId FK (added in BI Phase 2A specifically for
+ * this) plus its own idempotencyKey, so no polymorphic dedup is needed here.
+ * Reusing "CUSTOMER_PAYMENT" would have been wrong - buildJournalMetadata
+ * treats every CUSTOMER_PAYMENT sourceId as a real Payment row id (it does
+ * `db.payment.findMany({ where: { id: { in: sourceIds } } })` for display
+ * enrichment) and a settlement is not a Payment row.
+ */
+type CustomerSettlementAccountingPayload = {
+  organizationId?: string;
+  createdByUserId?: string;
+  customerId: string;
+  customerCode: string;
+  settlementNumber: string;
+  date: Date;
+  amount: DecimalInput;
+  method: "CASH" | "CHECK" | "BANK_TRANSFER";
+};
+
+export async function postCustomerSettlementAccountingEntry(
+  db: Prisma.TransactionClient,
+  payload: CustomerSettlementAccountingPayload,
+): Promise<string> {
+  const organizationId = await resolveOrganizationId({
+    explicitOrganizationId: payload.organizationId,
+    createdByUserId: payload.createdByUserId,
+  });
+  await ensureAccountingBootstrap(db, organizationId);
+
+  const neededSettingsKeys: AccountingAccountSettingsKey[] = ["customerAccountId"];
+  if (payload.method === "CASH") neededSettingsKeys.push("cashAccountId");
+  if (payload.method === "BANK_TRANSFER") neededSettingsKeys.push("bankAccountId");
+  const settings = await requireSettings(db, organizationId, neededSettingsKeys);
+
+  const debitAccountId =
+    payload.method === "CASH"
+      ? settings.cashAccountId
+      : payload.method === "BANK_TRANSFER"
+        ? settings.bankAccountId
+        : await requireExistingAccountByCode(
+            db,
+            organizationId,
+            accountingSystemAccountCodes.chequeInPortfolio,
+            "Cheque en portefeuille",
+          );
+
+  const customerAccountId = await resolveCustomerAuxiliaryAccountId(
+    db,
+    organizationId,
+    payload.customerId,
+    settings.customerAccountId,
+  );
+
+  const amount = toMoneyDecimal(payload.amount);
+  const label = buildCustomerSettlementLabel();
+
+  const created = await createPostedEntryLean(db, {
+    organizationId,
+    date: payload.date,
+    reference: payload.settlementNumber,
+    description: `Reglement client ${payload.customerCode}`,
+    journalType: "TREASURY",
+    createdByUserId: payload.createdByUserId,
+    lines: [
+      { accountId: debitAccountId, label, debit: amount, credit: 0 },
+      { accountId: customerAccountId, label, debit: 0, credit: amount },
+    ],
+  });
+
+  return created.id;
 }
 
 export async function postPurchaseAccountingEntry(
@@ -2236,6 +2317,10 @@ function buildSaleStampPayableLabel() {
 
 function buildSaleSettlementLabel() {
   return "Reglement facture";
+}
+
+function buildCustomerSettlementLabel() {
+  return "Reglement client";
 }
 
 function buildPurchaseExpenseLabel() {

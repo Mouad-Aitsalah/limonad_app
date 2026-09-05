@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { MONEY_RANGE_MAX_NUMBER, roundMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { postCustomerSettlementAccountingEntry } from "@/lib/server/accounting";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -15,7 +16,8 @@ import type {
 } from "@/types/customer-settlement";
 
 /**
- * BI Phase 2A - a customer paying down (part of) their credit balance.
+ * BI Phase 2A / 2A-bis - a customer paying down (part of) their credit
+ * balance.
  *
  * SOURCE OF TRUTH: never Customer.currentBalance (audit finding: 3 call
  * sites in counter-sales.ts/driver-sales.ts/pending-sales.ts only ever
@@ -39,6 +41,22 @@ import type {
  * refunded - computeCustomerDebt corrects for this by subtracting VALIDATED
  * customer credit notes (see its own doc comment for the precision limits
  * of this correction).
+ *
+ * LEDGER AUDIT FINDING (2A-bis, do not re-litigate without re-checking): a
+ * per-customer "solde comptable" (SUM(debit)-SUM(credit) on that customer's
+ * own AccountingAccount, POSTED entries only) is NOT the same number as
+ * computeCustomerDebt on this DEV database today, for two separate reasons -
+ * (1) the ledger module was added after most historical Sale/CreditNote rows
+ * already existed, and was never backfilled, so the large majority of
+ * pre-existing CREDIT sales have zero AccountingEntry at all and are
+ * invisible to the ledger-based sum; (2) postValidatedCreditNoteAccountingEntry
+ * never credits a customer's own auxiliary account for either refund method
+ * (CASH touches only 7111/117/51611, BANK touches only the generic
+ * settings.customerAccountId), so even a correctly-posted credit note never
+ * shows up in that per-customer sum. Neither gap is created or fixed by this
+ * file - recordCustomerSettlement below only guarantees that, going forward,
+ * a settlement moves both numbers by the exact same amount (see
+ * postCustomerSettlementAccountingEntry in lib/server/accounting.ts).
  */
 
 const settlementInclude = {
@@ -63,7 +81,7 @@ const settlementInputSchema = z.object({
     .min(0.01, "Le montant du reglement doit etre strictement positif.")
     .max(MONEY_RANGE_MAX_NUMBER, "Le montant depasse la limite autorisee."),
   date: z.coerce.date().optional(),
-  method: z.enum(["CASH", "CARD", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
+  method: z.enum(["CASH", "CHECK", "BANK_TRANSFER"]),
   reference: optionalString(),
   note: optionalString(),
   idempotencyKey: optionalString(),
@@ -195,7 +213,7 @@ export async function recordCustomerSettlement(
       async (tx) => {
         const customer = await tx.customer.findFirst({
           where: { id: customerId, organizationId: user.organizationId },
-          select: { id: true },
+          select: { id: true, code: true },
         });
         if (!customer) throw new OperationsServiceError("Client introuvable.", 404);
 
@@ -208,26 +226,54 @@ export async function recordCustomerSettlement(
         }
 
         const debt = await computeCustomerDebt(tx, user.organizationId, customerId);
-        if (data.amount > debt.debt) {
+        if (debt.debt <= 0) {
           throw new OperationsServiceError(
-            "Le reglement depasse le montant du.",
+            "Ce client n'a aucune creance a regler.",
             422,
-            { amount: "Le reglement depasse le montant du." },
+            { amount: "Ce client n'a aucune creance a regler." },
           );
         }
+        if (data.amount > debt.debt) {
+          throw new OperationsServiceError(
+            "Le montant du reglement depasse le solde du client.",
+            422,
+            { amount: "Le montant du reglement depasse le solde du client." },
+          );
+        }
+
+        const settlementNumber = await nextSettlementNumber(tx, user.organizationId);
+        const settlementDate = data.date ?? new Date();
+
+        // Post the ledger entry BEFORE creating the CustomerSettlement row -
+        // if this throws (e.g. 51111 missing for a CHECK settlement), the
+        // settlement itself is never created, and the whole tx (including
+        // the debt check above) rolls back. See postCustomerSettlementAccountingEntry
+        // in lib/server/accounting.ts for why sourceType/sourceId are left
+        // null in favor of the dedicated accountingEntryId link below.
+        const accountingEntryId = await postCustomerSettlementAccountingEntry(tx, {
+          organizationId: user.organizationId,
+          createdByUserId: user.id,
+          customerId,
+          customerCode: customer.code,
+          settlementNumber,
+          date: settlementDate,
+          amount: data.amount,
+          method: data.method,
+        });
 
         const created = await tx.customerSettlement.create({
           data: {
             organizationId: user.organizationId,
-            settlementNumber: await nextSettlementNumber(tx, user.organizationId),
+            settlementNumber,
             customerId,
-            date: data.date ?? new Date(),
+            date: settlementDate,
             amount: data.amount,
             method: data.method,
             reference: data.reference ?? null,
             note: data.note ?? null,
             status: "VALIDATED",
             idempotencyKey: data.idempotencyKey ?? null,
+            accountingEntryId,
             createdByUserId: user.id,
           },
           include: settlementInclude,
@@ -240,7 +286,13 @@ export async function recordCustomerSettlement(
 
         return created;
       },
-      { isolationLevel: "Serializable" },
+      // Same 20s budget as counter-sales.ts / pending-sales.ts (P2028 POS
+      // timeout chantier): the transaction now also posts a ledger entry
+      // (ensureAccountingBootstrap + requireSettings +
+      // resolveCustomerAuxiliaryAccountId + createPostedEntryLean), and
+      // under Serializable retry contention the default 5s ceiling is too
+      // tight over a remote Neon connection.
+      { isolationLevel: "Serializable", timeout: 20000 },
     ),
   );
 
@@ -250,8 +302,16 @@ export async function recordCustomerSettlement(
 /**
  * Idempotent: cancelling an already-CANCELLED settlement just returns it.
  * Restores the debt (and Customer.currentBalance) as if the settlement had
- * never happened. No ledger reversal needed - CustomerSettlement never
- * posts to AccountingEntry yet (Phase 2A-bis).
+ * never happened.
+ *
+ * KNOWN GAP (not in this task's scope - recordCustomerSettlement only asked
+ * for settlement creation, no caller of this function exists yet anywhere
+ * in the app): since recordCustomerSettlement now posts a real
+ * AccountingEntry, cancelling a settlement here does NOT reverse it - the
+ * ledger would keep showing the customer as having paid while
+ * computeCustomerDebt says otherwise again. Wire a reversal (by
+ * accountingEntryId, not by sourceType/sourceId - see this settlement's
+ * entry never sets those) before exposing cancellation anywhere.
  */
 export async function cancelCustomerSettlement(id: string): Promise<CustomerSettlementDto> {
   const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
@@ -279,7 +339,7 @@ export async function cancelCustomerSettlement(id: string): Promise<CustomerSett
 
         return updated;
       },
-      { isolationLevel: "Serializable" },
+      { isolationLevel: "Serializable", timeout: 20000 },
     ),
   );
 

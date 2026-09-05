@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowLeft, ArrowRight, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Plus, Wallet } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import { CartSummary } from "@/components/pos/cart-summary";
 import { InvoiceActions } from "@/components/pos/invoice-actions";
 import { CheckoutDialog } from "@/components/pos/checkout-dialog";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
+import { SettlementDialog } from "@/components/pos/settlement-dialog";
 
 export type CartLine = {
   productId: string;
@@ -126,6 +127,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     cheque: 0,
   });
   const [checkoutOpen, setCheckoutOpen] = React.useState(false);
+  const [settlementDialogOpen, setSettlementDialogOpen] = React.useState(false);
   // Stable for one sale attempt (F5): kept identical across a network retry
   // of confirmOperation, only ever replaced in resetOperation() once a sale
   // has actually gone through and a new one starts. A ref (not state) so it
@@ -707,6 +709,15 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         <Button
           type="button"
           variant="outline"
+          disabled={preparing || submitting || collecting}
+          onClick={() => setSettlementDialogOpen(true)}
+        >
+          <Wallet aria-hidden="true" className="h-4 w-4" />
+          Reglement client
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
           size="icon-sm"
           aria-label="Facture précédente"
           disabled={activeTabIndex <= 0 || preparing || submitting || collecting}
@@ -865,6 +876,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         onConfirm={confirmOperation}
       />
       <ReceiptPrint sale={lastSale} />
+      <SettlementDialog open={settlementDialogOpen} onOpenChange={setSettlementDialogOpen} />
     </div>
   );
 }
