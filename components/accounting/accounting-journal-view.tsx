@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Search } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, PencilLine, Search } from "lucide-react";
 
 import {
   accountingJournalTypeLabels,
@@ -14,7 +15,6 @@ import type {
   AccountingJournalType,
   AccountingSourceType,
 } from "@/types/accounting";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -219,80 +219,83 @@ export function AccountingJournalView({
 
       <div className="rounded-xl border border-border bg-card shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
         <div className="p-4">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>N° operation</TableHead>
-                <TableHead>Date operation</TableHead>
-                <TableHead>N° compte</TableHead>
-                <TableHead>Designation</TableHead>
-                <TableHead className="text-right">Debit</TableHead>
-                <TableHead className="text-right">Credit</TableHead>
-                <TableHead>N° facture</TableHead>
-                <TableHead>N° cheque</TableHead>
-                <TableHead>Divers / Nom</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredLines.map((line) => (
-                <TableRow key={line.id}>
-                  <TableCell className="font-medium">{line.operationNumber}</TableCell>
-                  <TableCell>{formatDate(line.date)}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-col">
-                      <span className="font-medium">{line.accountCode}</span>
-                      <span className="text-xs text-muted-foreground">{line.accountName}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="whitespace-normal">
-                    <div className="space-y-1">
-                      <p className="font-medium text-foreground">{line.label}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {line.description}
-                        {line.reference ? ` • REF ${line.reference}` : ""}
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge variant="outline">
-                          {accountingJournalTypeLabels[line.journalType]}
-                        </Badge>
-                        {line.sourceType && (
-                          <Badge variant="secondary">
-                            {accountingSourceTypeLabels[line.sourceType]}
-                          </Badge>
-                        )}
-                        {line.createdByUserName && (
-                          <Badge variant="outline">{line.createdByUserName}</Badge>
-                        )}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {line.debit > 0 ? formatCurrency(line.debit) : "-"}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {line.credit > 0 ? formatCurrency(line.credit) : "-"}
-                  </TableCell>
-                  <TableCell>{line.invoiceNumber ?? line.reference ?? "-"}</TableCell>
-                  <TableCell>{line.checkNumber ?? "-"}</TableCell>
-                  <TableCell>{line.partyName ?? "-"}</TableCell>
+          <div className="overflow-x-auto">
+            <Table className="min-w-[860px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>N° operation</TableHead>
+                  <TableHead>Date operation</TableHead>
+                  <TableHead>N° compte</TableHead>
+                  <TableHead>Designation</TableHead>
+                  <TableHead className="text-right">Debit</TableHead>
+                  <TableHead className="text-right">Credit</TableHead>
+                  <TableHead>N° cheque</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-            <TableFooter>
-              <TableRow>
-                <TableCell colSpan={4} className="text-right font-semibold">
-                  Totaux
-                </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
-                  {formatCurrency(totalDebit)}
-                </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
-                  {formatCurrency(totalCredit)}
-                </TableCell>
-                <TableCell colSpan={3} />
-              </TableRow>
-            </TableFooter>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {filteredLines.map((line, index) => {
+                  const isFirstLineOfEntry =
+                    index === 0 || filteredLines[index - 1].entryId !== line.entryId;
+                  const canRevise =
+                    line.sourceType === "MANUAL_ENTRY" && line.status === "POSTED";
+                  const designation = line.label.trim();
+
+                  return (
+                    <TableRow key={line.id}>
+                      <TableCell className="font-medium tabular-nums">
+                        {line.operationNumber}
+                      </TableCell>
+                      <TableCell>{formatDate(line.date)}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col">
+                          <span className="font-medium">{line.accountCode}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {line.accountName}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-normal">
+                        {designation || <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {line.debit > 0 ? formatCurrency(line.debit) : "-"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {line.credit > 0 ? formatCurrency(line.credit) : "-"}
+                      </TableCell>
+                      <TableCell className="tabular-nums">{line.checkNumber ?? "-"}</TableCell>
+                      <TableCell className="text-right">
+                        {isFirstLineOfEntry && canRevise ? (
+                          <Link
+                            href={`/comptabilite/ecritures?revise=${line.entryId}`}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white/82 px-2.5 py-1 text-xs font-semibold text-foreground hover:bg-[var(--surface-muted)]"
+                          >
+                            <PencilLine className="h-3.5 w-3.5" />
+                            Modifier
+                          </Link>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+              <TableFooter>
+                <TableRow>
+                  <TableCell colSpan={4} className="text-right font-semibold">
+                    Totaux
+                  </TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums">
+                    {formatCurrency(totalDebit)}
+                  </TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums">
+                    {formatCurrency(totalCredit)}
+                  </TableCell>
+                  <TableCell colSpan={2} />
+                </TableRow>
+              </TableFooter>
+            </Table>
+          </div>
         </div>
       </div>
     </div>
