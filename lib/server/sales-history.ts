@@ -1,6 +1,7 @@
 import "server-only";
 
 import { roundMoney as roundMoneyDecimal } from "@/lib/money";
+import { formatSaleDisplayNumber } from "@/lib/sale-display-number";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -127,10 +128,11 @@ function mapOrderRowToListItemDto(
   return {
     id: row.id,
     invoiceNumber: row.invoiceNumber,
-    displayNumber:
-      row.saleYear !== null && row.saleNumber !== null
-        ? `${row.saleNumber}/${row.saleYear}`
-        : row.invoiceNumber,
+    displayNumber: formatSaleDisplayNumber(
+      row.saleNumber,
+      row.saleYear,
+      row.invoiceNumber,
+    ),
     posSessionId: row.posSessionId,
     status: row.status,
     customer: row.customer,

@@ -45,14 +45,6 @@ function formatReceiptAmount(value: number) {
   return formatCurrency(value).replace(/\s?DH$/, "");
 }
 
-export function formatReceiptInvoiceNumber(invoiceNumber: string) {
-  const lastNumericPart = invoiceNumber.match(/(\d+)(?!.*\d)/)?.[1];
-  if (!lastNumericPart) return invoiceNumber;
-
-  const withoutLeadingZeroes = lastNumericPart.replace(/^0+(?=\d)/, "");
-  return withoutLeadingZeroes.padStart(2, "0");
-}
-
 export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
   const { identity } = useCompanyIdentity();
 
@@ -99,7 +91,7 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
         <div className="receipt-print-meta">
           <div>
             <span>N° Facture : </span>
-            <strong>{formatReceiptInvoiceNumber(sale.invoiceNumber)}</strong>
+            <strong>{sale.displayNumber}</strong>
           </div>
           <div className="receipt-print-right">{formatReceiptDate(receiptDate)}</div>
           <div>

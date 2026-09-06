@@ -1,6 +1,7 @@
 import "server-only";
 
 import { roundMoney as roundMoneyDecimal } from "@/lib/money";
+import { formatSaleDisplayNumber } from "@/lib/sale-display-number";
 import type { SaleGetPayload } from "@/lib/generated/prisma/models/Sale";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSessionUser } from "@/lib/server/auth";
@@ -38,10 +39,11 @@ export function mapSaleToDto(sale: SaleWithRelations): SaleDto {
     invoiceNumber: sale.invoiceNumber,
     saleYear: sale.saleYear,
     saleNumber: sale.saleNumber,
-    displayNumber:
-      sale.saleYear !== null && sale.saleNumber !== null
-        ? `${sale.saleNumber}/${sale.saleYear}`
-        : sale.invoiceNumber,
+    displayNumber: formatSaleDisplayNumber(
+      sale.saleNumber,
+      sale.saleYear,
+      sale.invoiceNumber,
+    ),
     posSessionId: sale.posSessionId,
     origin: sale.origin,
     status: sale.status,

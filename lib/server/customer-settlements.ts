@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { MONEY_RANGE_MAX_NUMBER, roundMoney } from "@/lib/money";
+import { formatSaleDisplayNumber } from "@/lib/sale-display-number";
 import { prisma } from "@/lib/prisma";
 import {
   postCustomerSettlementAccountingEntry,
@@ -237,7 +238,10 @@ export async function getCustomerJournal(
 
   // --- the business documents that belong to this exact customer (read-only) ---
   const [sales, payments, creditNotes, settlementEntries] = await Promise.all([
-    prisma.sale.findMany({ where: { organizationId: org, customerId }, select: { id: true } }),
+    prisma.sale.findMany({
+      where: { organizationId: org, customerId },
+      select: { id: true, saleNumber: true, saleYear: true, invoiceNumber: true },
+    }),
     prisma.payment.findMany({
       where: { organizationId: org, sale: { is: { customerId } } },
       select: { id: true },
@@ -258,6 +262,16 @@ export async function getCustomerJournal(
   ]);
 
   const saleIds = sales.map((s) => s.id);
+  // A SALE line's stored label is "Achat facture num: <invoiceNumber>" - in
+  // this customer-facing view show the same commercial reference /ventes
+  // uses (saleNumber/saleYear, e.g. "16/2026"), keyed by the SALE entry's
+  // sourceId (which is the Sale.id).
+  const saleDisplayById = new Map(
+    sales.map((s) => [
+      s.id,
+      formatSaleDisplayNumber(s.saleNumber, s.saleYear, s.invoiceNumber),
+    ]),
+  );
   const paymentIds = payments.map((p) => p.id);
   const creditNoteIds = creditNotes.map((c) => c.id);
   const settlementEntryIds = settlementEntries
@@ -311,7 +325,9 @@ export async function getCustomerJournal(
           label: true,
           debit: true,
           credit: true,
-          entry: { select: { entryNumber: true, date: true } },
+          entry: {
+            select: { entryNumber: true, date: true, sourceType: true, sourceId: true },
+          },
         },
         orderBy: [{ entry: { date: "desc" } }, { operationNumber: "desc" }],
         skip: (page - 1) * pageSize,
@@ -319,17 +335,23 @@ export async function getCustomerJournal(
       })
     : [];
 
-  const operations: CustomerJournalOperationDto[] = rows.map((row) => ({
-    id: row.id,
-    date: row.entry.date.toISOString(),
-    entryNumber: row.entry.entryNumber,
-    operationNumber: row.operationNumber,
-    accountCode: account.code,
-    accountName: account.name,
-    label: row.label,
-    debit: row.debit.toNumber(),
-    credit: row.credit.toNumber(),
-  }));
+  const operations: CustomerJournalOperationDto[] = rows.map((row) => {
+    const saleDisplay =
+      row.entry.sourceType === "SALE" && row.entry.sourceId
+        ? saleDisplayById.get(row.entry.sourceId)
+        : undefined;
+    return {
+      id: row.id,
+      date: row.entry.date.toISOString(),
+      entryNumber: row.entry.entryNumber,
+      operationNumber: row.operationNumber,
+      accountCode: account.code,
+      accountName: account.name,
+      label: saleDisplay ?? row.label,
+      debit: row.debit.toNumber(),
+      credit: row.credit.toNumber(),
+    };
+  });
 
   const totalDebit = roundMoney(sums._sum.debit?.toNumber() ?? 0);
   const totalCredit = roundMoney(sums._sum.credit?.toNumber() ?? 0);
