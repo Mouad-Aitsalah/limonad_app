@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronsLeft, ChevronsRight, LogOut } from "lucide-react";
@@ -20,6 +21,13 @@ export function Sidebar() {
   const homeHref = currentUser?.role === "super_admin" ? "/organisations" : "/dashboard";
   const companyName = identity?.tradeName || identity?.name || "COMDIS";
 
+  // Accordion: at most one section expanded at a time. `undefined` = follow
+  // the section that contains the current route; a string = the section the
+  // user explicitly opened; `null` = the user collapsed everything.
+  const [manualOpenKey, setManualOpenKey] = React.useState<string | null | undefined>(
+    undefined,
+  );
+
   const visibleNavItems = navItems.filter(
     (item) =>
       currentUser
@@ -28,6 +36,16 @@ export function Sidebar() {
           : !item.roles || item.roles.includes(currentUser.role)
         : false,
   );
+
+  const matchesRoute = (href: string) =>
+    pathname === href || pathname.startsWith(`${href}/`);
+  const activeItem = visibleNavItems.find((item) =>
+    item.href
+      ? matchesRoute(item.href)
+      : item.children?.some((child) => matchesRoute(child.href)) ?? false,
+  );
+  const activeItemKey = activeItem ? activeItem.href ?? activeItem.label : null;
+  const openKey = manualOpenKey === undefined ? activeItemKey : manualOpenKey;
 
   return (
     <>
@@ -88,18 +106,30 @@ export function Sidebar() {
                     : !child.roles || child.roles.includes(currentUser.role)
                   : false,
             );
+
+            // A group whose children are all hidden for this role (and which
+            // has no page of its own) would render as a dead link - skip it.
+            if (item.children && !item.href && (visibleChildren?.length ?? 0) === 0) {
+              return null;
+            }
+
+            const itemKey = item.href ?? item.label;
             const active = item.href
-              ? pathname === item.href || pathname.startsWith(`${item.href}/`)
-              : visibleChildren?.some(
-                  (child) =>
-                    pathname === child.href || pathname.startsWith(`${child.href}/`),
-                ) ?? false;
+              ? matchesRoute(item.href)
+              : visibleChildren?.some((child) => matchesRoute(child.href)) ?? false;
 
             return (
               <SidebarItem
-                key={item.href ?? item.label}
+                key={itemKey}
                 item={visibleChildren ? { ...item, children: visibleChildren } : item}
                 active={active}
+                open={itemKey === openKey}
+                onToggleGroup={() =>
+                  setManualOpenKey((prev) => {
+                    const current = prev === undefined ? activeItemKey : prev;
+                    return current === itemKey ? null : itemKey;
+                  })
+                }
                 collapsed={collapsed}
                 onNavigate={closeMobile}
                 pathname={pathname}

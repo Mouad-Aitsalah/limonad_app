@@ -1,19 +1,11 @@
 import {
   Calculator,
-  ClipboardCheck,
-  ClipboardList,
-  Contact as ContactIcon,
-  Container,
   LayoutDashboard,
-  Navigation,
   Package,
-  ReceiptText,
   Settings,
   ShieldUser,
   ShoppingBag,
   ShoppingCart,
-  Store,
-  Tags,
   Users,
   Wallet,
   Warehouse,
@@ -27,15 +19,15 @@ export type NavItem = {
   href?: string;
   icon: LucideIcon;
   description?: string;
-  order?: string;
   roles?: UserRole[];
   children?: Array<{
     label: string;
     href: string;
-    description?: string;
     roles?: UserRole[];
   }>;
 };
+
+const ACCOUNTING_ROLES: UserRole[] = ["admin", "depot_manager", "cashier"];
 
 export const navItems: NavItem[] = [
   {
@@ -43,7 +35,6 @@ export const navItems: NavItem[] = [
     href: "/organisations",
     icon: ShieldUser,
     description: "Pilotage multi-organisations",
-    order: "00",
     roles: ["super_admin"],
   },
   {
@@ -51,204 +42,94 @@ export const navItems: NavItem[] = [
     href: "/dashboard",
     icon: LayoutDashboard,
     description: "Vue business et alertes",
-    order: "01",
   },
   {
-    label: "Produits",
-    href: "/produits",
+    label: "Ventes & Caisse",
+    icon: ShoppingCart,
+    description: "Encaissement, versements et avoirs",
+    children: [
+      { label: "Point de vente", href: "/pos" },
+      { label: "Versements", href: "/pos/versements" },
+      { label: "Ventes", href: "/ventes" },
+      { label: "Avoirs", href: "/avoirs", roles: ["admin", "cashier"] },
+    ],
+  },
+  {
+    label: "Catalogue",
     icon: Package,
-    description: "Catalogue, prix et photos",
-    order: "02",
+    description: "Produits et catégories",
+    children: [
+      { label: "Produits", href: "/produits" },
+      { label: "Catégories", href: "/categories" },
+    ],
   },
   {
-    label: "Categories",
-    href: "/categories",
-    icon: Tags,
-    description: "Organisation du catalogue",
-    order: "03",
-  },
-  {
-    label: "Stock",
-    href: "/stock",
+    label: "Stock & Logistique",
     icon: Warehouse,
-    description: "Depot, camions et mouvements",
-    order: "04",
-  },
-  {
-    label: "Depots",
-    href: "/depots",
-    icon: Warehouse,
-    description: "Depots de l'organisation",
-    order: "042",
-    roles: ["admin"],
-  },
-  {
-    label: "Inventaire",
-    href: "/inventaire",
-    icon: ClipboardCheck,
-    description: "Comptage physique du stock",
-    order: "045",
-    roles: ["admin", "depot_manager"],
-  },
-  {
-    label: "Camions",
-    href: "/camions",
-    icon: Container,
-    description: "Flotte et affectations",
-    order: "05",
-  },
-  {
-    label: "Chargements",
-    href: "/chargements",
-    icon: ClipboardList,
-    description: "Preparation et transferts",
-    order: "07",
-    roles: ["admin", "depot_manager"],
-  },
-  {
-    label: "Trajets",
-    href: "/trajets",
-    icon: Navigation,
-    description: "Trajets GPS et historique",
-    order: "06",
-    roles: ["admin", "depot_manager"],
+    description: "Stock, dépôts, camions et tournées",
+    children: [
+      { label: "Stock", href: "/stock" },
+      { label: "Dépôts", href: "/depots", roles: ["admin"] },
+      { label: "Inventaire", href: "/inventaire", roles: ["admin", "depot_manager"] },
+      { label: "Camions", href: "/camions" },
+      { label: "Chargements", href: "/chargements", roles: ["admin", "depot_manager"] },
+      { label: "Trajets", href: "/trajets", roles: ["admin", "depot_manager"] },
+    ],
   },
   {
     label: "Achats",
     href: "/achats",
     icon: ShoppingBag,
     description: "Approvisionnements",
-    order: "08",
   },
   {
-    label: "Ventes",
-    href: "/ventes",
-    icon: ShoppingCart,
-    description: "Factures et encaissements",
-    order: "09",
-  },
-  {
-    label: "Avoirs",
-    href: "/avoirs",
-    icon: ReceiptText,
-    description: "Retours et credits",
-    order: "10",
-    roles: ["admin", "cashier"],
-  },
-  {
-    label: "Point de Vente",
-    icon: Store,
-    description: "Encaissement et versements",
-    order: "11",
-    children: [
-      {
-        label: "Point de Vente",
-        href: "/pos",
-        description: "Encaissement direct",
-      },
-      {
-        label: "Versements",
-        href: "/pos/versements",
-        description: "Declaration et historique de caisse",
-      },
-    ],
-  },
-  {
-    label: "Comptes",
-    href: "/comptes",
+    label: "Clients & fournisseurs",
     icon: Wallet,
-    description: "Clients, fournisseurs et tiers",
-    order: "12",
+    description: "Comptes et contacts tiers",
+    children: [
+      { label: "Comptes", href: "/comptes" },
+      { label: "Contacts", href: "/contacts", roles: ["admin"] },
+    ],
   },
   {
-    label: "Contacts",
-    href: "/contacts",
-    icon: ContactIcon,
-    description: "Repertoire general de contacts",
-    order: "125",
-    roles: ["admin"],
-  },
-  {
-    label: "Employes",
+    label: "Ressources humaines",
     icon: Users,
-    description: "Personnel, avances et salaires",
-    order: "127",
+    description: "Employés et paie",
     roles: ["admin"],
     children: [
-      {
-        label: "Employes",
-        href: "/employes",
-        description: "Annuaire et fiches employes",
-        roles: ["admin"],
-      },
-      {
-        label: "Avances / Salaire",
-        href: "/employes/avances-salaire",
-        description: "Operations paie et historique",
-        roles: ["admin"],
-      },
+      { label: "Employés", href: "/employes", roles: ["admin"] },
+      { label: "Avances / Salaire", href: "/employes/avances-salaire", roles: ["admin"] },
     ],
   },
   {
-    label: "Comptabilite",
+    label: "Comptabilité",
     icon: Calculator,
-    description: "Journal et parametres",
-    order: "13",
-    roles: ["admin", "depot_manager", "cashier"],
+    description: "Journal, écritures et règlements",
+    roles: ACCOUNTING_ROLES,
     children: [
+      { label: "Journal", href: "/comptabilite/journal", roles: ACCOUNTING_ROLES },
+      { label: "Écritures", href: "/comptabilite/ecritures", roles: ACCOUNTING_ROLES },
       {
-        label: "Journal",
-        href: "/comptabilite/journal",
-        description: "Suivi des operations",
-        roles: ["admin", "depot_manager", "cashier"],
-      },
-      {
-        label: "Comptes comptables",
-        href: "/comptabilite/comptes",
-        description: "Plan comptable",
-        roles: ["admin", "depot_manager", "cashier"],
-      },
-      {
-        label: "Ecritures",
-        href: "/comptabilite/ecritures",
-        description: "Saisir une ecriture manuelle",
-        roles: ["admin", "depot_manager", "cashier"],
-      },
-      {
-        label: "Reglements clients",
+        label: "Règlements clients",
         href: "/comptabilite/reglements-clients",
-        description: "Soldes et encaissements clients",
-        roles: ["admin", "depot_manager", "cashier"],
+        roles: ACCOUNTING_ROLES,
       },
+      { label: "Comptes comptables", href: "/comptabilite/comptes", roles: ACCOUNTING_ROLES },
       {
-        label: "Parametres comptables",
+        label: "Paramètres comptables",
         href: "/comptabilite/parametres",
-        description: "Comptes systeme",
-        roles: ["admin", "depot_manager", "cashier"],
+        roles: ACCOUNTING_ROLES,
       },
     ],
   },
   {
-    label: "Utilisateurs",
-    href: "/utilisateurs",
-    icon: ShieldUser,
-    description: "Acces et roles",
-    order: "14",
-    roles: ["admin"],
-  },
-  {
-    label: "Parametres",
+    label: "Administration",
     icon: Settings,
-    description: "Identite de l'entreprise",
-    order: "15",
+    description: "Utilisateurs et paramètres",
     roles: ["admin"],
     children: [
-      {
-        label: "Identite de l'entreprise",
-        href: "/parametres/identite",
-        description: "Nom et logo affiches dans l'application et sur les tickets",
-        roles: ["admin"],
-      },
+      { label: "Utilisateurs", href: "/utilisateurs", roles: ["admin"] },
+      { label: "Paramètres", href: "/parametres/identite", roles: ["admin"] },
     ],
   },
 ];

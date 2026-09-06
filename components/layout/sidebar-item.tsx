@@ -1,5 +1,4 @@
 import Link from "next/link";
-import * as React from "react";
 import { ChevronDown } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -10,6 +9,10 @@ type SidebarItemProps = {
   active: boolean;
   collapsed: boolean;
   pathname: string;
+  /** Whether this group's sub-menu is expanded (only one group open at a
+   * time - controlled by the parent Sidebar). Ignored for leaf items. */
+  open?: boolean;
+  onToggleGroup?: () => void;
   onNavigate?: () => void;
   onExpandSidebar?: () => void;
 };
@@ -19,12 +22,13 @@ export function SidebarItem({
   active,
   collapsed,
   pathname,
+  open = false,
+  onToggleGroup,
   onNavigate,
   onExpandSidebar,
 }: SidebarItemProps) {
   const Icon = item.icon;
-  const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
-  const open = !collapsed && (userOpen ?? active);
+  const isOpen = !collapsed && open;
 
   if (item.children?.length) {
     return (
@@ -32,14 +36,10 @@ export function SidebarItem({
         <button
           type="button"
           onClick={() => {
-            if (collapsed) {
-              onExpandSidebar?.();
-              setUserOpen(true);
-              return;
-            }
-            setUserOpen((prev) => !(prev ?? active));
+            if (collapsed) onExpandSidebar?.();
+            onToggleGroup?.();
           }}
-          aria-expanded={open}
+          aria-expanded={isOpen}
           title={collapsed ? item.label : undefined}
           className={cn(
             "group relative flex w-full items-center gap-3 overflow-hidden rounded-[18px] border px-3.5 py-3.5 text-left transition-all duration-200 ease-out",
@@ -63,19 +63,7 @@ export function SidebarItem({
           {!collapsed && (
             <>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2.5">
-                  <span className="truncate text-sm font-semibold">{item.label}</span>
-                  {item.order ? (
-                    <span
-                      className={cn(
-                        "ml-auto flex h-6 min-w-6 shrink-0 items-center justify-center rounded-[9px] px-1.5 text-[0.65rem] font-bold tracking-[0.02em] transition-colors duration-200",
-                        active ? "bg-white/18 text-white" : "bg-white/8 text-white/62",
-                      )}
-                    >
-                      {item.order}
-                    </span>
-                  ) : null}
-                </div>
+                <span className="block truncate text-sm font-semibold">{item.label}</span>
                 {item.description ? (
                   <p
                     className={cn(
@@ -89,14 +77,17 @@ export function SidebarItem({
               </div>
 
               <ChevronDown
-                className={cn("h-4 w-4 shrink-0 transition-transform", open && "rotate-180")}
+                className={cn(
+                  "h-4 w-4 shrink-0 transition-transform",
+                  isOpen && "rotate-180",
+                )}
               />
             </>
           )}
         </button>
 
-        {!collapsed && open && (
-          <div className="ml-6 space-y-2 border-l border-white/10 pl-4">
+        {!collapsed && isOpen && (
+          <div className="ml-6 space-y-1.5 border-l border-white/10 pl-4">
             {item.children.map((child) => {
               const childActive =
                 pathname === child.href || pathname.startsWith(`${child.href}/`);
@@ -106,17 +97,15 @@ export function SidebarItem({
                   key={child.href}
                   href={child.href}
                   onClick={onNavigate}
+                  aria-current={childActive ? "page" : undefined}
                   className={cn(
-                    "block rounded-[16px] border px-3.5 py-3 transition-all duration-200 ease-out",
+                    "block rounded-[14px] border px-3.5 py-2.5 text-sm font-medium transition-all duration-200 ease-out",
                     childActive
                       ? "border-white/14 bg-white/12 text-white"
                       : "border-transparent text-white/68 hover:border-white/12 hover:bg-white/8 hover:text-white",
                   )}
                 >
-                  <p className="text-sm font-semibold">{child.label}</p>
-                  {child.description ? (
-                    <p className="mt-1 text-xs leading-5 text-white/56">{child.description}</p>
-                  ) : null}
+                  {child.label}
                 </Link>
               );
             })}
@@ -152,33 +141,19 @@ export function SidebarItem({
       </div>
 
       {!collapsed && (
-        <>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2.5">
-              <span className="truncate text-sm font-semibold">{item.label}</span>
-              {item.order ? (
-                <span
-                  className={cn(
-                    "ml-auto flex h-6 min-w-6 shrink-0 items-center justify-center rounded-[9px] px-1.5 text-[0.65rem] font-bold tracking-[0.02em] transition-colors duration-200",
-                    active ? "bg-white/18 text-white" : "bg-white/8 text-white/62",
-                  )}
-                >
-                  {item.order}
-                </span>
-              ) : null}
-            </div>
-            {item.description ? (
-              <p
-                className={cn(
-                  "mt-1 line-clamp-2 text-xs leading-5",
-                  active ? "text-white/78" : "text-white/56",
-                )}
-              >
-                {item.description}
-              </p>
-            ) : null}
-          </div>
-        </>
+        <div className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold">{item.label}</span>
+          {item.description ? (
+            <p
+              className={cn(
+                "mt-1 line-clamp-2 text-xs leading-5",
+                active ? "text-white/78" : "text-white/56",
+              )}
+            >
+              {item.description}
+            </p>
+          ) : null}
+        </div>
       )}
     </Link>
   );
