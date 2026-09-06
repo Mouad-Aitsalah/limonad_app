@@ -24,6 +24,9 @@ export type NavItem = {
     label: string;
     href: string;
     roles?: UserRole[];
+    /** Highlight this child only on an exact pathname match, never on its
+     * sub-routes (used when a sibling child lives under this href). */
+    exact?: boolean;
   }>;
 };
 
@@ -78,9 +81,12 @@ export const navItems: NavItem[] = [
   },
   {
     label: "Achats",
-    href: "/achats",
     icon: ShoppingBag,
     description: "Approvisionnements",
+    children: [
+      { label: "Achat", href: "/achats/nouveau" },
+      { label: "Historique des achats", href: "/achats", exact: true },
+    ],
   },
   {
     label: "Clients & fournisseurs",

@@ -1,11 +1,13 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { suppliers as fallbackSuppliers } from "@/lib/mock-data/suppliers";
-import { PurchaseDialog } from "@/components/achats/purchase-dialog";
 import {
   PurchasesToolbar,
   defaultPurchasesFilters,
@@ -13,8 +15,8 @@ import {
 } from "@/components/achats/purchases-toolbar";
 import { PurchasesTable } from "@/components/achats/purchases-table";
 import { PurchasesPagination } from "@/components/achats/purchases-pagination";
-import type { Purchase, PurchaseInput } from "@/types/purchase";
-import type { ProductDto, ProductOptionDto } from "@/types/product-dto";
+import type { Purchase } from "@/types/purchase";
+import type { ProductOptionDto } from "@/types/product-dto";
 
 const PAGE_SIZE = 10;
 
@@ -52,7 +54,6 @@ function supplierName(id: string, supplierOptions: ProductOptionDto[]) {
 export function PurchasesView() {
   const [purchases, setPurchases] = React.useState<Purchase[]>([]);
   const [supplierOptions, setSupplierOptions] = React.useState<ProductOptionDto[]>([]);
-  const [productOptions, setProductOptions] = React.useState<ProductDto[]>([]);
   const [filters, setFilters] = React.useState<PurchasesFilters>(
     defaultPurchasesFilters,
   );
@@ -82,30 +83,6 @@ export function PurchasesView() {
       }
     });
 
-    // Phase 3 CRITICAL #1 fix: small bounded preload instead of
-    // GET /api/products (getProducts(), measured 12.5s/56MB at 100k
-    // products) - already ACTIVE-only. See PurchaseForm's product search.
-    async function loadProducts() {
-      const response = await fetch("/api/products/preload", { cache: "no-store" });
-      const payload = (await response.json()) as {
-        products?: ProductDto[];
-      };
-
-      if (!response.ok || !payload.products) {
-        throw new Error("Impossible de charger les produits.");
-      }
-
-      if (!cancelled) {
-        setProductOptions(payload.products);
-      }
-    }
-
-    void loadProducts().catch(() => {
-      if (!cancelled) {
-        setProductOptions([]);
-      }
-    });
-
     void fetchPurchases()
       .then((items) => {
         if (!cancelled) setPurchases(items);
@@ -132,36 +109,6 @@ export function PurchasesView() {
   ) {
     setFilters((prev) => ({ ...prev, [key]: value }));
     setPage(1);
-  }
-
-  async function handleAddPurchase(purchase: PurchaseInput) {
-    const response = await fetch("/api/purchases", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        date: purchase.date.toISOString().slice(0, 10),
-        fournisseurId: purchase.fournisseurId,
-        modeReglement: purchase.modeReglement,
-        numeroCheque: purchase.numeroCheque,
-        banque: purchase.banque,
-        datePaiement: purchase.datePaiement?.toISOString().slice(0, 10) ?? null,
-        observation: purchase.observation,
-        lignes: purchase.lignes,
-      }),
-    });
-    const payload = (await response.json()) as {
-      purchase?: Purchase;
-      message?: string;
-    };
-
-    if (!response.ok || !payload.purchase) {
-      throw new Error(payload.message ?? "Impossible d'enregistrer l'achat.");
-    }
-
-    setPurchases(await fetchPurchases());
-    setPage(1);
-    toast.success(`Achat ${payload.purchase.numero} enregistré avec succès.`);
   }
 
   const filteredPurchases = React.useMemo(() => {
@@ -220,18 +167,20 @@ export function PurchasesView() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-heading text-2xl font-semibold text-foreground">
-            Achats
+            Historique des achats
           </h1>
           <p className="text-sm text-muted-foreground">
-            Factures d&apos;achat fournisseurs.
+            Suivi des factures d&apos;achat fournisseurs.
           </p>
         </div>
 
-        <PurchaseDialog
-          onSaved={handleAddPurchase}
-          productOptions={productOptions}
-          supplierOptions={supplierOptions}
-        />
+        <Link
+          href="/achats/nouveau"
+          className={buttonVariants({ size: "lg", className: "w-full sm:w-auto" })}
+        >
+          <Plus aria-hidden="true" className="h-4 w-4" />
+          Nouveau Achat
+        </Link>
       </div>
 
       <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">

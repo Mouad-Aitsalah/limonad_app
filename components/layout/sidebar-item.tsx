@@ -90,7 +90,8 @@ export function SidebarItem({
           <div className="ml-6 space-y-1.5 border-l border-white/10 pl-4">
             {item.children.map((child) => {
               const childActive =
-                pathname === child.href || pathname.startsWith(`${child.href}/`);
+                pathname === child.href ||
+                (!child.exact && pathname.startsWith(`${child.href}/`));
 
               return (
                 <Link
