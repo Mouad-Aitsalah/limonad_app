@@ -1841,40 +1841,37 @@ async function applyLoadingStockDelta(
       continue;
     }
 
-    const [depotLevel, truckLevel] = await Promise.all([
-      tx.stockLevel.findUnique({
+    const truckLevel = await tx.stockLevel.findUnique({
+      where: {
+        productId_locationId: {
+          productId,
+          locationId: input.truckLocationId,
+        },
+      },
+    });
+
+    if (deltaQuantity > 0) {
+      // A depot -> truck loading is never blocked by low/zero/negative depot
+      // stock: the depot StockLevel is allowed to go negative (it is only an
+      // anomaly to flag, not an invariant). Same signed Int column the
+      // counter POS already drives negative. The reverse move (deltaQuantity
+      // < 0 below) keeps its own guard - reducing a loading still requires
+      // the truck to actually hold the stock being sent back.
+      await tx.stockLevel.upsert({
         where: {
           productId_locationId: {
             productId,
             locationId: input.depotLocationId,
           },
         },
-      }),
-      tx.stockLevel.findUnique({
-        where: {
-          productId_locationId: {
-            productId,
-            locationId: input.truckLocationId,
-          },
+        update: { quantity: { decrement: deltaQuantity } },
+        create: {
+          organizationId: input.organizationId,
+          productId,
+          locationId: input.depotLocationId,
+          quantity: -deltaQuantity,
+          reservedQuantity: 0,
         },
-      }),
-    ]);
-
-    if (deltaQuantity > 0) {
-      const depotAvailable =
-        (depotLevel?.quantity ?? 0) - (depotLevel?.reservedQuantity ?? 0);
-      if (depotAvailable < deltaQuantity) {
-        throw new OperationsServiceError("Stock depot insuffisant pour ce produit.", 422, {
-          [productId]: "Stock depot insuffisant pour ce produit.",
-        });
-      }
-      if (!depotLevel) {
-        throw new OperationsServiceError("Stock depot source introuvable.", 404);
-      }
-
-      await tx.stockLevel.update({
-        where: { id: depotLevel.id },
-        data: { quantity: { decrement: deltaQuantity } },
       });
       await tx.stockLevel.upsert({
         where: {

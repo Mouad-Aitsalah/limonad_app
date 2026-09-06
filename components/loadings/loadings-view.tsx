@@ -810,7 +810,19 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                                     {` - ${line.productUnit}`}
                                   </div>
                                 </TableCell>
-                                <TableCell className="text-right tabular-nums">
+                                <TableCell
+                                  className={
+                                    "text-right tabular-nums" +
+                                    (line.depotAvailableQuantity < 0
+                                      ? " font-medium text-destructive"
+                                      : "")
+                                  }
+                                  title={
+                                    line.depotAvailableQuantity < 0
+                                      ? "Stock depot negatif - charge autorisee, a regulariser"
+                                      : undefined
+                                  }
+                                >
                                   {line.depotAvailableQuantity}
                                 </TableCell>
                                 <TableCell className="w-[140px]">
