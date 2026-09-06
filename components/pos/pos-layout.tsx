@@ -769,15 +769,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           stockLocationName={context.stockLocation.name}
         />
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="grid gap-3 sm:grid-cols-[1fr_120px]">
-            <CustomerCombobox
-              value={selectedCustomer}
-              onChange={setSelectedCustomer}
-              initialSuggestions={context.customers}
-            />
-            <CustomerNumberInput onResolved={setSelectedCustomer} />
-          </div>
+        <div className="grid gap-3 sm:grid-cols-[4fr_3fr_3fr]">
+          <CustomerCombobox
+            value={selectedCustomer}
+            onChange={setSelectedCustomer}
+            initialSuggestions={context.customers}
+          />
+          <CustomerNumberInput onResolved={setSelectedCustomer} />
           <PaymentSelector
             paymentMethod={paymentMethod}
             onPaymentMethodChange={setPaymentMethod}
