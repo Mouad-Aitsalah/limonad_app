@@ -2,7 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
-import { MONEY_RANGE_MAX_NUMBER, roundMoney } from "@/lib/money";
+import { addMoney, MONEY_RANGE_MAX_NUMBER, roundMoney, subtractMoney } from "@/lib/money";
 import { formatSaleDisplayNumber } from "@/lib/sale-display-number";
 import { prisma } from "@/lib/prisma";
 import {
@@ -304,14 +304,37 @@ export async function getCustomerJournal(
     entry: { organizationId: org, status: { in: JOURNAL_LINE_STATUSES } },
   };
 
-  const [attributedTotal, sums, onAccountTotal] = await Promise.all([
+  const [attributedTotal, sums, onAccountTotal, balanceRows] = await Promise.all([
     prisma.accountingEntryLine.count({ where: attributedWhere }),
     prisma.accountingEntryLine.aggregate({
       where: attributedWhere,
       _sum: { debit: true, credit: true },
     }),
     prisma.accountingEntryLine.count({ where: onAccountWhere }),
+    // ALL attributed lines, oldest -> newest, for the running balance below.
+    // operationNumber is @unique, so [date, operationNumber] is a total,
+    // deterministic order and the exact reverse of the page's display order.
+    prisma.accountingEntryLine.findMany({
+      where: attributedWhere,
+      select: { id: true, debit: true, credit: true },
+      orderBy: [{ entry: { date: "asc" } }, { operationNumber: "asc" }],
+    }),
   ]);
+
+  // Chronological cumulative balance (Σ debit − Σ credit up to and including
+  // each line) over EXACTLY the attributed perimeter - same rows the
+  // "attribué" totals use, so the last chronological line's balance equals
+  // totals.balance. Computed with the project's exact-decimal money helpers,
+  // never floating-point accumulation; negatives are kept as-is.
+  const balanceByLineId = new Map<string, number>();
+  let runningBalance = 0;
+  for (const line of balanceRows) {
+    runningBalance = subtractMoney(
+      addMoney(runningBalance, line.debit.toNumber()),
+      line.credit.toNumber(),
+    );
+    balanceByLineId.set(line.id, runningBalance);
+  }
 
   const pageCount = attributedTotal ? Math.max(1, Math.ceil(attributedTotal / pageSize)) : 0;
   const page = pageCount ? Math.min(requestedPage, pageCount) : 1;
@@ -350,6 +373,7 @@ export async function getCustomerJournal(
       label: saleDisplay ?? row.label,
       debit: row.debit.toNumber(),
       credit: row.credit.toNumber(),
+      balance: balanceByLineId.get(row.id) ?? 0,
     };
   });
 

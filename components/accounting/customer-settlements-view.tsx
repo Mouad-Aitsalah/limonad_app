@@ -371,7 +371,7 @@ export function CustomerSettlementsView() {
                 ) : null}
 
                 <div className="mt-4 overflow-x-auto rounded-xl border border-border">
-                  <Table className="min-w-[720px]">
+                  <Table className="min-w-[820px]">
                     <TableHeader>
                       <TableRow>
                         <TableHead>Date</TableHead>
@@ -380,6 +380,7 @@ export function CustomerSettlementsView() {
                         <TableHead>Désignation</TableHead>
                         <TableHead className="text-right">Débit</TableHead>
                         <TableHead className="text-right">Crédit</TableHead>
+                        <TableHead className="text-right">Solde</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -400,6 +401,14 @@ export function CustomerSettlementsView() {
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {op.credit > 0 ? formatCurrency(op.credit) : "-"}
+                          </TableCell>
+                          <TableCell
+                            className={
+                              "text-right font-medium tabular-nums" +
+                              (op.balance < 0 ? " text-destructive" : "")
+                            }
+                          >
+                            {formatCurrency(op.balance)}
                           </TableCell>
                         </TableRow>
                       ))}

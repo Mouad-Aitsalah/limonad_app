@@ -64,6 +64,11 @@ export type CustomerJournalOperationDto = {
   label: string;
   debit: number;
   credit: number;
+  /** Cumulative balance (Σ debit − Σ credit) over the attributed operations,
+   * from the oldest up to and including this one, in chronological order -
+   * NOT the visual (DESC) order of `operations[]`. Can be negative. The last
+   * chronological line's balance equals `totals.balance`. */
+  balance: number;
 };
 
 export type CustomerJournalDto = {
