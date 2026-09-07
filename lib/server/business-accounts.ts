@@ -133,6 +133,8 @@ const businessAccountInputSchema = z
     // also re-checked transitively via parseCustomerInput for the CUSTOMER
     // branch, but balance/currentBalance is unique to this file).
     creditLimit: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
+    // Opt-in per customer. When true, `creditLimit` must be a real amount (> 0).
+    creditLimitEnabled: z.coerce.boolean().optional(),
     balance: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
     status: z.enum(businessAccountStatusValues).optional(),
     ice: optionalString(),
@@ -156,6 +158,13 @@ const businessAccountInputSchema = z
           code: "custom",
           path: ["address"],
           message: "L'adresse est obligatoire pour un client.",
+        });
+      }
+      if (data.creditLimitEnabled === true && !((data.creditLimit ?? 0) > 0)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["creditLimit"],
+          message: "Definissez un plafond de credit superieur a 0.",
         });
       }
     }
@@ -241,7 +250,9 @@ function customerBranch(organizationId: string): Prisma.Sql {
     SELECT 'customer:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
            'CUSTOMER'::text AS type, phone, email, address, city,
            latitude::float8 AS latitude, longitude::float8 AS longitude,
-           "creditLimit"::float8 AS "creditLimit", status::text AS status, "createdAt"
+           "creditLimit"::float8 AS "creditLimit",
+           "creditLimitEnabled"::boolean AS "creditLimitEnabled",
+           status::text AS status, "createdAt"
     FROM "Customer"
     WHERE "organizationId" = ${organizationId}
   `;
@@ -253,6 +264,7 @@ function supplierBranch(organizationId: string): Prisma.Sql {
            'SUPPLIER'::text AS type, phone, email, address, city,
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
+           NULL::boolean AS "creditLimitEnabled",
            (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
     FROM "Supplier"
     WHERE "organizationId" = ${organizationId}
@@ -266,6 +278,7 @@ function expenseBranch(organizationId: string): Prisma.Sql {
            NULL::text AS address, NULL::text AS city,
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
+           NULL::boolean AS "creditLimitEnabled",
            (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
     FROM "ExpenseAccount"
     WHERE "organizationId" = ${organizationId}
@@ -279,6 +292,7 @@ function treasuryBranch(organizationId: string): Prisma.Sql {
            NULL::text AS address, NULL::text AS city,
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
+           NULL::boolean AS "creditLimitEnabled",
            (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
     FROM "TreasuryAccount"
     WHERE "organizationId" = ${organizationId}
@@ -292,6 +306,7 @@ function employeeBranch(organizationId: string): Prisma.Sql {
            NULL::text AS address, NULL::text AS city,
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
+           NULL::boolean AS "creditLimitEnabled",
            (CASE WHEN acc."isActive" THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status,
            acc."createdAt"
     FROM "AccountingAccount" acc
@@ -312,6 +327,7 @@ type RawAccountRow = {
   latitude: number | null;
   longitude: number | null;
   creditLimit: number | null;
+  creditLimitEnabled: boolean | null;
   status: BusinessAccountStatus;
   createdAt: Date;
 };
@@ -325,6 +341,7 @@ function mapRawRowToListItem(row: RawAccountRow): BusinessAccountListItem {
     type: row.type,
     phone: row.phone,
     creditLimit: row.creditLimit,
+    creditLimitEnabled: row.creditLimitEnabled,
     createdAt: row.createdAt.toISOString(),
     email: row.email,
     city: row.city,
@@ -511,6 +528,7 @@ export async function createBusinessAccount(
       type: "COUNTER",
       status: data.status,
       creditLimit: data.creditLimit ?? 0,
+      creditLimitEnabled: data.creditLimitEnabled ?? false,
     });
 
     await ensureUniquePhone(user.organizationId, customerData.phone);
@@ -531,6 +549,7 @@ export async function createBusinessAccount(
               code,
               status: customerData.status ?? "ACTIVE",
               creditLimit: customerData.creditLimit ?? 0,
+              creditLimitEnabled: customerData.creditLimitEnabled ?? false,
               currentBalance: data.balance ?? 0,
               createdByUserId: user.id,
               creationOrigin: "ADMIN",
@@ -559,6 +578,7 @@ export async function createBusinessAccount(
       type: "CUSTOMER",
       phone: customer.phone,
       creditLimit: customer.creditLimit.toNumber(),
+      creditLimitEnabled: customer.creditLimitEnabled,
       createdAt: customer.createdAt.toISOString(),
       email: customer.email,
       city: customer.city,
@@ -611,6 +631,7 @@ export async function createBusinessAccount(
       type: "SUPPLIER",
       phone: supplier.phone ?? null,
       creditLimit: null,
+      creditLimitEnabled: null,
       createdAt: supplier.createdAt.toISOString(),
       email: supplier.email,
       city: supplier.city,
@@ -660,6 +681,7 @@ export async function createBusinessAccount(
       type: "EXPENSE",
       phone: null,
       creditLimit: null,
+      creditLimitEnabled: null,
       createdAt: expense.createdAt.toISOString(),
       city: null,
       status: (expense.active ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
@@ -705,6 +727,7 @@ export async function createBusinessAccount(
     type: "TREASURY",
     phone: null,
     creditLimit: null,
+    creditLimitEnabled: null,
     createdAt: treasury.createdAt.toISOString(),
     city: null,
     status: (treasury.active ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
@@ -748,6 +771,7 @@ export async function updateBusinessAccount(
       type: "COUNTER",
       status: data.status,
       creditLimit: data.creditLimit ?? 0,
+      creditLimitEnabled: data.creditLimitEnabled ?? false,
       latitude: data.latitude,
       longitude: data.longitude,
     });
@@ -760,6 +784,7 @@ export async function updateBusinessAccount(
       type: "CUSTOMER",
       phone: customer.phone,
       creditLimit: customer.creditLimit,
+      creditLimitEnabled: customer.creditLimitEnabled,
       createdAt: customer.createdAt,
       email: customer.email,
       city: customer.city,

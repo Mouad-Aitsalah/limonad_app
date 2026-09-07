@@ -2,13 +2,14 @@ import "server-only";
 
 import { z } from "zod";
 
-import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
+import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
 } from "@/lib/server/accounting";
+import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -282,6 +283,7 @@ export async function createCounterSale(
               id: true,
               status: true,
               creditLimit: true,
+              creditLimitEnabled: true,
               currentBalance: true,
             },
           })
@@ -397,9 +399,22 @@ export async function createCounterSale(
           422,
         );
       }
-      if (collectNow && customer && payment.creditAmount > 0) {
-        const nextBalance = customer.currentBalance.toNumber() + payment.creditAmount;
-        if (nextBalance > customer.creditLimit.toNumber()) {
+      // The credit ceiling is opt-in per customer (Customer.creditLimitEnabled).
+      // When off, a credit sale is never blocked by it. When on, the check is
+      // against the REAL computed debt (computeCustomerDebt), never the
+      // currentBalance cache, and only the part that actually becomes credit.
+      if (
+        collectNow &&
+        customer &&
+        customer.creditLimitEnabled &&
+        payment.creditAmount > 0
+      ) {
+        const { debt } = await computeCustomerDebt(
+          tx,
+          sessionUser.organizationId,
+          customer.id,
+        );
+        if (addMoney(debt, payment.creditAmount) > customer.creditLimit.toNumber()) {
           throw new OperationsServiceError("Plafond de credit depasse.", 409);
         }
       }

@@ -541,6 +541,8 @@ export interface CustomerDto {
   type: string;
   status: string;
   creditLimit: number;
+  /** Opt-in per customer. When false, the credit ceiling is never enforced. */
+  creditLimitEnabled: boolean;
   currentBalance: number;
   ice?: string | null;
   taxId?: string | null;
@@ -616,6 +618,7 @@ export type CustomerMutationInput = {
   type: string;
   status?: string;
   creditLimit?: number;
+  creditLimitEnabled?: boolean;
   ice?: string | null;
   taxId?: string | null;
   contactName?: string | null;

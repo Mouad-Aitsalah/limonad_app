@@ -2,13 +2,14 @@ import "server-only";
 
 import { z } from "zod";
 
-import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
+import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
 } from "@/lib/server/accounting";
+import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -334,7 +335,7 @@ export async function createDriverSale(
               id: true,
               status: true,
               creditLimit: true,
-              currentBalance: true,
+              creditLimitEnabled: true,
             },
           })
         : null;
@@ -430,9 +431,21 @@ export async function createDriverSale(
       if (collectNow && payment.creditAmount > 0 && !customer) {
         throw new OperationsServiceError("Client obligatoire pour une vente a credit.", 422);
       }
-      if (collectNow && customer && payment.creditAmount > 0) {
-        const nextBalance = customer.currentBalance.toNumber() + payment.creditAmount;
-        if (nextBalance > customer.creditLimit.toNumber()) {
+      // Opt-in credit ceiling: enforced only when the customer has it
+      // enabled, and against the real computed debt (never the
+      // currentBalance cache), on the credit part of the sale only.
+      if (
+        collectNow &&
+        customer &&
+        customer.creditLimitEnabled &&
+        payment.creditAmount > 0
+      ) {
+        const { debt } = await computeCustomerDebt(
+          tx,
+          user.organizationId,
+          customer.id,
+        );
+        if (addMoney(debt, payment.creditAmount) > customer.creditLimit.toNumber()) {
           throw new OperationsServiceError("Plafond de credit depasse.", 409);
         }
       }

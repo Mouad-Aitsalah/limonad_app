@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -33,6 +34,7 @@ type AccountFormValues = {
   address: string;
   latitude: number | null;
   longitude: number | null;
+  creditLimitEnabled: boolean;
   creditLimit: string;
   balance: string;
   status: "ACTIVE" | "INACTIVE" | "BLOCKED";
@@ -54,6 +56,7 @@ const defaultValues: AccountFormValues = {
   address: "",
   latitude: null,
   longitude: null,
+  creditLimitEnabled: false,
   creditLimit: "0",
   balance: "0",
   status: "ACTIVE",
@@ -136,7 +139,8 @@ export function AccountForm({
       address: values.address || null,
       latitude: values.latitude,
       longitude: values.longitude,
-      creditLimit: Number(values.creditLimit || 0),
+      creditLimitEnabled: values.creditLimitEnabled,
+      creditLimit: values.creditLimitEnabled ? Number(values.creditLimit || 0) : 0,
       balance: Number(values.balance || 0),
       status: values.status,
       ice: values.ice || null,
@@ -305,14 +309,37 @@ export function AccountForm({
 
         {values.type === "CUSTOMER" ? (
           <>
-            <Field label="Limite de credit" error={fieldErrors.creditLimit}>
-              <Input
-                type="number"
-                min={0}
-                value={values.creditLimit}
-                onChange={(event) => handleChange("creditLimit", event.target.value)}
-              />
-            </Field>
+            <div className="space-y-3 rounded-lg border border-input bg-muted/30 p-3 sm:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="creditLimitEnabled">Activer un plafond de credit</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Section CREDIT CLIENT - le plafond est facultatif.
+                  </p>
+                </div>
+                <Switch
+                  id="creditLimitEnabled"
+                  checked={values.creditLimitEnabled}
+                  onCheckedChange={(checked) =>
+                    handleChange("creditLimitEnabled", checked)
+                  }
+                />
+              </div>
+
+              {values.creditLimitEnabled ? (
+                <Field label="Plafond de credit (DH)" error={fieldErrors.creditLimit}>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={values.creditLimit}
+                    onChange={(event) => handleChange("creditLimit", event.target.value)}
+                  />
+                </Field>
+              ) : (
+                <p className="text-sm text-muted-foreground">Aucun plafond de credit</p>
+              )}
+            </div>
 
             <Field label="Solde initial" error={fieldErrors.balance}>
               <Input
@@ -552,6 +579,8 @@ function buildInitialValues(account?: BusinessAccountListItem | null): AccountFo
     address: account.address ?? "",
     latitude: account.latitude ?? null,
     longitude: account.longitude ?? null,
+    creditLimitEnabled:
+      account.type === "CUSTOMER" ? (account.creditLimitEnabled ?? false) : false,
     creditLimit: account.type === "CUSTOMER" ? String(account.creditLimit ?? 0) : "0",
     balance: "0",
     status: account.status,

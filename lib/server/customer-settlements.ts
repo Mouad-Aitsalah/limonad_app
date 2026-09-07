@@ -125,7 +125,7 @@ function mapSettlementToDto(settlement: SettlementRecord): CustomerSettlementDto
  * must see its own in-flight transaction's prior writes) share one
  * implementation - never two formulas that could drift apart.
  */
-async function computeCustomerDebt(
+export async function computeCustomerDebt(
   db: Prisma.TransactionClient | typeof prisma,
   organizationId: string,
   customerId: string,

@@ -839,6 +839,11 @@ model Customer {
   type               CustomerType
   status             CustomerStatus         @default(ACTIVE)
   creditLimit        Decimal                @default(0) @db.Decimal(12, 2)
+  // Opt-in per customer. false (the default, and the value backfilled for
+  // every existing row) = no ceiling enforced, credit sales always allowed.
+  // true = `creditLimit` (> 0) is checked against the real computed debt on
+  // every new credit sale.
+  creditLimitEnabled Boolean                @default(false)
   currentBalance     Decimal                @default(0) @db.Decimal(12, 2)
   ice                String?
   taxId              String?

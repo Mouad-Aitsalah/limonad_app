@@ -20,6 +20,7 @@ export type BusinessAccountListItem = {
   type: BusinessAccountListType;
   phone: string | null;
   creditLimit: number | null;
+  creditLimitEnabled: boolean | null;
   createdAt: string;
   email?: string | null;
   city?: string | null;
@@ -66,6 +67,7 @@ export type BusinessAccountInput = {
   latitude?: number | null;
   longitude?: number | null;
   creditLimit?: number;
+  creditLimitEnabled?: boolean;
   balance?: number;
   status?: BusinessAccountStatus;
   ice?: string | null;

@@ -2,11 +2,13 @@ import "server-only";
 
 import { z } from "zod";
 
+import { addMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
 } from "@/lib/server/accounting";
+import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -209,11 +211,18 @@ async function collectSaleCore(
         const payment =
           mixedSplit ?? resolvePaymentAmounts(paymentMethod, totalTTC, parsed.data.paidAmount);
 
-        let customer: { id: string; currentBalance: number; creditLimit: number } | null = null;
+        let customer:
+          | { id: string; creditLimit: number; creditLimitEnabled: boolean }
+          | null = null;
         if (sale.customerId) {
           const row = await tx.customer.findFirst({
             where: { id: sale.customerId, organizationId },
-            select: { id: true, status: true, currentBalance: true, creditLimit: true },
+            select: {
+              id: true,
+              status: true,
+              creditLimit: true,
+              creditLimitEnabled: true,
+            },
           });
           if (!row) throw new OperationsServiceError("Client introuvable.", 404);
           if (row.status !== "ACTIVE") {
@@ -221,8 +230,8 @@ async function collectSaleCore(
           }
           customer = {
             id: row.id,
-            currentBalance: row.currentBalance.toNumber(),
             creditLimit: row.creditLimit.toNumber(),
+            creditLimitEnabled: row.creditLimitEnabled,
           };
         }
 
@@ -237,8 +246,13 @@ async function collectSaleCore(
               422,
             );
           }
-          if (customer.currentBalance + payment.creditAmount > customer.creditLimit) {
-            throw new OperationsServiceError("Plafond de credit depasse.", 409);
+          // Opt-in credit ceiling: only when enabled, and against the real
+          // computed debt (never the currentBalance cache).
+          if (customer.creditLimitEnabled) {
+            const { debt } = await computeCustomerDebt(tx, organizationId, customer.id);
+            if (addMoney(debt, payment.creditAmount) > customer.creditLimit) {
+              throw new OperationsServiceError("Plafond de credit depasse.", 409);
+            }
           }
         }
 

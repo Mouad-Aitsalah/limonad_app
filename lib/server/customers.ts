@@ -46,6 +46,8 @@ export const customerMutationSchema = z.object({
     .min(0, "Le plafond de credit ne peut pas etre negatif.")
     .max(MONEY_RANGE_MAX_NUMBER, "Le plafond de credit depasse la limite autorisee.")
     .optional(),
+  // Opt-in per customer. When true, `creditLimit` must be a real amount (> 0).
+  creditLimitEnabled: z.coerce.boolean().optional(),
   ice: optionalString(),
   taxId: optionalString(),
   contactName: optionalString(),
@@ -83,6 +85,7 @@ export function mapCustomerToDto(customer: NonNullable<CustomerRecord>): Custome
     type: customer.type,
     status: customer.status,
     creditLimit: customer.creditLimit.toNumber(),
+    creditLimitEnabled: customer.creditLimitEnabled,
     currentBalance: customer.currentBalance.toNumber(),
     ice: customer.ice,
     taxId: customer.taxId,
@@ -326,6 +329,7 @@ export async function createCustomer(input: CustomerMutationInput): Promise<Cust
             code: code ?? (await nextCustomerCode(tx, user.organizationId)),
             status: customerData.status ?? "ACTIVE",
             creditLimit: customerData.creditLimit ?? 0,
+            creditLimitEnabled: customerData.creditLimitEnabled ?? false,
             currentBalance: 0,
             createdByUserId: user.id,
             creationOrigin: "ADMIN",
@@ -360,6 +364,7 @@ export async function updateCustomer(
       locationUpdatedAt: resolveLocationUpdatedAt(customerData.latitude, customerData.longitude),
       ...(code ? { code } : {}),
       creditLimit: customerData.creditLimit ?? 0,
+      creditLimitEnabled: customerData.creditLimitEnabled ?? false,
       status: customerData.status ?? "ACTIVE",
     },
     include: customerInclude,
@@ -422,7 +427,15 @@ export async function parseCustomerInput(input: CustomerMutationInput) {
   if (parsed.data.creditLimit !== undefined) {
     assertMoneyRange(parsed.data.creditLimit, "creditLimit");
   }
-  return parsed.data;
+  // Opt-in credit ceiling: when enabled, a real positive amount is required;
+  // when disabled, the amount is irrelevant and normalised away.
+  const creditLimitEnabled = parsed.data.creditLimitEnabled === true;
+  if (creditLimitEnabled && !((parsed.data.creditLimit ?? 0) > 0)) {
+    throw new OperationsServiceError("Certains champs sont invalides.", 422, {
+      creditLimit: "Definissez un plafond de credit superieur a 0.",
+    });
+  }
+  return { ...parsed.data, creditLimitEnabled };
 }
 
 export async function ensureUniqueCustomerCode(
