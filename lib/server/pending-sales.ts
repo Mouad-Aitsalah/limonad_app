@@ -26,14 +26,20 @@ import type { SaleDto } from "@/types/operations-dto";
  * Phase POS-PRACTICAL - "Factures du jour en attente d'encaissement".
  *
  * A sale is prepared with createCounterSale/createDriverSale({ collectNow:
- * false }): a real, server-persisted Sale row with status DRAFT, a
- * provisional "BR-YYYYMMDD-NNNNNN" reference, its stock already moved and a
- * COUNTER_SALE / TRUCK_SALE StockMovement - but no Payment, no accounting
- * entry, no official number. It shows in "Factures du jour" until collected.
+ * false }): a real, server-persisted Sale row with status DRAFT, its stock
+ * already moved and a COUNTER_SALE / TRUCK_SALE StockMovement - but no
+ * Payment, no accounting entry. A COUNTER draft is created with its
+ * definitive commercial number already reserved (saleNumber/saleYear ->
+ * "N/YYYY"); only its internal reference is provisional ("BR-YYYYMMDD-
+ * NNNNNN" in invoiceNumber). It shows in "Factures du jour" until collected.
+ * A COUNTER draft that is never collected therefore leaves a gap in the
+ * per-year Sale sequence, exactly like a cancelled sale would - the number
+ * is never recycled.
  *
  * collect*Sale() then does the deferred half, once, atomically:
- *   - assigns the real invoiceNumber + saleYear/saleNumber (the official
- *     sequences are only ever spent here, never by an abandoned draft);
+ *   - swaps the provisional BR- ref for the real VC- invoiceNumber, and
+ *     keeps the commercial saleNumber/saleYear already on the sale (only a
+ *     legacy draft with saleNumber still null gets one reserved here);
  *   - records the Payment and, for a credit split, the customer balance;
  *   - posts the sale accounting entry;
  *   - flips status DRAFT -> PAID / PARTIALLY_PAID / CREDIT with validatedAt.
@@ -175,6 +181,8 @@ async function collectSaleCore(
             subtotalHT: true,
             taxAmount: true,
             customerId: true,
+            saleNumber: true,
+            saleYear: true,
           },
         });
         if (!sale) throw new OperationsServiceError("Facture introuvable.", 404);
@@ -240,7 +248,6 @@ async function collectSaleCore(
           paymentMethod,
         });
 
-        const year = new Date().getFullYear();
         const scopeCode =
           scope.origin === "COUNTER"
             ? "CTR"
@@ -251,12 +258,19 @@ async function collectSaleCore(
                 })
               )?.employeeCode ?? "TRK";
         const invoiceNumber = await nextInvoiceNumber(tx, scopeCode, organizationId);
-        const saleNumber = await reserveDocumentSequence(
-          tx,
-          organizationId,
-          DocumentType.Sale,
-          String(year),
-        );
+        // The commercial number is assigned at sale creation now - keep the
+        // one this sale already has; only reserve one here for a legacy
+        // draft that predates that change (saleNumber still null). Collection
+        // never changes an already-attributed "N/YYYY".
+        const saleYear = sale.saleYear ?? new Date().getFullYear();
+        const saleNumber =
+          sale.saleNumber ??
+          (await reserveDocumentSequence(
+            tx,
+            organizationId,
+            DocumentType.Sale,
+            String(saleYear),
+          ));
 
         const createdPayment =
           payment.paidAmount > 0
@@ -327,7 +341,7 @@ async function collectSaleCore(
             creditAmount: payment.creditAmount,
             stampAmount,
             invoiceNumber,
-            saleYear: year,
+            saleYear,
             saleNumber,
             validatedAt: new Date(),
           },

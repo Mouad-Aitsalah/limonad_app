@@ -22,7 +22,6 @@ import {
   normalizeSaleLines,
   resolveMixedPaymentSplit,
   resolvePaymentAmounts,
-  resolvePosSession,
   resolveSaleSequencing,
   roundMoney,
   saleInclude,
@@ -432,23 +431,19 @@ export async function createCounterSale(
       }
 
       const saleDate = new Date();
-      const sequencing = collectNow
-        ? await resolveSaleSequencing(
-            tx,
-            saleDate,
-            sessionUser.id,
-            sessionUser.organizationId,
-          )
-        : {
-            saleYear: null as number | null,
-            saleNumber: null as number | null,
-            posSessionId: await resolvePosSession(
-              tx,
-              saleDate,
-              sessionUser.id,
-              sessionUser.organizationId,
-            ),
-          };
+      // The commercial number (saleNumber/saleYear -> "N/YYYY") is reserved
+      // NOW, at sale creation, whether or not the sale is collected in the
+      // same call: a prepared-but-not-yet-collected sale already carries its
+      // definitive reference (see SaleDto.displayNumber). Collection reuses
+      // it and never re-reserves. `invoiceNumber` stays a throwaway BR- ref
+      // for an uncollected draft (internal only), swapped for the real VC-
+      // number at collection.
+      const sequencing = await resolveSaleSequencing(
+        tx,
+        saleDate,
+        sessionUser.id,
+        sessionUser.organizationId,
+      );
       const invoiceNumber = collectNow
         ? await nextInvoiceNumber(tx, "CTR", sessionUser.organizationId)
         : await nextPendingSaleRef(tx, sessionUser.organizationId);
