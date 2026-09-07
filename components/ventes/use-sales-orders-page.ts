@@ -75,6 +75,11 @@ export function useSalesOrdersPage(
     void fetchPage(null);
   }, [enabled, fetchPage]);
 
+  const refetch = React.useCallback(
+    () => fetchPage(cursorStackRef.current[pageIndex] ?? null),
+    [fetchPage, pageIndex],
+  );
+
   async function goToNextPage() {
     if (!hasMore || loading) return;
     const cursor = nextCursor;
@@ -100,5 +105,6 @@ export function useSalesOrdersPage(
     loading,
     goToNextPage,
     goToPreviousPage,
+    refetch,
   };
 }

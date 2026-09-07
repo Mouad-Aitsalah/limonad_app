@@ -1562,7 +1562,20 @@ model AccountingEntry {
   updatedAt           DateTime              @updatedAt
 
   @@unique([organizationId, entryNumber])
-  @@unique([organizationId, sourceType, sourceId])
+  // (organizationId, sourceType, sourceId): deliberately NOT declared here.
+  // A PARTIAL unique index enforces it -
+  //   UNIQUE (organizationId, sourceType, sourceId) WHERE status <> 'REVERSED'
+  // - created by migration 20260908090000_accountingentry_active_source_unique.
+  // Prisma's schema language cannot express the WHERE predicate, so the index
+  // is owned entirely by that migration (the same way analytics_sales is a
+  // raw-SQL object outside the datamodel). `prisma migrate diff` confirms
+  // this leaves no drift: with nothing declared here, Prisma neither drops
+  // the partial index nor recreates a full unique. Rule enforced: at most ONE
+  // active (non-REVERSED) entry per (org, sourceType, sourceId); any number of
+  // REVERSED ones may coexist - which reviseSale relies on. Every lookup uses
+  // findFirst({ where: { organizationId, sourceType, sourceId } }) (no
+  // findUnique / upsert on this triple anywhere), so no compound-key accessor
+  // is needed.
   @@index([organizationId])
   @@index([date])
   @@index([journalType])

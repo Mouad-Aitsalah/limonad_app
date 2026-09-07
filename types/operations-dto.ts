@@ -710,6 +710,7 @@ export interface SaleHistoryListItemDto {
   displayNumber: string;
   posSessionId: string | null;
   status: string;
+  origin: string;
   customer: { id: string; code: string; name: string } | null;
   driver: { id: string; name: string } | null;
   articleCount: number;
@@ -720,6 +721,8 @@ export interface SaleHistoryListItemDto {
   paymentMethod: string;
   createdByUserName: string;
   createdAt: string;
+  /** Optimistic-lock token for admin cancel / edit from /ventes. */
+  updatedAt: string;
 }
 
 export interface SaleHistoryOrdersPageDto {
@@ -756,6 +759,8 @@ export interface SaleDto {
   createdByUserName: string;
   validatedAt?: string | null;
   createdAt: string;
+  /** Optimistic-lock token for admin revise / cancel. */
+  updatedAt?: string;
   lines: SaleLineDto[];
   payments: PaymentDto[];
 }

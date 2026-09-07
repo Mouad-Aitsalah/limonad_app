@@ -56,11 +56,13 @@ const orderListSelect = {
   saleNumber: true,
   posSessionId: true,
   status: true,
+  origin: true,
   totalTTC: true,
   paidAmount: true,
   creditAmount: true,
   paymentMethod: true,
   createdAt: true,
+  updatedAt: true,
   customer: { select: { id: true, code: true, name: true } },
   driver: { select: { id: true, user: { select: { fullName: true } } } },
   createdBy: { select: { fullName: true } },
@@ -135,6 +137,7 @@ function mapOrderRowToListItemDto(
     ),
     posSessionId: row.posSessionId,
     status: row.status,
+    origin: row.origin,
     customer: row.customer,
     driver: row.driver ? { id: row.driver.id, name: row.driver.user.fullName } : null,
     articleCount: row.lines.reduce((sum, line) => sum + line.quantity, 0),
@@ -145,6 +148,7 @@ function mapOrderRowToListItemDto(
     paymentMethod: row.paymentMethod,
     createdByUserName: row.createdBy.fullName,
     createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 

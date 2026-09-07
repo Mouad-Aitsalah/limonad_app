@@ -43,6 +43,7 @@ export function OrdersTab({ initialPage }: OrdersTabProps) {
     loading,
     goToNextPage,
     goToPreviousPage,
+    refetch,
   } = useSalesOrdersPage(
     {
       search: debouncedSearch,
@@ -84,7 +85,7 @@ export function OrdersTab({ initialPage }: OrdersTabProps) {
         </div>
       </div>
 
-      <InvoicesTable invoices={items} />
+      <InvoicesTable invoices={items} onSaleChanged={refetch} />
     </div>
   );
 }

@@ -65,6 +65,7 @@ export function mapSaleToDto(sale: SaleWithRelations): SaleDto {
     createdByUserName: sale.createdBy.fullName,
     validatedAt: sale.validatedAt?.toISOString() ?? null,
     createdAt: sale.createdAt.toISOString(),
+    updatedAt: sale.updatedAt.toISOString(),
     lines: sale.lines.map((line) => ({
       id: line.id,
       productId: line.productId,

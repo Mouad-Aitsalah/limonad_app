@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { ArrowLeft, ArrowRight, Plus } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowLeft, ArrowRight, Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -102,9 +103,20 @@ function pendingSaleNumber(sale: SaleDto): number | null {
 }
 
 export function PosLayout({ initialContext }: PosLayoutProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const editSaleId = searchParams.get("editSaleId");
+
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
+  // Phase 2 - admin edit of an existing counter sale (from /ventes). When
+  // set, the POS is in MODIFICATION mode: the cart is seeded from the sale,
+  // per-line prices/discounts are the sale's historical ones (see
+  // editLineInfoById), the primary action PATCHes instead of creating, and
+  // the commercial number never changes.
+  const [editSale, setEditSale] = React.useState<SaleDto | null>(null);
+  const [savingEdit, setSavingEdit] = React.useState(false);
   // Phase 3: the fully-resolved customer object, not just an id - kept as
   // its own state (not derived from context.customers.find(...)) because
   // context.customers is now only a small preload (see
@@ -175,6 +187,28 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     [matchedProducts],
   );
 
+  // Edit mode: the frozen per-line economics of the sale being modified, so
+  // a line keeps its historical unit price / VAT even if the catalog price
+  // has changed since (or the product is no longer in the POS preload). A
+  // product ADDED during the edit has no entry here and is priced normally.
+  const editLineInfoById = React.useMemo(() => {
+    const map = new Map<
+      string,
+      { designation: string; reference: string; unitPriceHT: number; unitPriceTTC: number; tauxTVA: number }
+    >();
+    if (!editSale) return map;
+    for (const line of editSale.lines) {
+      map.set(line.productId, {
+        designation: line.productName,
+        reference: line.productReference,
+        unitPriceHT: line.unitPriceHT,
+        unitPriceTTC: line.unitPriceHT * (1 + line.taxRate / 100),
+        tauxTVA: line.taxRate,
+      });
+    }
+    return map;
+  }, [editSale]);
+
   const cartLines = React.useMemo<CartLineComputed[]>(() => {
     if (openPendingSale) {
       return openPendingSale.lines.map((line) => ({
@@ -197,12 +231,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
     return cart.flatMap((line) => {
       const product = productById.get(line.productId);
-      if (!product) return [];
+      const frozen = editLineInfoById.get(line.productId);
+      if (!product && !frozen) return [];
 
-      const unitPriceHT = product.prixVenteHT;
-      const unitPriceTTC = product.prixVenteTTC;
+      const unitPriceHT = frozen?.unitPriceHT ?? product!.prixVenteHT;
+      const unitPriceTTC = frozen?.unitPriceTTC ?? product!.prixVenteTTC;
       const discountPercent = line.discountPercent;
-      const tauxTVA = product.tauxTVA;
+      const tauxTVA = frozen?.tauxTVA ?? product!.tauxTVA;
       const baseHT = unitPriceHT * line.quantity;
       const discountAmount = baseHT * (discountPercent / 100);
       const netHT = baseHT - discountAmount;
@@ -211,8 +246,8 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
       return {
         productId: line.productId,
-        designation: product.designation,
-        reference: product.reference,
+        designation: product?.designation ?? frozen!.designation,
+        reference: product?.reference ?? frozen!.reference,
         quantity: line.quantity,
         discountPercent,
         unitPriceHT,
@@ -226,7 +261,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         transferValue: 0,
       };
     });
-  }, [cart, openPendingSale, productById]);
+  }, [cart, openPendingSale, productById, editLineInfoById]);
 
   const totals = React.useMemo<CartTotals>(() => {
     const sousTotalHT = roundCurrency(
@@ -423,6 +458,66 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     });
   }
 
+  async function saveEdit() {
+    if (!editSale) return;
+    if (cartLines.length === 0) {
+      toast.error("La facture doit contenir au moins un produit.");
+      return;
+    }
+    if (paymentMethod !== "CASH" && !selectedCustomer) {
+      toast.error("Sélectionnez un client.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const response = await fetch(`/api/sales/${editSale.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId: selectedCustomer?.id ?? null,
+          paymentMethod,
+          reference:
+            paymentMethod === "CHECK"
+              ? chequeNumber || null
+              : paymentMethod === "BANK_TRANSFER"
+                ? banque || null
+                : null,
+          ...(paymentMethod === "MIXED"
+            ? { cashAmount: mixedAmounts.cash, chequeAmount: mixedAmounts.cheque }
+            : {}),
+          lines: cartLines.map((line) => ({
+            productId: line.productId,
+            quantity: line.quantity,
+            discountRate: line.discountPercent,
+          })),
+          expectedUpdatedAt: editSale.updatedAt ?? null,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message ?? "Impossible d'enregistrer les modifications.");
+      }
+      setEditSale(null);
+      toast.success(
+        `Facture ${payload.sale.displayNumber ?? payload.sale.invoiceNumber} modifiée.`,
+      );
+      router.push("/ventes");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Impossible d'enregistrer les modifications.",
+      );
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function leaveEditMode() {
+    setEditSale(null);
+    router.push("/ventes");
+  }
+
   async function refreshPending() {
     try {
       const response = await fetch("/api/sales/pending", { cache: "no-store" });
@@ -456,6 +551,70 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       active = false;
     };
   }, []);
+
+  // Edit mode: load the sale referenced by ?editSaleId and seed the POS from
+  // it (client, lines with historical prices/discounts, payment method).
+  React.useEffect(() => {
+    // editSaleId only ever goes value -> (unmount) here: leaveEditMode /
+    // saveEdit both navigate away, so there is no value -> null transition to
+    // clean up while mounted.
+    if (!editSaleId) return;
+    let cancelled = false;
+    fetch(`/api/sales/${editSaleId}`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.message ?? "Facture introuvable.");
+        return payload.sale as SaleDto;
+      })
+      .then((sale) => {
+        if (cancelled) return;
+        setEditSale(sale);
+        setOpenPendingSale(null);
+        setLastSale(null);
+        setCart(
+          sale.lines.map((line) => ({
+            productId: line.productId,
+            quantity: line.quantity,
+            discountPercent: line.discountRate,
+          })),
+        );
+        const resolvedCustomer = sale.customer
+          ? context.customers.find((item) => item.id === sale.customer?.id) ??
+            (sale.customer as unknown as CustomerDto)
+          : null;
+        setSelectedCustomer(resolvedCustomer);
+        setPaymentMethod(sale.paymentMethod as PosPaymentMethodValue);
+        if (sale.paymentMethod === "MIXED") {
+          const cash = sale.payments
+            .filter((p) => p.method === "CASH")
+            .reduce((sum, p) => sum + p.amount, 0);
+          const cheque = sale.payments
+            .filter((p) => p.method === "CHECK")
+            .reduce((sum, p) => sum + p.amount, 0);
+          setMixedAmounts({ cash, cheque });
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        toast.error(error instanceof Error ? error.message : "Impossible de charger la facture.");
+        router.push("/ventes");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editSaleId]);
+
+  // §25 - warn before leaving the POS with unsaved edits.
+  React.useEffect(() => {
+    if (!editSale) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [editSale]);
 
   async function syncPendingSalesState() {
     try {
@@ -695,6 +854,27 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
   return (
     <div className="space-y-4">
+      {editSale ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
+          <div className="flex items-center gap-2 text-amber-900">
+            <Pencil aria-hidden="true" className="h-4 w-4" />
+            <span className="font-semibold">
+              Modification de la facture{" "}
+              {editSale.displayNumber ?? editSale.invoiceNumber}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={savingEdit}
+            onClick={leaveEditMode}
+          >
+            <X aria-hidden="true" className="h-4 w-4" />
+            Annuler la modification
+          </Button>
+        </div>
+      ) : (
       <div className="flex flex-wrap items-center gap-3">
         <Button
           type="button"
@@ -750,6 +930,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           <ArrowRight aria-hidden="true" className="h-4 w-4" />
         </Button>
       </div>
+      )}
 
       <div className="grid gap-4 lg:h-[calc(100vh-11rem)] lg:grid-cols-2 lg:gap-6">
       <div className="flex flex-col gap-4 lg:h-full lg:overflow-hidden">
@@ -757,7 +938,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1">
         <ProductGrid
           products={filteredProducts}
-          onAdd={openPendingSale ? () => toast.info("Cette facture est déjà préparée.") : addToCart}
+          onAdd={
+            openPendingSale && !editSale
+              ? () => toast.info("Cette facture est déjà préparée.")
+              : addToCart
+          }
         />
         </div>
       </div>
@@ -795,7 +980,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           <CartTable
             lines={cartLines}
             operationType={operationType}
-            readOnly={Boolean(openPendingSale)}
+            readOnly={Boolean(openPendingSale) && !editSale}
             onIncrement={incrementQuantity}
             onDecrement={decrementQuantity}
             onQuantityChange={updateQuantity}
@@ -806,6 +991,30 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
         <CartSummary totals={totals} operationType={operationType} />
 
+        {editSale ? (
+          <div className="space-y-2">
+            <Button
+              type="button"
+              size="lg"
+              className="h-12 w-full text-base"
+              disabled={cartLines.length === 0 || savingEdit}
+              onClick={() => void saveEdit()}
+            >
+              <Pencil aria-hidden="true" className="h-4 w-4" />
+              {savingEdit ? "Enregistrement…" : "Enregistrer les modifications"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              disabled={savingEdit}
+              onClick={leaveEditMode}
+            >
+              Annuler la modification
+            </Button>
+          </div>
+        ) : (
         <InvoiceActions
           operationType={operationType}
           disabled={cartLines.length === 0}
@@ -836,6 +1045,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           onHold={openPendingSale ? undefined : prepareInvoice}
           holdLoading={preparing}
         />
+        )}
 
         <div className="rounded-2xl border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
           <p className="font-medium text-foreground">État du POS</p>

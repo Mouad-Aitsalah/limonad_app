@@ -1002,11 +1002,16 @@ export async function postSaleAccountingEntry(
   // every relation's own round trip under the driver-adapter's compiled-
   // query mode) - for a value nothing here or in any of this function's
   // callers ever read beyond "does it exist". A plain id lookup is enough.
+  // A REVERSED entry (left behind by reviseSale contre-passing the previous
+  // version of this sale) must NOT count as "already posted" - the corrected
+  // entry is created fresh with the same SALE / <saleId> link, which the
+  // partial unique index (WHERE status <> 'REVERSED') allows.
   const existingInvoiceEntry = await db.accountingEntry.findFirst({
     where: {
       organizationId,
       sourceType: "SALE",
       sourceId: payload.saleId,
+      status: { not: "REVERSED" },
     },
     select: { id: true },
   });
@@ -1539,11 +1544,15 @@ export async function reverseAccountingEntryForSource(
     explicitOrganizationId: payload.organizationId,
     createdByUserId: payload.createdByUserId,
   });
+  // Target the ACTIVE entry for this source. reviseSale can leave earlier
+  // REVERSED entries behind for the same (sourceType, sourceId); those must
+  // never be picked here (they are already contre-passées).
   const original = await db.accountingEntry.findFirst({
     where: {
       organizationId,
       sourceType: payload.sourceType,
       sourceId: payload.sourceId,
+      status: { not: "REVERSED" },
     },
     include: entryInclude,
   });

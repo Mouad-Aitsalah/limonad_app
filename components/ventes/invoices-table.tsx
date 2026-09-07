@@ -1,9 +1,19 @@
 "use client";
 
 import * as React from "react";
-import { Eye, FileX, MoreHorizontal } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Ban, Eye, FileX, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,12 +31,23 @@ import {
 import { InvoiceDetailDialog } from "@/components/ventes/invoice-detail-dialog";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
+import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleHistoryListItemDto } from "@/types/operations-dto";
 
 type InvoicesTableProps = {
   invoices: SaleHistoryListItemDto[];
+  onSaleChanged?: () => void | Promise<void>;
 };
+
+// Terminal statuses: nothing left to cancel.
+const CANCELLABLE_STATUSES = new Set([
+  "DRAFT",
+  "VALIDATED",
+  "PARTIALLY_PAID",
+  "PAID",
+  "CREDIT",
+]);
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString("fr-FR", {
@@ -38,8 +59,44 @@ function formatDateTime(value: string) {
   });
 }
 
-export function InvoicesTable({ invoices }: InvoicesTableProps) {
+export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
+  const router = useRouter();
+  const { currentUser } = useAuth();
+  const isAdmin =
+    currentUser?.role === "admin" || currentUser?.role === "super_admin";
+
   const [viewingInvoice, setViewingInvoice] = React.useState<SaleHistoryListItemDto | null>(null);
+  const [cancelTarget, setCancelTarget] = React.useState<SaleHistoryListItemDto | null>(null);
+  const [cancelling, setCancelling] = React.useState(false);
+
+  const cancelIsDraft = cancelTarget?.status === "DRAFT";
+
+  async function confirmCancel() {
+    if (!cancelTarget) return;
+    setCancelling(true);
+    try {
+      const response = await fetch(`/api/sales/${cancelTarget.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedUpdatedAt: cancelTarget.updatedAt }),
+      });
+      const payload = (await response.json()) as { message?: string };
+      if (!response.ok) {
+        throw new Error(payload.message ?? "Impossible d'annuler la facture.");
+      }
+      toast.success(
+        `Facture ${cancelTarget.displayNumber} ${cancelIsDraft ? "supprimée" : "annulée"}.`,
+      );
+      setCancelTarget(null);
+      await onSaleChanged?.();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Impossible d'annuler la facture.",
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   if (invoices.length === 0) {
     return (
@@ -71,6 +128,12 @@ export function InvoicesTable({ invoices }: InvoicesTableProps) {
         </TableHeader>
         <TableBody>
           {invoices.map((invoice) => {
+            const canCancel = isAdmin && CANCELLABLE_STATUSES.has(invoice.status);
+            const canEdit =
+              isAdmin &&
+              CANCELLABLE_STATUSES.has(invoice.status) &&
+              invoice.origin === "COUNTER";
+            const isDraft = invoice.status === "DRAFT";
             return (
               <TableRow key={invoice.id}>
                 <TableCell className="font-medium text-foreground">
@@ -117,6 +180,27 @@ export function InvoicesTable({ invoices }: InvoicesTableProps) {
                         <Eye aria-hidden="true" />
                         Voir détails
                       </DropdownMenuItem>
+                      {canEdit ? (
+                        <DropdownMenuItem
+                          onClick={() => router.push(`/pos?editSaleId=${invoice.id}`)}
+                        >
+                          <Pencil aria-hidden="true" />
+                          Modifier
+                        </DropdownMenuItem>
+                      ) : null}
+                      {canCancel ? (
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setCancelTarget(invoice)}
+                        >
+                          {isDraft ? (
+                            <Trash2 aria-hidden="true" />
+                          ) : (
+                            <Ban aria-hidden="true" />
+                          )}
+                          {isDraft ? "Supprimer" : "Annuler la facture"}
+                        </DropdownMenuItem>
+                      ) : null}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
@@ -133,6 +217,49 @@ export function InvoicesTable({ invoices }: InvoicesTableProps) {
           if (!open) setViewingInvoice(null);
         }}
       />
+
+      <Dialog
+        open={cancelTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !cancelling) setCancelTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {cancelIsDraft ? "Supprimer" : "Annuler"} la facture {cancelTarget?.displayNumber} ?
+            </DialogTitle>
+            <DialogDescription>
+              Cette action restaure le stock, contre-passe les écritures comptables,
+              remet à zéro les paiements et corrige la dette client. Le numéro{" "}
+              {cancelTarget?.displayNumber} reste réservé et la facture reste visible
+              avec le statut « Annulée ». Opération irréversible.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCancelTarget(null)}
+              disabled={cancelling}
+            >
+              Retour
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void confirmCancel()}
+              disabled={cancelling}
+            >
+              {cancelling
+                ? "Traitement…"
+                : cancelIsDraft
+                  ? "Supprimer la facture"
+                  : "Annuler la facture"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
