@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Eye, FileX, MoreHorizontal, Pencil, Printer, Trash2 } from "lucide-react";
 
 import { PurchaseDetailDialog } from "@/components/achats/purchase-detail-dialog";
+import { PurchasePrint } from "@/components/achats/purchase-print";
 import { PurchaseStatusBadge } from "@/components/achats/purchase-status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,6 +53,7 @@ export function PurchasesTable({
   supplierOptions,
 }: PurchasesTableProps) {
   const [viewingPurchaseId, setViewingPurchaseId] = React.useState<string | null>(null);
+  const [printingPurchase, setPrintingPurchase] = React.useState<Purchase | null>(null);
 
   const viewingPurchase =
     purchases.find((purchase) => purchase.id === viewingPurchaseId) ?? null;
@@ -149,7 +151,9 @@ export function PurchasesTable({
                         <Pencil aria-hidden="true" />
                         Modifier
                       </DropdownMenuItem>
-                      <DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => setPrintingPurchase(purchase)}
+                      >
                         <Printer aria-hidden="true" />
                         Imprimer
                       </DropdownMenuItem>
@@ -181,6 +185,16 @@ export function PurchasesTable({
         onOpenChange={(open) => {
           if (!open) setViewingPurchaseId(null);
         }}
+      />
+
+      <PurchasePrint
+        purchase={printingPurchase}
+        supplierName={
+          printingPurchase
+            ? supplierName(printingPurchase, supplierOptions)
+            : undefined
+        }
+        onDone={() => setPrintingPurchase(null)}
       />
     </>
   );
