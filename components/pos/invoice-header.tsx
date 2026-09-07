@@ -2,12 +2,15 @@ type InvoiceHeaderProps = {
   userName: string;
   depotName: string;
   stockLocationName: string;
+  /** Commercial reference of the invoice being prepared/edited (§5). */
+  invoiceLabel?: string;
 };
 
 export function InvoiceHeader({
   userName,
   depotName,
   stockLocationName,
+  invoiceLabel,
 }: InvoiceHeaderProps) {
   const now = new Date();
   const date = now.toLocaleDateString("fr-FR", {
@@ -21,7 +24,11 @@ export function InvoiceHeader({
   });
 
   return (
-    <div className="grid grid-cols-2 gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm sm:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm sm:grid-cols-6">
+      <div>
+        <p className="text-xs text-muted-foreground">N° Facture</p>
+        <p className="font-semibold text-foreground tabular-nums">{invoiceLabel ?? "-"}</p>
+      </div>
       <div>
         <p className="text-xs text-muted-foreground">Utilisateur</p>
         <p className="font-medium text-foreground">{userName}</p>

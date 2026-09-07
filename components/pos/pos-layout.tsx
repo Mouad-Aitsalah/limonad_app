@@ -295,15 +295,29 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const currentInvoiceNumber = openPendingSale
     ? pendingSaleNumber(openPendingSale) ?? currentSlotNumber
     : currentSlotNumber;
+  // The ordering / selection / navigation key stays the numeric `number`
+  // (unchanged logic - see §3). Only the visible `label` becomes the real
+  // commercial reference: sale.displayNumber ("16/2026"), computed once by
+  // formatSaleDisplayNumber in mapSaleToDto - never rebuilt here.
   const invoiceTabs = React.useMemo(() => {
-    const tabs: { sale: SaleDto | null; number: number }[] = pendingSales.map((sale) => ({
-      sale,
-      number: pendingSaleNumber(sale) ?? 0,
-    }));
-    if (!openPendingSale) tabs.push({ sale: null, number: currentSlotNumber });
+    const tabs: { sale: SaleDto | null; number: number; label: string }[] = pendingSales.map(
+      (sale) => ({
+        sale,
+        number: pendingSaleNumber(sale) ?? 0,
+        label: sale.displayNumber,
+      }),
+    );
+    if (!openPendingSale) {
+      tabs.push({ sale: null, number: currentSlotNumber, label: "Nouveau" });
+    }
     return tabs.sort((a, b) => a.number - b.number);
   }, [currentSlotNumber, openPendingSale, pendingSales]);
   const activeTabIndex = invoiceTabs.findIndex((tab) => tab.number === currentInvoiceNumber);
+  const activeInvoiceLabel =
+    editSale?.displayNumber ??
+    openPendingSale?.displayNumber ??
+    invoiceTabs.find((tab) => tab.number === currentInvoiceNumber)?.label ??
+    "Nouveau";
 
   // Negative stock is allowed: the cart quantity is never capped at the
   // product's on-hand stock. The only lower bound is 1.
@@ -667,7 +681,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       }
 
       setLastSale(payload.sale as SaleDto);
-      toast.success(`Vente ${payload.sale.invoiceNumber} enregistrée.`);
+      toast.success(`Vente ${payload.sale.displayNumber} enregistrée.`);
       setCheckoutOpen(false);
       resetOperation();
       await refreshContext();
@@ -690,7 +704,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     try {
       const sale = await createDraftSale();
       toast.success(
-        `Facture ${sale.invoiceNumber} préparée. Ajoutée aux factures en attente.`,
+        `Facture ${sale.displayNumber} préparée. Ajoutée aux factures en attente.`,
       );
       await syncPendingSalesState();
       if (startAnotherInvoice) {
@@ -734,7 +748,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         throw new Error(payload.message ?? "Impossible d'encaisser la facture.");
       }
       setLastSale(payload.sale as SaleDto);
-      toast.success(`Facture ${payload.sale.invoiceNumber} encaissée.`);
+      toast.success(`Facture ${payload.sale.displayNumber} encaissée.`);
       const remainingSales = pendingSales.filter((sale) => sale.id !== openPendingSale.id);
       setPendingSales(remainingSales);
       startNewInvoice(nextSlotNumber(remainingSales));
@@ -765,7 +779,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         setOpenPendingSale(sale);
         setCurrentSlotNumber(pendingSaleNumber(sale) ?? currentSlotNumber);
         await syncPendingSalesState();
-        toast.success(`Facture ${sale.invoiceNumber} preparee. Impression lancee.`);
+        toast.success(`Facture ${sale.displayNumber} preparee. Impression lancee.`);
         schedulePrint();
       } catch (error) {
         toast.error(
@@ -903,12 +917,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
                 type="button"
                 size="sm"
                 variant={active ? "default" : "outline"}
-                aria-label={`Ouvrir la facture ${tab.number}`}
-                className="h-8 min-w-8 shrink-0 px-2 font-semibold tabular-nums"
+                aria-label={`Ouvrir la facture ${tab.label}`}
+                className="h-8 shrink-0 px-2.5 font-semibold tabular-nums"
                 disabled={preparing || submitting || collecting}
                 onClick={() => void navigateToInvoice(tab.sale, tab.number)}
               >
-                {tab.number}
+                {tab.label}
               </Button>
             );
           })}
@@ -952,6 +966,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           userName={context.user.name}
           depotName={context.depot.name}
           stockLocationName={context.stockLocation.name}
+          invoiceLabel={activeInvoiceLabel}
         />
 
         <div className="grid gap-3 sm:grid-cols-[4fr_3fr_3fr]">
@@ -1055,13 +1070,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           {context.message && <p className="mt-1 text-amber-700">{context.message}</p>}
           {lastSale && (
             <p className="mt-1">
-              Dernière vente : {lastSale.invoiceNumber} · {lastSale.customer?.name ?? "Client"} ·{" "}
+              Dernière vente : {lastSale.displayNumber} · {lastSale.customer?.name ?? "Client"} ·{" "}
               {lastSale.totalTTC.toFixed(2)} MAD
             </p>
           )}
           {openPendingSale && (
             <p className="mt-1 font-medium text-amber-700">
-              Facture ouverte : {openPendingSale.invoiceNumber} · En attente de règlement
+              Facture ouverte : {openPendingSale.displayNumber} · En attente de règlement
             </p>
           )}
         </div>
