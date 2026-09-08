@@ -3,14 +3,12 @@
 import * as React from "react";
 import {
   AlertTriangle,
-  CheckCircle2,
-  Package2,
+  ArrowLeft,
   Printer,
   ShoppingCart,
   Trash2,
-  Truck,
-  UserRound,
 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +18,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CollectDialog } from "@/components/pos/collect-dialog";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
+import { CustomerNumberInput } from "@/components/pos/customer-number-input";
 import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
+import { ProductGrid } from "@/components/pos/product-grid";
+import { ProductSearch } from "@/components/pos/product-search";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import type { PosPaymentMethodValue } from "@/types/pos";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
@@ -35,6 +36,7 @@ import type {
   DriverPosProductDto,
   SaleDto,
 } from "@/types/operations-dto";
+import type { PosProduct } from "@/types/pos";
 
 type CartLine = {
   productId: string;
@@ -115,6 +117,25 @@ export function DriverPosView({
     [allKnownProducts],
   );
 
+  // ProductGrid/ProductCard are shared with the admin POS for the mobile
+  // launcher layout. The values still come exclusively from the driver
+  // context, whose availableQuantity is the truck-stock quantity.
+  const productTiles = React.useMemo<PosProduct[]>(
+    () =>
+      filteredProducts.map((product) => ({
+        id: product.id,
+        reference: product.reference,
+        barcode: product.barcode,
+        designation: product.name,
+        prixVenteHT: product.salePriceHT,
+        prixVenteTTC: product.salePriceTTC,
+        tauxTVA: product.taxRate,
+        quantiteStock: product.availableQuantity,
+        imageUrl: product.imageUrl,
+      })),
+    [filteredProducts],
+  );
+
   const cartRows = React.useMemo(
     () =>
       cart
@@ -156,6 +177,11 @@ export function DriverPosView({
         line.productId === product.id ? { ...line, quantity: line.quantity + 1 } : line,
       );
     });
+  }
+
+  function addProductById(productId: string) {
+    const product = productById.get(productId);
+    if (product) addProduct(product);
   }
 
   function updateQuantity(productId: string, quantity: number) {
@@ -323,70 +349,24 @@ export function DriverPosView({
   }
 
   return (
-    <div className="space-y-4 pb-28 lg:pb-6">
-      <div className="rounded-[28px] bg-[linear-gradient(135deg,#065f46_0%,#10b981_55%,#a7f3d0_100%)] p-4 text-white shadow-[0_18px_45px_rgba(5,150,105,0.28)]">
-        <div className="flex flex-col gap-4">
-          <div className="space-y-1">
-            <p className="text-xs uppercase tracking-[0.24em] text-white/75">
-              POS Chauffeur
-            </p>
-            <h1 className="font-heading text-2xl font-semibold">Vendre depuis le camion</h1>
-            <p className="text-sm text-white/80">
-              Stock strictement preleve sur le camion affecte au chauffeur connecte.
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <InfoChip
-              icon={<UserRound className="h-4 w-4" />}
-              label="Chauffeur"
-              value={context.driver.name}
-            />
-            <InfoChip
-              icon={<Truck className="h-4 w-4" />}
-              label="Camion"
-              value={`${context.truck?.code ?? "-"} - ${context.truck?.registration ?? "-"}`}
-            />
-            <InfoChip
-              icon={<Package2 className="h-4 w-4" />}
-              label="Produits dispo"
-              value={String(context.products.length)}
-            />
-          </div>
-
-          {context.tour && (
-            <div className="flex items-center gap-2 text-sm text-white/90">
-              <Badge variant="secondary">Tournée en cours</Badge>
-              <span>
-                {context.tour.code} • {context.tour.status}
-              </span>
-            </div>
-          )}
-
-          {lastSale && (
-            <div className="flex flex-col gap-2 rounded-2xl bg-white/14 px-3 py-2 text-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4" />
-                Facture {lastSale.invoiceNumber} enregistree
-              </div>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={printLastSale}
-                className="rounded-xl"
-              >
-                <Printer className="h-4 w-4" />
-                Imprimer
-              </Button>
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="space-y-4 pb-6">
+      <DriverInvoiceHeader
+        driverName={context.driver.name}
+        truckCode={context.truck?.code ?? "-"}
+        truckRegistration={context.truck?.registration ?? "-"}
+        tourCode={context.tour?.code ?? null}
+        invoiceLabel={lastSale?.displayNumber ?? "—"}
+        lastSale={lastSale}
+        onPrintLastSale={printLastSale}
+      />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="space-y-4">
-          <Card className="overflow-hidden rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+        <div className="order-2 space-y-4 xl:order-1">
+          <div className="space-y-3 xl:hidden">
+            <ProductSearch value={search} onChange={setSearch} />
+            <ProductGrid products={productTiles} onAdd={addProductById} />
+          </div>
+          <Card className="hidden overflow-hidden rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)] xl:block">
             <CardContent className="space-y-4 p-4">
               <div className="space-y-2">
                 <Label>Recherche produit</Label>
@@ -448,7 +428,7 @@ export function DriverPosView({
           </Card>
         </div>
 
-        <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
+        <div className="order-1 space-y-4 xl:sticky xl:top-20 xl:order-2 xl:self-start">
           <Card className="rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
             <CardContent className="space-y-4 p-4">
               <div className="flex items-center justify-between">
@@ -463,13 +443,15 @@ export function DriverPosView({
                 <Badge variant="outline">{formatCurrency(totals.ttc)}</Badge>
               </div>
 
-              <div className="grid gap-3">
+              <div className="grid gap-3 max-lg:grid-cols-2 max-lg:[&>*:last-child]:col-span-2">
                 <CustomerCombobox
                   value={selectedCustomer}
                   onChange={setSelectedCustomer}
                   initialSuggestions={context.customers}
                   placeholder="Client comptoir"
                 />
+
+                <CustomerNumberInput onResolved={setSelectedCustomer} />
 
                 <Field label="Paiement">
                   <select
@@ -581,7 +563,12 @@ export function DriverPosView({
               <div className="space-y-2 rounded-[22px] bg-muted/50 p-4 text-sm">
                 <Summary label="Total HT" value={totals.ht} />
                 <Summary label="TVA" value={totals.tax} />
-                <Summary label="Total TTC" value={totals.ttc} strong />
+                <div className="mt-2 flex items-center justify-between border-t border-border pt-3">
+                  <span className="text-base font-semibold text-foreground">Total à payer</span>
+                  <span className="text-2xl font-bold text-emerald-700 tabular-nums">
+                    {formatCurrency(totals.ttc)}
+                  </span>
+                </div>
               </div>
 
               <PendingSalesPanel
@@ -592,7 +579,7 @@ export function DriverPosView({
                 }}
               />
 
-              <div className="hidden gap-2 xl:grid xl:grid-cols-2">
+              <div className="grid grid-cols-2 gap-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -617,37 +604,6 @@ export function DriverPosView({
         </div>
       </div>
 
-      <div className="mobile-safe-bottom mobile-safe-x fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/96 p-3 backdrop-blur xl:hidden">
-        <div className="mx-auto flex max-w-3xl items-center gap-3">
-          <div className="min-w-0 flex-1 rounded-2xl bg-muted/60 px-4 py-3">
-            <p className="text-xs text-muted-foreground">
-              {totals.quantity} article{totals.quantity > 1 ? "s" : ""}
-            </p>
-            <p className="truncate text-sm font-semibold text-foreground">
-              Total {formatCurrency(totals.ttc)}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={preparing || cartRows.length === 0}
-            onClick={prepareInvoice}
-            className="h-12 rounded-2xl px-4"
-          >
-            Préparer
-          </Button>
-          <Button
-            type="button"
-            disabled={busy || cartRows.length === 0}
-            onClick={validateSale}
-            className="h-12 rounded-2xl px-5"
-          >
-            <ShoppingCart className="h-4 w-4" />
-            Valider
-          </Button>
-        </div>
-      </div>
-
       <CollectDialog
         open={collectOpen}
         onOpenChange={(open) => {
@@ -662,6 +618,89 @@ export function DriverPosView({
         }}
       />
       <ReceiptPrint sale={lastSale} />
+    </div>
+  );
+}
+
+function DriverInvoiceHeader({
+  driverName,
+  truckCode,
+  truckRegistration,
+  tourCode,
+  invoiceLabel,
+  lastSale,
+  onPrintLastSale,
+}: {
+  driverName: string;
+  truckCode: string;
+  truckRegistration: string;
+  tourCode: string | null;
+  invoiceLabel: string;
+  lastSale: SaleDto | null;
+  onPrintLastSale: () => void;
+}) {
+  const now = new Date();
+  const date = now.toLocaleDateString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  const heure = now.toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Link
+          href="/mobile"
+          className="-ml-2 inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+        >
+          <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+          Point de vente
+        </Link>
+        {lastSale ? (
+          <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={onPrintLastSale}>
+            <Printer aria-hidden="true" className="h-4 w-4" />
+            Imprimer
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-border bg-muted/40 p-2.5 text-xs sm:grid-cols-6 sm:gap-3 sm:p-4">
+        <HeaderMetric label="N° Facture" value={invoiceLabel} strong />
+        <HeaderMetric label="Chauffeur" value={driverName} />
+        <HeaderMetric label="Date" value={date} suppressHydrationWarning />
+        <HeaderMetric label="Heure" value={heure} suppressHydrationWarning />
+        <HeaderMetric label="Camion" value={`${truckCode} · ${truckRegistration}`} />
+        <HeaderMetric label="Stock source" value={truckCode} />
+        {tourCode ? <HeaderMetric label="Tournée" value={tourCode} /> : null}
+      </div>
+    </section>
+  );
+}
+
+function HeaderMetric({
+  label,
+  value,
+  strong = false,
+  suppressHydrationWarning = false,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  suppressHydrationWarning?: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p
+        suppressHydrationWarning={suppressHydrationWarning}
+        className={`truncate ${strong ? "font-semibold tabular-nums" : "font-medium"}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }
@@ -700,26 +739,6 @@ function ProductPhoto({
       imageClassName={compact ? "p-2" : "p-4 transition-transform duration-200 group-hover:scale-[1.03]"}
       iconClassName={compact ? "h-6 w-6" : "h-8 w-8"}
     />
-  );
-}
-
-function InfoChip({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-2xl bg-white/12 p-3 backdrop-blur">
-      <div className="mb-2 flex items-center gap-2 text-white/72">
-        {icon}
-        <span className="text-xs uppercase tracking-[0.2em]">{label}</span>
-      </div>
-      <p className="text-sm font-medium text-white">{value}</p>
-    </div>
   );
 }
 
