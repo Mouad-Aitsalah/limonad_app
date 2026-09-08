@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ArrowRight, Pencil, Plus, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Pencil, Plus, ShoppingCart, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -123,6 +123,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
+  const cartSectionRef = React.useRef<HTMLDivElement>(null);
+  const [cartPulse, setCartPulse] = React.useState(false);
+  const cartPulseTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Phase 2 - admin edit of an existing counter sale (from /ventes). When
   // set, the POS is in MODIFICATION mode: the cart is seeded from the sale,
   // per-line prices/discounts are the sale's historical ones (see
@@ -182,6 +185,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const reservationInFlightRef = React.useRef(false);
   const [preparing, setPreparing] = React.useState(false);
   const [collecting, setCollecting] = React.useState(false);
+
+  React.useEffect(() => {
+    return () => {
+      if (cartPulseTimeoutRef.current) clearTimeout(cartPulseTimeoutRef.current);
+    };
+  }, []);
 
   const operationType: PosOperationType = "sale";
   // Phase 3: when the depot has more sellable products than the POS context
@@ -370,6 +379,16 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     if (window.matchMedia("(min-width: 64rem)").matches) {
       searchInputRef.current?.focus();
     }
+  }
+
+  function showMobileCartFeedback() {
+    setCartPulse(true);
+    if (cartPulseTimeoutRef.current) clearTimeout(cartPulseTimeoutRef.current);
+    cartPulseTimeoutRef.current = setTimeout(() => setCartPulse(false), 700);
+  }
+
+  function scrollToMobileCart() {
+    cartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function updateQuantity(productId: string, quantity: number) {
@@ -990,9 +1009,25 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
   const paymentMethodLabel =
     posPaymentMethods.find((method) => method.value === paymentMethod)?.label ?? "";
+  const cartItemCount = cart.reduce((count, line) => count + line.quantity, 0);
 
   return (
     <div className="space-y-4">
+      <Button
+        type="button"
+        size="icon"
+        aria-label={`Voir le panier, ${cartItemCount} article${cartItemCount > 1 ? "s" : ""}`}
+        onClick={scrollToMobileCart}
+        className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] left-3 z-40 h-11 w-11 rounded-full shadow-lg lg:hidden"
+      >
+        <ShoppingCart aria-hidden="true" className="h-5 w-5" />
+        <span
+          className={`absolute -top-1 -right-1 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-background bg-foreground px-1 text-[10px] font-bold text-background ${cartPulse ? "motion-safe:animate-bounce" : ""}`}
+        >
+          {cartItemCount}
+        </span>
+      </Button>
+
       {editSale ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
           <div className="flex items-center gap-2 text-amber-900">
@@ -1083,11 +1118,16 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
               ? () => toast.info("Cette facture est déjà préparée.")
               : addToCart
           }
+          onAdded={openPendingSale && !editSale ? undefined : showMobileCartFeedback}
         />
         </div>
       </div>
 
-      <div className="order-1 flex min-w-0 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:h-full lg:gap-4 lg:overflow-y-auto lg:p-4">
+      <div
+        id="mobile-pos-cart"
+        ref={cartSectionRef}
+        className="order-1 flex min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:h-full lg:gap-4 lg:overflow-y-auto lg:p-4"
+      >
         <InvoiceHeader
           userName={context.user.name}
           depotName={context.depot.name}

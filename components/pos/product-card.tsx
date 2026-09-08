@@ -1,3 +1,8 @@
+"use client";
+
+import * as React from "react";
+import { Check } from "lucide-react";
+
 import { ProductMedia } from "@/components/products/product-media";
 import { posStockTone } from "@/lib/pos-stock-display";
 import { cn, formatCurrency } from "@/lib/utils";
@@ -6,17 +11,36 @@ import type { PosProduct } from "@/types/pos";
 type ProductCardProps = {
   product: PosProduct;
   onAdd: (productId: string) => void;
+  onAdded?: () => void;
 };
 
-export function ProductCard({ product, onAdd }: ProductCardProps) {
+export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
   // Negative sales are allowed: stock <= 0 never disables "Ajouter", it is
   // only ever shown in red (see posStockTone).
   const tone = posStockTone(product.quantiteStock);
+  const [justAdded, setJustAdded] = React.useState(false);
+  const resetAddedRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (resetAddedRef.current) clearTimeout(resetAddedRef.current);
+    };
+  }, []);
+
+  function handleAdd() {
+    onAdd(product.id);
+    if (!onAdded) return;
+
+    setJustAdded(true);
+    onAdded();
+    if (resetAddedRef.current) clearTimeout(resetAddedRef.current);
+    resetAddedRef.current = setTimeout(() => setJustAdded(false), 900);
+  }
 
   return (
     <button
       type="button"
-      onClick={() => onAdd(product.id)}
+      onClick={handleAdd}
       className={cn(
         "group relative flex flex-col rounded-2xl border border-border bg-card p-1.5 text-left ring-0 transition duration-200 ease-out hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-emerald-500/20",
         // Mobile: a small, near-square launcher tile - centred rounded-square
@@ -73,7 +97,17 @@ export function ProductCard({ product, onAdd }: ProductCardProps) {
             </p>
           </div>
           <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.06em] text-emerald-700 max-lg:px-2 max-lg:py-0.5 max-lg:text-[8px] max-lg:tracking-normal">
-            Ajouter
+            <span className="max-lg:hidden">Ajouter</span>
+            <span className="hidden items-center gap-0.5 max-lg:inline-flex">
+              {justAdded ? (
+                <>
+                  <Check aria-hidden="true" className="h-2.5 w-2.5" />
+                  Ajouté
+                </>
+              ) : (
+                "Ajouter"
+              )}
+            </span>
           </span>
         </div>
       </div>

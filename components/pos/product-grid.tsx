@@ -6,9 +6,10 @@ import type { PosProduct } from "@/types/pos";
 type ProductGridProps = {
   products: PosProduct[];
   onAdd: (productId: string) => void;
+  onAdded?: () => void;
 };
 
-export function ProductGrid({ products, onAdd }: ProductGridProps) {
+export function ProductGrid({ products, onAdd, onAdded }: ProductGridProps) {
   if (products.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -26,7 +27,7 @@ export function ProductGrid({ products, onAdd }: ProductGridProps) {
   return (
     <div className="grid grid-cols-2 items-start gap-2 lg:items-stretch lg:gap-3 xl:grid-cols-3 2xl:grid-cols-4">
       {products.map((product) => (
-        <ProductCard key={product.id} product={product} onAdd={onAdd} />
+        <ProductCard key={product.id} product={product} onAdd={onAdd} onAdded={onAdded} />
       ))}
     </div>
   );
