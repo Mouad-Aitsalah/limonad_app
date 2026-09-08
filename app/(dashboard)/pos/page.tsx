@@ -22,7 +22,7 @@ export default async function PosPage() {
 
   return (
     <div className="space-y-4">
-      <div>
+      <div className="max-lg:sr-only">
         <h1 className="font-heading text-2xl font-semibold text-foreground">
           Point de Vente
         </h1>

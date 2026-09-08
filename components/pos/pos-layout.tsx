@@ -364,10 +364,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       return [...prev, { productId, quantity: 1, discountPercent: 0 }];
     });
 
-    // UX: reset the search so the grid returns to normal and the operator can
-    // type the next product straight away, caret kept in the field.
+    // Keep scanner/keyboard focus on desktop. On mobile, do not reopen the
+    // keyboard or scroll away from the product the user just tapped.
     setSearch("");
-    searchInputRef.current?.focus();
+    if (window.matchMedia("(min-width: 64rem)").matches) {
+      searchInputRef.current?.focus();
+    }
   }
 
   function updateQuantity(productId: string, quantity: number) {
@@ -1071,7 +1073,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       )}
 
       <div className="grid gap-4 lg:h-[calc(100vh-11rem)] lg:grid-cols-2 lg:gap-6">
-      <div className="flex flex-col gap-4 lg:h-full lg:overflow-hidden">
+      <div className="order-2 flex min-w-0 flex-col gap-3 lg:order-1 lg:h-full lg:gap-4 lg:overflow-hidden">
         <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
         <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1">
         <ProductGrid
@@ -1085,7 +1087,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 rounded-3xl border border-border bg-card p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:h-full lg:overflow-y-auto">
+      <div className="order-1 flex min-w-0 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:h-full lg:gap-4 lg:overflow-y-auto lg:p-4">
         <InvoiceHeader
           userName={context.user.name}
           depotName={context.depot.name}
@@ -1093,7 +1095,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           invoiceLabel={activeInvoiceLabel}
         />
 
-        <div className="grid gap-3 sm:grid-cols-[4fr_3fr_3fr]">
+        <div className="grid gap-3 max-lg:grid-cols-2 max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr]">
           <CustomerCombobox
             value={selectedCustomer}
             onChange={setSelectedCustomer}

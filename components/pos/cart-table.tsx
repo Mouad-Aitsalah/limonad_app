@@ -44,7 +44,7 @@ export function CartTable({
 
   if (lines.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-10 text-center">
+      <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-10 text-center max-lg:gap-1 max-lg:py-4">
         <ShoppingCart
           aria-hidden="true"
           className="h-8 w-8 text-muted-foreground/40"

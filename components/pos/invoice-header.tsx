@@ -24,7 +24,7 @@ export function InvoiceHeader({
   });
 
   return (
-    <div className="grid grid-cols-2 gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm sm:grid-cols-6">
+    <div className="grid grid-cols-2 gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm max-lg:grid-cols-3 max-lg:gap-2 max-lg:p-2.5 max-lg:text-xs max-lg:[&>div]:min-w-0 max-lg:[&_p]:break-words sm:grid-cols-6">
       <div>
         <p className="text-xs text-muted-foreground">N° Facture</p>
         <p className="font-semibold text-foreground tabular-nums">{invoiceLabel ?? "-"}</p>
@@ -49,7 +49,7 @@ export function InvoiceHeader({
         <p className="text-xs text-muted-foreground">Dépôt</p>
         <p className="font-medium text-foreground">{depotName}</p>
       </div>
-      <div className="col-span-2 sm:col-span-1">
+      <div className="col-span-2 max-lg:col-span-1 sm:col-span-1">
         <p className="text-xs text-muted-foreground">Stock source</p>
         <p className="font-medium text-foreground">{stockLocationName}</p>
       </div>
