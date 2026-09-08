@@ -72,6 +72,9 @@ export function DriverPosView({
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
+  const cartSectionRef = React.useRef<HTMLDivElement>(null);
+  const [cartPulse, setCartPulse] = React.useState(false);
+  const cartPulseTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Phase 3: the fully-resolved customer object (or null for "Client
   // comptoir") - kept as its own state, not derived from
   // context.customers.find(...), because context.customers is now only a
@@ -92,6 +95,12 @@ export function DriverPosView({
   const [collectTarget, setCollectTarget] = React.useState<SaleDto | null>(null);
   const [collectOpen, setCollectOpen] = React.useState(false);
   const [collecting, setCollecting] = React.useState(false);
+
+  React.useEffect(() => {
+    return () => {
+      if (cartPulseTimeoutRef.current) clearTimeout(cartPulseTimeoutRef.current);
+    };
+  }, []);
   // Stable for one sale attempt (F5): kept identical across a network retry
   // of validateSale, only replaced once a sale has actually gone through and
   // the cart is cleared for the next one. A ref so it is synchronously
@@ -182,6 +191,16 @@ export function DriverPosView({
   function addProductById(productId: string) {
     const product = productById.get(productId);
     if (product) addProduct(product);
+  }
+
+  function showMobileCartFeedback() {
+    setCartPulse(true);
+    if (cartPulseTimeoutRef.current) clearTimeout(cartPulseTimeoutRef.current);
+    cartPulseTimeoutRef.current = setTimeout(() => setCartPulse(false), 700);
+  }
+
+  function scrollToMobileCart() {
+    cartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function updateQuantity(productId: string, quantity: number) {
@@ -350,6 +369,21 @@ export function DriverPosView({
 
   return (
     <div className="space-y-4 pb-6">
+      <Button
+        type="button"
+        size="icon"
+        aria-label={`Voir le panier, ${totals.quantity} article${totals.quantity > 1 ? "s" : ""}`}
+        onClick={scrollToMobileCart}
+        className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] left-3 z-40 h-11 w-11 rounded-full shadow-lg xl:hidden"
+      >
+        <ShoppingCart aria-hidden="true" className="h-5 w-5" />
+        <span
+          className={`absolute -top-1 -right-1 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-background bg-foreground px-1 text-[10px] font-bold text-background ${cartPulse ? "motion-safe:animate-bounce" : ""}`}
+        >
+          {totals.quantity}
+        </span>
+      </Button>
+
       <DriverInvoiceHeader
         driverName={context.driver.name}
         truckCode={context.truck?.code ?? "-"}
@@ -364,7 +398,11 @@ export function DriverPosView({
         <div className="order-2 space-y-4 xl:order-1">
           <div className="space-y-3 xl:hidden">
             <ProductSearch value={search} onChange={setSearch} />
-            <ProductGrid products={productTiles} onAdd={addProductById} />
+            <ProductGrid
+              products={productTiles}
+              onAdd={addProductById}
+              onAdded={showMobileCartFeedback}
+            />
           </div>
           <Card className="hidden overflow-hidden rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)] xl:block">
             <CardContent className="space-y-4 p-4">
@@ -428,7 +466,11 @@ export function DriverPosView({
           </Card>
         </div>
 
-        <div className="order-1 space-y-4 xl:sticky xl:top-20 xl:order-2 xl:self-start">
+        <div
+          id="mobile-driver-pos-cart"
+          ref={cartSectionRef}
+          className="order-1 scroll-mt-16 space-y-4 xl:sticky xl:top-20 xl:order-2 xl:self-start"
+        >
           <Card className="rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
             <CardContent className="space-y-4 p-4">
               <div className="flex items-center justify-between">
