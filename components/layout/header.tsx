@@ -1,12 +1,11 @@
 "use client";
 
-import { Menu, ShieldCheck } from "lucide-react";
+import { Menu } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 import { useAuth } from "@/hooks/use-auth";
 import { useSidebar } from "@/hooks/use-sidebar";
 import { navItems } from "@/components/layout/nav-items";
-import { SearchBar } from "@/components/layout/search-bar";
 import { UserMenu } from "@/components/layout/user-menu";
 
 function findPageLabel(pathname: string) {
@@ -61,14 +60,7 @@ export function Header() {
           </div>
         </div>
 
-        <SearchBar className="hidden xl:flex" />
-
-        <div className="hidden items-center gap-3 lg:flex">
-          <div className="surface-card-muted flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
-            <ShieldCheck className="h-4 w-4 text-[var(--primary)]" />
-            Operations stables
-          </div>
-
+        <div className="hidden shrink-0 items-center gap-3 lg:flex">
           <UserMenu
             userName={currentUser?.nom ?? "Utilisateur"}
             userRole={currentUser?.role ?? "admin"}

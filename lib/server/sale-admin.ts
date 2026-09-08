@@ -72,6 +72,10 @@ const reviseSchema = z.object({
         productId: z.string().trim().min(1),
         quantity: z.coerce.number().int().positive().max(1_000_000),
         discountRate: z.coerce.number().min(0).max(100).optional(),
+        // Optional per-line manual unit price HT from the POS edit cart.
+        // Absent = keep the line's historical price (existing product) or the
+        // catalogue price (product added during the edit).
+        unitPriceHT: z.coerce.number().positive().max(MONEY_RANGE_MAX_NUMBER).optional(),
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
@@ -419,15 +423,19 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
           throw new OperationsServiceError("Un produit est introuvable.", 422);
         }
 
-        // Historical economics for a product already on the sale; catalog
-        // price for one added during the edit.
+        // A manual per-line price from the edit cart wins; otherwise the
+        // historical price (product already on the sale) or the catalogue
+        // price (product added during the edit).
         const originalLineByProduct = new Map(sale.lines.map((line) => [line.productId, line]));
         const computedLines = newLines.map((line) => {
           const original = originalLineByProduct.get(line.productId);
           const product = products.find((item) => item.id === line.productId)!;
-          const unitPriceHT = original
-            ? original.unitPriceHT.toNumber()
-            : product.salePrice.toNumber();
+          const unitPriceHT =
+            line.unitPriceHT != null
+              ? roundMoney(line.unitPriceHT)
+              : original
+                ? original.unitPriceHT.toNumber()
+                : product.salePrice.toNumber();
           const unitCostHT = original
             ? original.unitCostHT.toNumber()
             : product.purchasePrice.toNumber();

@@ -44,43 +44,10 @@ export function CartSummary({ totals, operationType }: CartSummaryProps) {
   }
 
   return (
-    <div className="space-y-2 rounded-2xl border border-border bg-muted/40 p-4">
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">Type</span>
-        <span className="font-medium text-emerald-700">Vente</span>
-      </div>
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">Sous-total HT</span>
-        <span className="tabular-nums text-foreground">
-          {formatCurrency(totals.sousTotalHT)}
-        </span>
-      </div>
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">Remise</span>
-        <span className="tabular-nums text-red-600">
-          - {formatCurrency(totals.remise)}
-        </span>
-      </div>
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">TVA</span>
-        <span className="tabular-nums text-foreground">
-          {formatCurrency(totals.tva)}
-        </span>
-      </div>
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">Total TTC</span>
-        <span className="tabular-nums text-foreground">
-          {formatCurrency(totals.totalTTC)}
-        </span>
-      </div>
-
-      <Separator className="my-1" />
-
+    <div className="rounded-2xl border border-border bg-muted/40 p-4">
       <div className="flex items-center justify-between">
-        <span className="text-base font-semibold text-foreground">
-          Net a payer
-        </span>
-        <span className="text-xl font-bold text-emerald-700 tabular-nums">
+        <span className="text-base font-semibold text-foreground">Total à payer</span>
+        <span className="text-2xl font-bold text-emerald-700 tabular-nums">
           {formatCurrency(totals.netAPayer)}
         </span>
       </div>

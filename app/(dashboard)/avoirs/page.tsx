@@ -11,7 +11,7 @@ import { getSupplierPartners } from "@/lib/server/suppliers";
 import type { UserRole } from "@/types/auth";
 
 export const metadata: Metadata = {
-  title: "Avoirs",
+  title: "Avoir client / fournisseur",
 };
 
 export const dynamic = "force-dynamic";

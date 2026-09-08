@@ -53,12 +53,12 @@ export const navItems: NavItem[] = [
     children: [
       { label: "Point de vente", href: "/pos" },
       { label: "Versements", href: "/pos/versements" },
-      { label: "Ventes", href: "/ventes" },
-      { label: "Avoirs", href: "/avoirs", roles: ["admin", "cashier"] },
+      { label: "Archives des factures", href: "/ventes" },
+      { label: "Avoir client / fournisseur", href: "/avoirs", roles: ["admin", "cashier"] },
     ],
   },
   {
-    label: "Catalogue",
+    label: "Produit / Catégorie",
     icon: Package,
     description: "Produits et catégories",
     children: [
@@ -98,7 +98,7 @@ export const navItems: NavItem[] = [
     ],
   },
   {
-    label: "Ressources humaines",
+    label: "Table employé",
     icon: Users,
     description: "Employés et paie",
     roles: ["admin"],
@@ -114,7 +114,7 @@ export const navItems: NavItem[] = [
     roles: ACCOUNTING_ROLES,
     children: [
       { label: "Journal", href: "/comptabilite/journal", roles: ACCOUNTING_ROLES },
-      { label: "Écritures", href: "/comptabilite/ecritures", roles: ACCOUNTING_ROLES },
+      { label: "Écriture comptable", href: "/comptabilite/ecritures", roles: ACCOUNTING_ROLES },
       {
         label: "Règlements clients",
         href: "/comptabilite/reglements-clients",

@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import type { CartLineComputed } from "@/components/pos/pos-layout";
 import type { PosOperationType } from "@/types/pos";
 
@@ -17,10 +17,13 @@ type CartTableProps = {
   lines: CartLineComputed[];
   operationType: PosOperationType;
   readOnly?: boolean;
+  /** Admin-only: turn the "Prix TTC" cell into an editable per-line input. */
+  canEditPrice?: boolean;
   onIncrement: (productId: string) => void;
   onDecrement: (productId: string) => void;
   onQuantityChange: (productId: string, quantity: number) => void;
   onDiscountChange: (productId: string, discountPercent: number) => void;
+  onPriceChange?: (productId: string, unitPriceTTC: number | null) => void;
   onRemove: (productId: string) => void;
 };
 
@@ -28,13 +31,16 @@ export function CartTable({
   lines,
   operationType,
   readOnly = false,
+  canEditPrice = false,
   onIncrement,
   onDecrement,
   onQuantityChange,
   onDiscountChange,
+  onPriceChange,
   onRemove,
 }: CartTableProps) {
   const isTransfer = operationType === "transfer";
+  const priceEditable = canEditPrice && !isTransfer && !readOnly && !!onPriceChange;
 
   if (lines.length === 0) {
     return (
@@ -116,7 +122,29 @@ export function CartTable({
               </div>
             </TableCell>
             <TableCell className="text-right tabular-nums">
-              {formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC)}
+              {priceEditable ? (
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={Number(line.unitPriceTTC.toFixed(2))}
+                  onChange={(event) =>
+                    onPriceChange!(
+                      line.productId,
+                      event.target.value === "" ? null : Number(event.target.value),
+                    )
+                  }
+                  aria-label={`Prix TTC de ${line.designation}`}
+                  className={cn(
+                    "h-7 w-20 rounded-md border bg-transparent text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
+                    line.priceOverridden
+                      ? "border-amber-400 font-medium text-amber-700"
+                      : "border-input",
+                  )}
+                />
+              ) : (
+                formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC)
+              )}
             </TableCell>
             {!isTransfer && (
               <TableCell className="text-right">

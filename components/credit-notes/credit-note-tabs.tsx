@@ -57,7 +57,9 @@ export function CreditNoteTabs({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">Avoirs</h1>
+        <h1 className="font-heading text-2xl font-semibold text-foreground">
+          Avoir client / fournisseur
+        </h1>
         <p className="text-sm text-muted-foreground">
           Gestion des retours clients et fournisseurs, brouillons et mouvements de stock.
         </p>

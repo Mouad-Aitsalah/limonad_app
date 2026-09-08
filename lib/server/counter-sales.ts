@@ -72,6 +72,10 @@ const counterSaleSchema = z.object({
         // computed amount by assertMoneyRange below regardless).
         quantity: z.coerce.number().int().positive().max(1_000_000),
         discountRate: z.coerce.number().min(0).max(100).optional(),
+        // Optional per-line manual unit price HT (POS cart price edit).
+        // Honoured ONLY for an admin session - see createCounterSale.
+        // Absent = the product's catalogue price is used (the default source).
+        unitPriceHT: z.coerce.number().positive().max(MONEY_RANGE_MAX_NUMBER).optional(),
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
@@ -313,10 +317,16 @@ export async function createCounterSale(
         throw new OperationsServiceError("Un produit est introuvable.", 422);
       }
 
+      // A manual per-line price from the POS cart is honoured only for an
+      // admin session; every other role always sells at the catalogue price.
+      const canOverrideLinePrice = sessionUser.role === "admin";
       const computedLines = lines.map((line) => {
         const product = products.find((item) => item.id === line.productId);
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
-        const unitPriceHT = product.salePrice.toNumber();
+        const unitPriceHT =
+          canOverrideLinePrice && line.unitPriceHT != null
+            ? roundMoney(line.unitPriceHT)
+            : product.salePrice.toNumber();
         // BI Phase 2A: snapshot of the cost of the day, frozen on the line
         // forever - see SaleLine.unitCostHT's doc comment. Never touched
         // again by collectSaleCore (DRAFT -> PAID/CREDIT only updates the

@@ -6,6 +6,7 @@ import { ArrowLeft, ArrowRight, Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/use-auth";
 import { roundCurrency } from "@/lib/utils";
 import type { CounterPosContextDto, CustomerDto, SaleDto } from "@/types/operations-dto";
 import {
@@ -36,6 +37,13 @@ export type CartLine = {
   productId: string;
   quantity: number;
   discountPercent: number;
+  /**
+   * Per-line manual unit price HT, INDEPENDENT of the catalogue. Undefined =
+   * use the product's catalogue price (the initial source). When set it is
+   * what gets persisted on the SaleLine and reused for print / history /
+   * edit - the Product row is never touched.
+   */
+  priceOverrideHT?: number;
 };
 
 export type CartLineComputed = {
@@ -46,6 +54,8 @@ export type CartLineComputed = {
   discountPercent: number;
   unitPriceHT: number;
   unitPriceTTC: number;
+  /** True when unitPriceHT comes from a manual per-line override, not the catalogue. */
+  priceOverridden?: boolean;
   tauxTVA: number;
   baseHT: number;
   discountAmount: number;
@@ -106,6 +116,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const editSaleId = searchParams.get("editSaleId");
+  const { currentUser } = useAuth();
+  // Manual per-line price editing in the cart is ADMIN ONLY (client + server).
+  const canEditLinePrice = currentUser?.role === "admin";
 
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
@@ -219,6 +232,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         discountPercent: line.discountRate,
         unitPriceHT: line.unitPriceHT,
         unitPriceTTC: line.quantity > 0 ? line.totalTTC / line.quantity : 0,
+        priceOverridden: false,
         tauxTVA: line.taxRate,
         baseHT: line.unitPriceHT * line.quantity,
         discountAmount: line.discountAmount,
@@ -234,10 +248,15 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       const frozen = editLineInfoById.get(line.productId);
       if (!product && !frozen) return [];
 
-      const unitPriceHT = frozen?.unitPriceHT ?? product!.prixVenteHT;
-      const unitPriceTTC = frozen?.unitPriceTTC ?? product!.prixVenteTTC;
-      const discountPercent = line.discountPercent;
       const tauxTVA = frozen?.tauxTVA ?? product!.tauxTVA;
+      // Catalogue price is the initial source; a per-line override (typed in
+      // the cart, always stored HT) takes over without ever touching the
+      // Product row.
+      const catalogueHT = frozen?.unitPriceHT ?? product!.prixVenteHT;
+      const priceOverridden = line.priceOverrideHT != null;
+      const unitPriceHT = priceOverridden ? line.priceOverrideHT! : catalogueHT;
+      const unitPriceTTC = roundCurrency(unitPriceHT * (1 + tauxTVA / 100));
+      const discountPercent = line.discountPercent;
       const baseHT = unitPriceHT * line.quantity;
       const discountAmount = baseHT * (discountPercent / 100);
       const netHT = baseHT - discountAmount;
@@ -252,6 +271,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         discountPercent,
         unitPriceHT,
         unitPriceTTC,
+        priceOverridden,
         tauxTVA,
         baseHT,
         discountAmount,
@@ -387,6 +407,28 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     );
   }
 
+  // Manual per-line price. The operator types a TTC value; it is stored HT
+  // (independent of the catalogue). An empty / non-finite value clears the
+  // override and the line falls back to the catalogue price.
+  function updatePrice(productId: string, unitPriceTTC: number | null) {
+    setCart((prev) =>
+      prev.map((line) => {
+        if (line.productId !== productId) return line;
+        const clear =
+          unitPriceTTC == null || !Number.isFinite(unitPriceTTC) || unitPriceTTC < 0;
+        if (clear) return { ...line, priceOverrideHT: undefined };
+        const taxRate =
+          productById.get(productId)?.tauxTVA ??
+          editLineInfoById.get(productId)?.tauxTVA ??
+          0;
+        return {
+          ...line,
+          priceOverrideHT: roundCurrency(unitPriceTTC / (1 + taxRate / 100)),
+        };
+      }),
+    );
+  }
+
   function removeFromCart(productId: string) {
     setCart((prev) => prev.filter((line) => line.productId !== productId));
   }
@@ -466,6 +508,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         productId: line.productId,
         quantity: line.quantity,
         discountRate: line.discountPercent,
+        // Only sent when the operator set a manual price - otherwise the
+        // server keeps using the catalogue price.
+        ...(line.priceOverridden ? { unitPriceHT: line.unitPriceHT } : {}),
       })),
       idempotencyKey: idempotencyKeyRef.current,
       ...extra,
@@ -503,6 +548,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             productId: line.productId,
             quantity: line.quantity,
             discountRate: line.discountPercent,
+            ...(line.priceOverridden ? { unitPriceHT: line.unitPriceHT } : {}),
           })),
           expectedUpdatedAt: editSale.updatedAt ?? null,
         }),
@@ -996,10 +1042,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             lines={cartLines}
             operationType={operationType}
             readOnly={Boolean(openPendingSale) && !editSale}
+            canEditPrice={canEditLinePrice}
             onIncrement={incrementQuantity}
             onDecrement={decrementQuantity}
             onQuantityChange={updateQuantity}
             onDiscountChange={updateDiscount}
+            onPriceChange={updatePrice}
             onRemove={removeFromCart}
           />
         </div>
