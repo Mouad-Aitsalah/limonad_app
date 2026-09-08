@@ -504,6 +504,12 @@ body {
     padding: 1.5mm !important;
   }
 
+  /* Keep the invoice padding inside its declared paper width. Its right
+     content edge moves left by exactly 2mm on the current 80mm format. */
+  .receipt-print-area[data-document="sale"] {
+    box-sizing: border-box !important;
+  }
+
   .receipt-print-ticket {
     width: 100%;
     color: #000;
@@ -521,21 +527,20 @@ body {
     text-align: center;
   }
 
-  /* Company logo on the ticket - kept small and ratio-preserving for
-     thermal printers, no heavy background. */
-  .receipt-print-logo {
+  /* Invoice logo: 16mm -> 27.2mm (x1.7), ratio-preserving. */
+  .receipt-print-area[data-document="sale"] .receipt-print-logo {
     display: block;
     margin: 0 auto 1mm;
-    max-height: 16mm;
-    max-width: 46mm;
+    max-height: 27.2mm;
+    max-width: 78.2mm;
     height: auto;
     width: auto;
     object-fit: contain;
   }
 
-  .receipt-print-area[data-paper="58"] .receipt-print-logo {
-    max-height: 13mm;
-    max-width: 38mm;
+  .receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-logo {
+    max-height: 22.1mm;
+    max-width: 64.6mm;
   }
 
   .receipt-print-brand {
@@ -560,15 +565,15 @@ body {
      chauffeur). Designation gets the flexible remainder; Qte stays a small
      fixed column so a long product name never pushes into the price
      columns - it clips instead (see .receipt-print-product below). */
-  .receipt-print-grid {
+  .receipt-print-area[data-document="sale"] .receipt-print-grid {
     display: grid;
-    grid-template-columns: 7mm minmax(0, 1fr) 15mm 16mm;
+    grid-template-columns: 7mm minmax(0, 1fr) 15mm 20mm;
     gap: 1mm;
     align-items: start;
   }
 
-  .receipt-print-area[data-paper="58"] .receipt-print-grid {
-    grid-template-columns: 5mm minmax(0, 1fr) 13mm 13mm;
+  .receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-grid {
+    grid-template-columns: 5mm minmax(0, 1fr) 13mm 16mm;
     gap: 0.7mm;
   }
 

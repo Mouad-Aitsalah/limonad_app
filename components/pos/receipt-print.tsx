@@ -74,6 +74,7 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
       aria-hidden="true"
       className="receipt-print-area hidden"
       data-paper={paperWidth}
+      data-document="sale"
     >
       <div className="receipt-print-ticket">
         <header className="receipt-print-header">
