@@ -12,6 +12,7 @@ import { PurchaseForm } from "@/components/achats/purchase-form";
 import { submitPurchase } from "@/components/achats/submit-purchase";
 import type { ProductDto, ProductOptionDto } from "@/types/product-dto";
 import type { Purchase } from "@/types/purchase";
+import type { AccountingAccountDto, AccountingAccountOptionDto } from "@/types/accounting";
 
 /**
  * The dedicated "Achats > Achat" page: the exact same PurchaseForm the
@@ -22,6 +23,9 @@ export function NewPurchaseView() {
   const router = useRouter();
   const [supplierOptions, setSupplierOptions] = React.useState<ProductOptionDto[]>([]);
   const [productOptions, setProductOptions] = React.useState<ProductDto[]>([]);
+  const [bankAccountOptions, setBankAccountOptions] = React.useState<
+    AccountingAccountOptionDto[]
+  >([]);
   // Set once the purchase is persisted - drives the confirmation panel below,
   // whose data is exactly what the API returned from the database.
   const [createdPurchase, setCreatedPurchase] = React.useState<Purchase | null>(null);
@@ -50,11 +54,26 @@ export function NewPurchaseView() {
       if (!cancelled) setProductOptions(payload.products);
     }
 
+    async function loadBankAccounts() {
+      const response = await fetch("/api/accounting/accounts", { cache: "no-store" });
+      const payload = (await response.json()) as { accounts?: AccountingAccountDto[] };
+      if (!response.ok || !payload.accounts) {
+        throw new Error("Impossible de charger les comptes bancaires.");
+      }
+      const accounts = payload.accounts.filter(
+        (account) => account.isActive && account.code.startsWith("5141"),
+      );
+      if (!cancelled) setBankAccountOptions(accounts);
+    }
+
     void loadSuppliers().catch(() => {
       if (!cancelled) setSupplierOptions([]);
     });
     void loadProducts().catch(() => {
       if (!cancelled) setProductOptions([]);
+    });
+    void loadBankAccounts().catch(() => {
+      if (!cancelled) setBankAccountOptions([]);
     });
 
     return () => {
@@ -143,6 +162,7 @@ export function NewPurchaseView() {
           <PurchaseForm
             productOptions={productOptions}
             supplierOptions={supplierOptions}
+            bankAccountOptions={bankAccountOptions}
             onCancel={() => router.push("/achats")}
             onSaved={async (purchase) => {
               const created = await submitPurchase(purchase);

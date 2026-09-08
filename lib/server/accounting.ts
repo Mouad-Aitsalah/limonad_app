@@ -177,6 +177,7 @@ type PurchaseAccountingPayload = {
   taxAmount: DecimalInput;
   totalTTC: DecimalInput;
   paymentMethod: string;
+  bankAccountingAccountId?: string | null;
   createdByUserId: string;
 };
 
@@ -1317,9 +1318,30 @@ export async function postPurchaseAccountingEntry(
   });
   if (existingSettlement) return invoiceEntry;
 
-  const treasuryAccountId = usesPurchaseBankAccount(payload.paymentMethod)
-    ? settings.bankAccountId
-    : settings.cashAccountId;
+  let treasuryAccountId = settings.cashAccountId;
+  if (payload.paymentMethod === "banque") {
+    if (!payload.bankAccountingAccountId) {
+      throw new OperationsServiceError("Le compte bancaire 5141 est obligatoire.", 422);
+    }
+    // Defence in depth: the purchase service validates this too, but posting
+    // must never credit an account sent from another organisation or a 5141
+    // account that has since been deactivated.
+    const selectedBankAccount = await db.accountingAccount.findFirst({
+      where: {
+        id: payload.bankAccountingAccountId,
+        organizationId,
+        isActive: true,
+        code: { startsWith: "5141" },
+      },
+      select: { id: true },
+    });
+    if (!selectedBankAccount) {
+      throw new OperationsServiceError("Le compte bancaire 5141 sélectionné est invalide.", 422);
+    }
+    treasuryAccountId = selectedBankAccount.id;
+  } else if (usesPurchaseBankAccount(payload.paymentMethod)) {
+    treasuryAccountId = settings.bankAccountId;
+  }
 
   await createPostedEntry(db, {
     organizationId,

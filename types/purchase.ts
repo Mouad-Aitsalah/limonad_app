@@ -1,5 +1,6 @@
 export type PurchasePaymentMethod =
   | "especes"
+  | "banque"
   | "carte"
   | "cheque"
   | "virement"
@@ -74,6 +75,9 @@ export type Purchase = {
   modeReglement: PurchasePaymentMethod;
   numeroCheque: string | null;
   banque: string | null;
+  bankAccountingAccountId: string | null;
+  bankAccountingAccountCode?: string | null;
+  bankAccountingAccountName?: string | null;
   datePaiement: Date | null;
   utilisateurId: string;
   utilisateurNom?: string;

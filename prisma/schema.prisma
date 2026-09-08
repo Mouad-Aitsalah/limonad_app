@@ -1471,6 +1471,10 @@ model Purchase {
   paymentDate       DateTime?
   chequeNumber      String?
   bankName          String?
+  // Selected only for the new "banque" payment method. Historical purchases
+  // deliberately keep this nullable, including their legacy bankName text.
+  bankAccountingAccountId String?
+  bankAccountingAccount   AccountingAccount? @relation("PurchaseBankAccountingAccount", fields: [bankAccountingAccountId], references: [id], onDelete: Restrict)
   observation       String?
   subtotalHT        Decimal        @db.Decimal(12, 2)
   taxAmount         Decimal        @db.Decimal(12, 2)
@@ -1488,6 +1492,7 @@ model Purchase {
   @@index([supplierId])
   @@index([depotId])
   @@index([createdByUserId])
+  @@index([bankAccountingAccountId])
   // BI Phase 2A: covers the "achats" helper, filtered by organizationId +
   // an orderDate range.
   @@index([organizationId, orderDate])
@@ -1542,6 +1547,7 @@ model AccountingAccount {
   purchaseVatSettings      AccountingSettings[]  @relation("AccountingSettingsPurchaseVatAccount")
   cashSettings             AccountingSettings[]  @relation("AccountingSettingsCashAccount")
   bankSettings             AccountingSettings[]  @relation("AccountingSettingsBankAccount")
+  purchasesWithBankAccount Purchase[]            @relation("PurchaseBankAccountingAccount")
   customerSettings         AccountingSettings[]  @relation("AccountingSettingsCustomerAccount")
   supplierSettings         AccountingSettings[]  @relation("AccountingSettingsSupplierAccount")
   customerReturnSettings   AccountingSettings[]  @relation("AccountingSettingsCustomerReturnAccount")

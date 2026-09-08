@@ -105,6 +105,7 @@ function buildPurchase(index: number, date: Date): Purchase {
     banque: isCheque
       ? pick(["Attijariwafa Bank", "Banque Populaire", "BMCE Bank", "CIH Bank"])
       : null,
+    bankAccountingAccountId: null,
     datePaiement,
     utilisateurId: pick(eligibleUsers),
     observation: "",

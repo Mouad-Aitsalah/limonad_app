@@ -19,6 +19,7 @@ import type { Purchase, PurchasePaymentMethod, PurchaseStatus } from "@/types/pu
 
 const purchasePaymentMethods = [
   "especes",
+  "banque",
   "carte",
   "cheque",
   "virement",
@@ -68,6 +69,7 @@ const purchaseBaseSchema = z.object({
   modeReglement: z.enum(purchasePaymentMethods),
   numeroCheque: z.string().trim().nullable().optional(),
   banque: z.string().trim().nullable().optional(),
+  bankAccountingAccountId: z.string().trim().nullable().optional(),
   datePaiement: z.string().trim().nullable().optional(),
   observation: z.string().trim().nullable().optional(),
 });
@@ -115,6 +117,7 @@ type ComputedPurchaseLine = {
 const purchaseInclude = {
   supplier: { select: { id: true, name: true } },
   createdBy: { select: { id: true, fullName: true } },
+  bankAccountingAccount: { select: { id: true, code: true, name: true } },
   lines: {
     include: {
       product: { select: { id: true, name: true } },
@@ -217,6 +220,33 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
       }
       if (products.length !== productIds.length) {
         throw new OperationsServiceError("Un produit est introuvable ou inactif.", 422);
+      }
+
+      let bankAccountingAccountId: string | null = null;
+      if (parsed.data.modeReglement === "banque") {
+        const requestedAccountId = parsed.data.bankAccountingAccountId?.trim();
+        if (!requestedAccountId) {
+          throw new OperationsServiceError("Le compte bancaire 5141 est obligatoire.", 422, {
+            bankAccountingAccountId: "Le compte bancaire 5141 est obligatoire.",
+          });
+        }
+        const bankAccount = await tx.accountingAccount.findFirst({
+          where: {
+            id: requestedAccountId,
+            organizationId: sessionUser.organizationId,
+            isActive: true,
+            code: { startsWith: "5141" },
+          },
+          select: { id: true },
+        });
+        if (!bankAccount) {
+          throw new OperationsServiceError(
+            "Le compte bancaire sélectionné est introuvable, inactif ou non autorisé.",
+            422,
+            { bankAccountingAccountId: "Sélectionnez un compte bancaire 5141 actif." },
+          );
+        }
+        bankAccountingAccountId = bankAccount.id;
       }
 
       const productById = new Map(products.map((product) => [product.id, product]));
@@ -329,6 +359,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
             parsed.data.modeReglement === "cheque"
               ? parsed.data.banque?.trim() || null
               : null,
+          bankAccountingAccountId,
           observation: parsed.data.observation?.trim() || null,
           subtotalHT,
           taxAmount,
@@ -409,6 +440,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
         taxAmount,
         totalTTC,
         paymentMethod: parsed.data.modeReglement,
+        bankAccountingAccountId,
         createdByUserId: user.id,
       });
 
@@ -478,6 +510,9 @@ function mapPurchaseToDto(purchase: PurchaseWithRelations): Purchase {
     modeReglement: mapPaymentMethod(purchase.paymentMethod),
     numeroCheque: purchase.chequeNumber,
     banque: purchase.bankName,
+    bankAccountingAccountId: purchase.bankAccountingAccountId,
+    bankAccountingAccountCode: purchase.bankAccountingAccount?.code ?? null,
+    bankAccountingAccountName: purchase.bankAccountingAccount?.name ?? null,
     datePaiement: purchase.paymentDate,
     utilisateurId: purchase.createdByUserId,
     utilisateurNom: purchase.createdBy.fullName,

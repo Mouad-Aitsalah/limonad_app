@@ -1,6 +1,7 @@
 "use client";
 
 import { formatCurrency } from "@/lib/utils";
+import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import type { CashDepositDto } from "@/types/cash-deposits";
 
 type DepositReceiptPrintProps = {
@@ -36,13 +37,16 @@ function formatDenominationLabel(value: number) {
  * (Coupure / Qte / Montant instead of a product cart).
  */
 export function DepositReceiptPrint({ deposit, paperWidth = "80" }: DepositReceiptPrintProps) {
+  const { identity } = useCompanyIdentity();
   if (!deposit) return null;
+  const organizationName =
+    identity?.tradeName?.trim() || identity?.name?.trim() || "COMDIS";
 
   return (
     <section aria-hidden="true" className="receipt-print-area hidden" data-paper={paperWidth}>
       <div className="receipt-print-ticket">
         <header className="receipt-print-header">
-          <p className="receipt-print-brand">AITSALAHMARKET</p>
+          <p className="receipt-print-brand">{organizationName}</p>
           <p>VERSEMENT DE CAISSE</p>
         </header>
 

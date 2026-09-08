@@ -17,6 +17,7 @@ export async function submitPurchase(input: PurchaseInput): Promise<Purchase> {
       modeReglement: input.modeReglement,
       numeroCheque: input.numeroCheque,
       banque: input.banque,
+      bankAccountingAccountId: input.bankAccountingAccountId,
       datePaiement: input.datePaiement?.toISOString().slice(0, 10) ?? null,
       observation: input.observation,
       pricingMode: input.pricingMode,

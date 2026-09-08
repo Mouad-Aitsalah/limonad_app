@@ -6,6 +6,15 @@ import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ProductCombobox } from "@/components/commerce/product-combobox";
+import {
+  Combobox,
+  ComboboxClear,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxInputGroup,
+  ComboboxItem,
+} from "@/components/ui/combobox";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,7 +36,6 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/use-auth";
-import { purchasePaymentMethods } from "@/lib/mock-data/purchase-payment-methods";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
   computeDraftLineTotalTTC,
@@ -45,6 +53,7 @@ import type {
   PurchasePricingMode,
 } from "@/types/purchase";
 import type { ProductDto, ProductOptionDto } from "@/types/product-dto";
+import type { AccountingAccountOptionDto } from "@/types/accounting";
 
 function productPurchasePriceTTC(product: ProductDto | null): number {
   if (!product) return 0;
@@ -93,9 +102,16 @@ type PurchaseFormValues = {
   modeReglement: PurchasePaymentMethod;
   numeroCheque: string;
   banque: string;
+  bankAccountingAccountId: string;
   datePaiement: string;
   observation: string;
   lignes: LineDraft[];
+};
+
+type PurchaseDraftStorage = {
+  version: 1;
+  values: PurchaseFormValues;
+  pricingMode: PurchasePricingMode;
 };
 
 function todayInputValue() {
@@ -109,11 +125,74 @@ function buildDefaultValues(productOptions: ProductDto[]): PurchaseFormValues {
     modeReglement: "especes",
     numeroCheque: "",
     banque: "",
+    bankAccountingAccountId: "",
     datePaiement: "",
     observation: "",
     lignes: [createLine("line-1", productOptions)],
   };
 }
+
+function BankAccountCombobox({
+  accountId,
+  accounts,
+  onChange,
+}: {
+  accountId: string;
+  accounts: AccountingAccountOptionDto[];
+  onChange: (accountId: string) => void;
+}) {
+  const [query, setQuery] = React.useState("");
+  const selected = accounts.find((account) => account.id === accountId) ?? null;
+  const matchingAccounts = React.useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase("fr");
+    if (!normalized) return accounts;
+    return accounts.filter((account) =>
+      `${account.code} ${account.name}`.toLocaleLowerCase("fr").includes(normalized),
+    );
+  }, [accounts, query]);
+
+  return (
+    <Combobox
+      items={matchingAccounts}
+      filter={null}
+      value={selected}
+      onValueChange={(account) => onChange(account?.id ?? "")}
+      inputValue={query}
+      onInputValueChange={setQuery}
+      itemToStringLabel={(account: AccountingAccountOptionDto | null) =>
+        account ? `${account.code} — ${account.name}` : ""
+      }
+      isItemEqualToValue={(a: AccountingAccountOptionDto, b: AccountingAccountOptionDto) =>
+        a.id === b.id
+      }
+    >
+      <ComboboxInputGroup>
+        <ComboboxInput placeholder={selected ? `${selected.code} — ${selected.name}` : "Rechercher un compte 5141"} />
+        <ComboboxClear />
+      </ComboboxInputGroup>
+      <ComboboxContent>
+        <ComboboxEmpty>Aucun compte 5141 actif trouvé.</ComboboxEmpty>
+        {matchingAccounts.map((account, index) => (
+          <ComboboxItem key={account.id} value={account} index={index}>
+            <div className="flex min-w-0 flex-col">
+              <span className="font-medium">{account.code}</span>
+              <span className="truncate text-xs text-muted-foreground">{account.name}</span>
+            </div>
+          </ComboboxItem>
+        ))}
+      </ComboboxContent>
+    </Combobox>
+  );
+}
+
+const newPurchasePaymentMethods: Array<{
+  value: "especes" | "banque" | "credit_fournisseur";
+  label: string;
+}> = [
+  { value: "especes", label: "Espèces" },
+  { value: "banque", label: "Banque" },
+  { value: "credit_fournisseur", label: "Crédit fournisseur" },
+];
 
 function clampPercent(value: number): number {
   if (!Number.isFinite(value) || value < 0) return 0;
@@ -124,6 +203,7 @@ function clampPercent(value: number): number {
 type FormErrors = {
   fournisseur?: string;
   numeroCheque?: string;
+  bankAccountingAccountId?: string;
   lignesMessage?: string;
   invalidLineKeys: Record<string, boolean>;
 };
@@ -143,6 +223,13 @@ function validate(
     values.numeroCheque.trim().length === 0
   ) {
     errors.numeroCheque = "Le numéro de chèque est obligatoire.";
+  }
+
+  if (
+    values.modeReglement === "banque" &&
+    values.bankAccountingAccountId.trim().length === 0
+  ) {
+    errors.bankAccountingAccountId = "Le compte bancaire 5141 est obligatoire.";
   }
 
   if (values.lignes.length === 0) {
@@ -174,6 +261,7 @@ function hasBlockingErrors(errors: FormErrors) {
   return (
     !!errors.fournisseur ||
     !!errors.numeroCheque ||
+    !!errors.bankAccountingAccountId ||
     !!errors.lignesMessage
   );
 }
@@ -182,6 +270,7 @@ type PurchaseFormProps = {
   onCancel: () => void;
   supplierOptions: ProductOptionDto[];
   productOptions: ProductDto[];
+  bankAccountOptions: AccountingAccountOptionDto[];
   onSaved: (purchase: PurchaseInput) => Promise<void>;
 };
 
@@ -189,6 +278,7 @@ export function PurchaseForm({
   onCancel,
   onSaved,
   productOptions,
+  bankAccountOptions,
   supplierOptions,
 }: PurchaseFormProps) {
   const { currentUser } = useAuth();
@@ -201,11 +291,81 @@ export function PurchaseForm({
     React.useState<PurchasePricingMode>("CLASSIC_TTC");
   const [errors, setErrors] = React.useState<FormErrors>({ invalidLineKeys: {} });
   const [submitting, setSubmitting] = React.useState(false);
+  const [draftReady, setDraftReady] = React.useState(false);
   const lineKeyCounter = React.useRef(1);
   // True once the operator has actually touched the lines - drives the
   // "changing the mode clears the lines" confirmation (an untouched default
   // line switches freely).
   const linesDirtyRef = React.useRef(false);
+  const restoredDraftKeyRef = React.useRef<string | null>(null);
+  const draftKey =
+    currentUser?.id && currentUser.organizationId
+      ? `purchase-draft:${currentUser.organizationId}:${currentUser.id}`
+      : null;
+
+  React.useEffect(() => {
+    if (!draftKey) return;
+    if (restoredDraftKeyRef.current === draftKey) return;
+    restoredDraftKeyRef.current = draftKey;
+    let cancelled = false;
+    let restoredValues: PurchaseFormValues | null = null;
+    let restoredPricingMode: PurchasePricingMode | null = null;
+
+    try {
+      const raw = window.sessionStorage.getItem(draftKey);
+      if (raw) {
+        const draft = JSON.parse(raw) as Partial<PurchaseDraftStorage>;
+        if (
+          draft.version === 1 &&
+          draft.values &&
+          Array.isArray(draft.values.lignes) &&
+          (draft.pricingMode === "CLASSIC_TTC" || draft.pricingMode === "DOUBLE_DISCOUNT_HT")
+        ) {
+          restoredValues = {
+            ...buildDefaultValues(productOptions),
+            ...draft.values,
+            lignes: draft.values.lignes.map((line, index) => ({
+              ...createLine(`line-${index + 1}`, productOptions),
+              ...line,
+              key: `line-${index + 1}`,
+            })),
+          };
+          restoredPricingMode = draft.pricingMode;
+        }
+      }
+    } catch {
+      window.sessionStorage.removeItem(draftKey);
+    } finally {
+      window.setTimeout(() => {
+        if (cancelled) return;
+        if (restoredValues && restoredPricingMode) {
+          setValues(restoredValues);
+          setPricingMode(restoredPricingMode);
+          lineKeyCounter.current = Math.max(1, restoredValues.lignes.length);
+          linesDirtyRef.current = true;
+        }
+      setDraftReady(true);
+      }, 0);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [draftKey, productOptions]);
+
+  React.useEffect(() => {
+    if (!draftKey || !draftReady || submitting) return;
+    const draft: PurchaseDraftStorage = { version: 1, values, pricingMode };
+    window.sessionStorage.setItem(draftKey, JSON.stringify(draft));
+  }, [draftKey, draftReady, pricingMode, submitting, values]);
+
+  function resetDraft() {
+    if (draftKey) window.sessionStorage.removeItem(draftKey);
+    lineKeyCounter.current = 1;
+    linesDirtyRef.current = false;
+    setValues(buildDefaultValues(productOptions));
+    setPricingMode("CLASSIC_TTC");
+    setErrors({ invalidLineKeys: {} });
+  }
 
   function handleChange<K extends keyof PurchaseFormValues>(
     field: K,
@@ -301,6 +461,10 @@ export function PurchaseForm({
         modeReglement: values.modeReglement,
         numeroCheque: values.modeReglement === "cheque" ? values.numeroCheque : null,
         banque: values.modeReglement === "cheque" ? values.banque : null,
+        bankAccountingAccountId:
+          values.modeReglement === "banque"
+            ? values.bankAccountingAccountId
+            : null,
         datePaiement: values.datePaiement ? new Date(values.datePaiement) : null,
         utilisateurId: currentUser?.id ?? "",
         observation: values.observation,
@@ -321,6 +485,7 @@ export function PurchaseForm({
               remisePercent: line.remisePercent,
             })),
       });
+      if (draftKey) window.sessionStorage.removeItem(draftKey);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Impossible d'enregistrer l'achat.",
@@ -398,14 +563,14 @@ export function PurchaseForm({
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Sélectionner">
                     {() =>
-                      purchasePaymentMethods.find(
+                      newPurchasePaymentMethods.find(
                         (method) => method.value === values.modeReglement,
                       )?.label ?? "Sélectionner"
                     }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {purchasePaymentMethods.map((method) => (
+                  {newPurchasePaymentMethods.map((method) => (
                     <SelectItem key={method.value} value={method.value}>
                       {method.label}
                     </SelectItem>
@@ -413,6 +578,24 @@ export function PurchaseForm({
                 </SelectContent>
               </Select>
             </div>
+
+            {values.modeReglement === "banque" && (
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Compte bancaire (5141)</Label>
+                <BankAccountCombobox
+                  accountId={values.bankAccountingAccountId}
+                  accounts={bankAccountOptions}
+                  onChange={(accountId) =>
+                    handleChange("bankAccountingAccountId", accountId)
+                  }
+                />
+                {errors.bankAccountingAccountId ? (
+                  <p className="text-xs text-destructive">
+                    {errors.bankAccountingAccountId}
+                  </p>
+                ) : null}
+              </div>
+            )}
 
             {values.modeReglement === "cheque" && (
               <>
@@ -768,6 +951,9 @@ export function PurchaseForm({
       </div>
 
       <DialogFooter>
+        <Button type="button" variant="ghost" onClick={resetDraft} disabled={submitting}>
+          Réinitialiser le brouillon
+        </Button>
         <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
           Annuler
         </Button>

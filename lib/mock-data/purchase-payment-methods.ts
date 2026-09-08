@@ -13,7 +13,11 @@ export const purchasePaymentMethods: PurchasePaymentMethodOption[] = [
   { value: "credit_fournisseur", label: "Crédit fournisseur" },
 ];
 
-export const purchasePaymentLabels: Record<PurchasePaymentMethod, string> =
-  Object.fromEntries(
-    purchasePaymentMethods.map((method) => [method.value, method.label]),
-  ) as Record<PurchasePaymentMethod, string>;
+export const purchasePaymentLabels: Record<PurchasePaymentMethod, string> = {
+  especes: purchasePaymentMethods[0].label,
+  banque: "Banque",
+  credit_fournisseur: purchasePaymentMethods.at(-1)?.label ?? "Crédit fournisseur",
+  carte: "Carte",
+  cheque: "Chèque",
+  virement: "Virement",
+};

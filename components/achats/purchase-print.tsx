@@ -269,6 +269,17 @@ export function PurchasePrint({ purchase, supplierName, onDone }: PurchasePrintP
           <dd>{pricingModeLabel}</dd>
           <dt>Mode de règlement</dt>
           <dd>{paymentLabel}</dd>
+          {purchase.modeReglement === "banque" && purchase.bankAccountingAccountCode ? (
+            <>
+              <dt>Compte bancaire</dt>
+              <dd>
+                {purchase.bankAccountingAccountCode}
+                {purchase.bankAccountingAccountName
+                  ? ` — ${purchase.bankAccountingAccountName}`
+                  : ""}
+              </dd>
+            </>
+          ) : null}
           {purchase.modeReglement === "cheque" && purchase.numeroCheque ? (
             <>
               <dt>N° chèque</dt>
