@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Eye, FileX, MoreHorizontal, Pencil, Printer, Trash2 } from "lucide-react";
 
 import { PurchaseDetailDialog } from "@/components/achats/purchase-detail-dialog";
+import { PurchasePricingModeBadge } from "@/components/achats/purchase-pricing-mode-badge";
 import { PurchasePrint } from "@/components/achats/purchase-print";
 import { PurchaseStatusBadge } from "@/components/achats/purchase-status-badge";
 import { Button } from "@/components/ui/button";
@@ -96,7 +97,13 @@ export function PurchasesTable({
             return (
               <TableRow key={purchase.id}>
                 <TableCell className="font-medium text-foreground">
-                  {purchase.numero}
+                  <span>{purchase.numero}</span>
+                  {purchase.pricingMode === "DOUBLE_DISCOUNT_HT" ? (
+                    <PurchasePricingModeBadge
+                      mode={purchase.pricingMode}
+                      className="ml-2 align-middle"
+                    />
+                  ) : null}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {purchase.date.toLocaleDateString("fr-FR", {

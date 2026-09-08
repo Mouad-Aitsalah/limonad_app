@@ -1,3 +1,4 @@
+import { PurchasePricingModeBadge } from "@/components/achats/purchase-pricing-mode-badge";
 import { PurchaseStatusBadge } from "@/components/achats/purchase-status-badge";
 import {
   Dialog,
@@ -109,6 +110,12 @@ export function PurchaseDetailDialog({
                   </p>
                 </div>
                 <div>
+                  <p className="text-xs text-muted-foreground">Type d&apos;achat</p>
+                  <p className="text-sm font-medium text-foreground">
+                    <PurchasePricingModeBadge mode={purchase.pricingMode} />
+                  </p>
+                </div>
+                <div>
                   <p className="text-xs text-muted-foreground">Date paiement</p>
                   <p className="text-sm font-medium text-foreground">
                     {formatDate(purchase.datePaiement)}
@@ -146,38 +153,81 @@ export function PurchaseDetailDialog({
                 ) : null}
               </div>
 
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Produit</TableHead>
-                    <TableHead className="text-right">Quantité</TableHead>
-                    <TableHead className="text-right">Prix Achat TTC</TableHead>
-                    <TableHead className="text-right">Remise</TableHead>
-                    <TableHead className="text-right">Sous-total TTC</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {purchase.lignes.map((line, index) => (
-                    <TableRow key={`${purchase.id}-${index}`}>
-                      <TableCell className="font-medium text-foreground">
-                        {line.productName ?? line.productId}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {line.quantite}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatCurrency(line.prixAchatTTC ?? line.prixAchat)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {line.remisePercent}%
-                      </TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {formatCurrency(line.totalTTC ?? computeLineSousTotal(line))}
-                      </TableCell>
+              {purchase.pricingMode === "DOUBLE_DISCOUNT_HT" ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Produit</TableHead>
+                      <TableHead className="text-right">Quantité</TableHead>
+                      <TableHead className="text-right">Prix brut HT</TableHead>
+                      <TableHead className="text-right">Remise 1</TableHead>
+                      <TableHead className="text-right">Remise 2</TableHead>
+                      <TableHead className="text-right">Prix net HT</TableHead>
+                      <TableHead className="text-right">Total HT</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {purchase.lignes.map((line, index) => (
+                      <TableRow key={`${purchase.id}-${index}`}>
+                        <TableCell className="font-medium text-foreground">
+                          {line.productName ?? line.productId}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {line.quantite}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(line.prixBrutHT ?? line.prixAchat)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {line.remise1Percent ?? line.remisePercent}%
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {line.remise2Percent ?? 0}%
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(line.prixNetHT ?? line.prixAchat)}
+                        </TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">
+                          {formatCurrency(line.totalHT ?? computeLineSousTotal(line))}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Produit</TableHead>
+                      <TableHead className="text-right">Quantité</TableHead>
+                      <TableHead className="text-right">Prix Achat TTC</TableHead>
+                      <TableHead className="text-right">Remise</TableHead>
+                      <TableHead className="text-right">Sous-total TTC</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {purchase.lignes.map((line, index) => (
+                      <TableRow key={`${purchase.id}-${index}`}>
+                        <TableCell className="font-medium text-foreground">
+                          {line.productName ?? line.productId}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {line.quantite}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(line.prixAchatTTC ?? line.prixAchat)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {line.remisePercent}%
+                        </TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">
+                          {formatCurrency(line.totalTTC ?? computeLineSousTotal(line))}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
 
               <Separator />
 

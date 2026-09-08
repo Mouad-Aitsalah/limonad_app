@@ -216,6 +216,18 @@ enum PurchaseStatus {
   CANCELLED
 }
 
+// How the operator entered the unit prices / discounts of a purchase. One
+// mode per purchase (mutually exclusive). CLASSIC_TTC is the historical
+// behaviour (tax-included unit price + a single % discount) and the default
+// for every pre-existing row. DOUBLE_DISCOUNT_HT: gross HT unit price
+// (prefilled from Product.purchasePrice, editable per line) with two
+// SUCCESSIVE discounts - discountRate2 applies to the price AFTER
+// discountRate, never (discountRate + discountRate2).
+enum PurchasePricingMode {
+  CLASSIC_TTC
+  DOUBLE_DISCOUNT_HT
+}
+
 // BI Phase 2A - operating expenses (loyer, carburant, electricite...),
 // deliberately separate from Purchase (merchandise). Same 3-state shape as
 // PurchaseStatus/TruckLoadingStatus: DRAFT is editable, VALIDATED counts
@@ -1450,6 +1462,9 @@ model Purchase {
   depotId           String
   depot             Depot          @relation(fields: [depotId], references: [id], onDelete: Restrict)
   status            PurchaseStatus @default(DRAFT)
+  // Price-entry mode for the whole purchase (see PurchasePricingMode).
+  // Every pre-existing row keeps CLASSIC_TTC via this default.
+  pricingMode       PurchasePricingMode @default(CLASSIC_TTC)
   orderDate         DateTime
   receivedAt        DateTime?
   paymentMethod     String         @default("credit_fournisseur")
@@ -1486,8 +1501,16 @@ model PurchaseLine {
   product           Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
   orderedQuantity   Int
   receivedQuantity  Int      @default(0)
+  // CLASSIC_TTC: gross HT unit price derived from the TTC input.
+  // DOUBLE_DISCOUNT_HT: gross HT unit price as entered (prefilled from
+  // Product.purchasePrice, editable per line - Product.purchasePrice itself
+  // is never touched).
   unitPurchasePrice Decimal  @db.Decimal(12, 2)
+  // CLASSIC_TTC: the single % discount. DOUBLE_DISCOUNT_HT: discount 1.
   discountRate      Decimal  @default(0) @db.Decimal(5, 2)
+  // DOUBLE_DISCOUNT_HT only: discount 2, applied to the price AFTER
+  // discount 1 (never discountRate + discountRate2). 0 for CLASSIC_TTC.
+  discountRate2     Decimal  @default(0) @db.Decimal(5, 2)
   taxRate           Decimal  @db.Decimal(5, 2)
   totalHT           Decimal  @db.Decimal(12, 2)
   taxAmount         Decimal  @default(0) @db.Decimal(12, 2)

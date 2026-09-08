@@ -5,6 +5,10 @@ import { z } from "zod";
 import { Prisma } from "@/lib/generated/prisma/client";
 import type { PurchaseGetPayload } from "@/lib/generated/prisma/models/Purchase";
 import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
+import {
+  calculateDoubleDiscountPrice,
+  computeDoubleDiscountLine,
+} from "@/lib/purchase-pricing";
 import { prisma } from "@/lib/prisma";
 import { postPurchaseAccountingEntry } from "@/lib/server/accounting";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
@@ -21,7 +25,44 @@ const purchasePaymentMethods = [
   "credit_fournisseur",
 ] as const;
 
-const purchaseSchema = z.object({
+// Sanity-bounded % (0..100). NaN / <0 / >100 are rejected up front.
+const percentSchema = z.coerce.number().min(0).max(100).optional().default(0);
+// F8-D: input-level sanity bounds only, not the real protection - a
+// plausible quantity times a plausible price can still overflow once
+// multiplied together (see assertMoneyRange calls, the actual gate).
+const quantiteSchema = z.coerce
+  .number()
+  .int()
+  .positive("La quantite doit etre positive.")
+  .max(1_000_000);
+
+// CLASSIC_TTC line: tax-INCLUDED unit price + one % discount. HT / VAT are
+// derived server-side (computedLines map below) - unchanged behaviour.
+const classicLineSchema = z.object({
+  productId: z.string().trim().min(1, "Le produit est obligatoire."),
+  quantite: quantiteSchema,
+  prixAchatTTC: z.coerce
+    .number()
+    .positive("Le prix d'achat doit etre positif.")
+    .max(MONEY_RANGE_MAX_NUMBER),
+  remisePercent: percentSchema,
+});
+
+// DOUBLE_DISCOUNT_HT line: gross HT unit price (prefilled from
+// Product.purchasePrice, editable) + two SUCCESSIVE discounts. Net HT / VAT /
+// TTC are derived server-side via computeDoubleDiscountLine.
+const doubleDiscountLineSchema = z.object({
+  productId: z.string().trim().min(1, "Le produit est obligatoire."),
+  quantite: quantiteSchema,
+  prixBrutHT: z.coerce
+    .number()
+    .positive("Le prix brut HT doit etre positif.")
+    .max(MONEY_RANGE_MAX_NUMBER),
+  remise1Percent: percentSchema,
+  remise2Percent: percentSchema,
+});
+
+const purchaseBaseSchema = z.object({
   date: z.string().trim().min(1, "La date est obligatoire."),
   fournisseurId: z.string().trim().min(1, "Le fournisseur est obligatoire."),
   modeReglement: z.enum(purchasePaymentMethods),
@@ -29,31 +70,47 @@ const purchaseSchema = z.object({
   banque: z.string().trim().nullable().optional(),
   datePaiement: z.string().trim().nullable().optional(),
   observation: z.string().trim().nullable().optional(),
-  lignes: z
-    .array(
-      z.object({
-        productId: z.string().trim().min(1, "Le produit est obligatoire."),
-        // F8-D: input-level sanity bounds only, not the real protection - a
-        // plausible quantity times a plausible price can still overflow
-        // once multiplied together (see assertMoneyRange calls below, the
-        // actual gate on the computed amount).
-        quantite: z.coerce
-          .number()
-          .int()
-          .positive("La quantite doit etre positive.")
-          .max(1_000_000),
-        // The purchase form now works in TTC: this is the unit purchase
-        // price tax INCLUDED. HT / VAT are derived server-side (see the
-        // computedLines map below) so the accounting entry stays correct.
-        prixAchatTTC: z.coerce
-          .number()
-          .positive("Le prix d'achat doit etre positif.")
-          .max(MONEY_RANGE_MAX_NUMBER),
-        remisePercent: z.coerce.number().min(0).max(100).optional().default(0),
-      }),
-    )
-    .min(1, "Ajoutez au moins un produit."),
 });
+
+// A caller that never sends `pricingMode` (old client, external script) keeps
+// today's behaviour exactly: CLASSIC_TTC.
+const purchaseSchema = z.preprocess(
+  (value) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      !("pricingMode" in value)
+    ) {
+      return { ...value, pricingMode: "CLASSIC_TTC" };
+    }
+    return value;
+  },
+  z.discriminatedUnion("pricingMode", [
+    purchaseBaseSchema.extend({
+      pricingMode: z.literal("CLASSIC_TTC"),
+      lignes: z.array(classicLineSchema).min(1, "Ajoutez au moins un produit."),
+    }),
+    purchaseBaseSchema.extend({
+      pricingMode: z.literal("DOUBLE_DISCOUNT_HT"),
+      lignes: z
+        .array(doubleDiscountLineSchema)
+        .min(1, "Ajoutez au moins un produit."),
+    }),
+  ]),
+);
+
+type ComputedPurchaseLine = {
+  productId: string;
+  quantite: number;
+  unitPurchasePriceHT: number;
+  discountRate: number;
+  discountRate2: number;
+  taxRate: number;
+  taxAmount: number;
+  totalHT: number;
+  totalTTC: number;
+};
 
 const purchaseInclude = {
   supplier: { select: { id: true, name: true } },
@@ -95,7 +152,10 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
     );
   }
 
-  const normalizedLines = normalizeLines(parsed.data.lignes);
+  const productIds = parsed.data.lignes.map((line) => line.productId);
+  if (new Set(productIds).size !== productIds.length) {
+    throw new OperationsServiceError("Un produit ne peut apparaitre qu'une fois.", 422);
+  }
   const orderDate = parsePurchaseDate(parsed.data.date);
   const paymentDate = parsed.data.datePaiement
     ? parsePurchaseDate(parsed.data.datePaiement)
@@ -143,7 +203,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
         }),
         tx.product.findMany({
           where: {
-            id: { in: normalizedLines.map((line) => line.productId) },
+            id: { in: productIds },
             organizationId: sessionUser.organizationId,
             status: "ACTIVE",
           },
@@ -155,45 +215,86 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
       if (!stockLocation || stockLocation.type !== "DEPOT" || !stockLocation.active) {
         throw new OperationsServiceError("Emplacement depot introuvable.", 404);
       }
-      if (products.length !== normalizedLines.length) {
+      if (products.length !== productIds.length) {
         throw new OperationsServiceError("Un produit est introuvable ou inactif.", 422);
       }
 
       const productById = new Map(products.map((product) => [product.id, product]));
-      const computedLines = normalizedLines.map((line) => {
-        const product = productById.get(line.productId);
+      const taxRateFor = (productId: string) => {
+        const product = productById.get(productId);
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
+        return product.taxRate.toNumber();
+      };
 
-        // TTC-first derivation: the operator types the tax-included unit
-        // price and a % discount on the TTC subtotal (matches the form's
-        // visible total). HT and VAT are then derived from the TTC total so
-        // the accounting entry (subtotalHT / taxAmount / totalTTC) stays
-        // exact - taxAmount is always totalTTC - totalHT.
-        const taxRate = product.taxRate.toNumber();
-        const grossTTC = line.prixAchatTTC * line.quantite;
-        assertMoneyRange(line.prixAchatTTC, "line.prixAchatTTC");
-        assertMoneyRange(grossTTC, "line.grossTTC");
-        const discountAmount = roundMoney(grossTTC * (line.remisePercent / 100));
-        const totalTTC = roundMoney(grossTTC - discountAmount);
-        const totalHT = roundMoney(totalTTC / (1 + taxRate / 100));
-        const taxAmount = roundMoney(totalTTC - totalHT);
-        // Stored unit purchase price stays HT (same meaning as every other
-        // *HT column and as historical rows) - derived from the TTC input.
-        const unitPurchasePriceHT = roundMoney(line.prixAchatTTC / (1 + taxRate / 100));
-        assertMoneyRange(discountAmount, "line.discountAmount");
-        assertMoneyRange(totalHT, "line.totalHT");
-        assertMoneyRange(taxAmount, "line.taxAmount");
-        assertMoneyRange(totalTTC, "line.totalTTC");
-
-        return {
-          ...line,
-          taxRate,
-          taxAmount,
-          totalHT,
-          totalTTC,
-          unitPurchasePriceHT,
-        };
-      });
+      // Two mutually-exclusive derivations, branched once on the purchase's
+      // pricing mode (never per line - a purchase is entirely one mode).
+      const computedLines: ComputedPurchaseLine[] =
+        parsed.data.pricingMode === "DOUBLE_DISCOUNT_HT"
+          ? parsed.data.lignes.map((line) => {
+              // Gross HT unit price + two SUCCESSIVE discounts (discount 2 on
+              // the RESULT of discount 1, never their sum). Net HT is the line
+              // HT; VAT is HT-first on that net. The accounting entry then
+              // uses the NET aggregates below. See lib/purchase-pricing.ts.
+              const taxRate = taxRateFor(line.productId);
+              const grossHT = line.prixBrutHT;
+              assertMoneyRange(grossHT, "line.prixBrutHT");
+              const t = computeDoubleDiscountLine({
+                quantite: line.quantite,
+                grossHT,
+                discount1: line.remise1Percent,
+                discount2: line.remise2Percent,
+                taxRate,
+              });
+              assertMoneyRange(t.totalHT, "line.totalHT");
+              assertMoneyRange(t.taxAmount, "line.taxAmount");
+              assertMoneyRange(t.totalTTC, "line.totalTTC");
+              return {
+                productId: line.productId,
+                quantite: line.quantite,
+                // The gross HT actually used (operator-editable) -
+                // Product.purchasePrice is never written by a purchase.
+                unitPurchasePriceHT: roundMoney(grossHT),
+                discountRate: line.remise1Percent,
+                discountRate2: line.remise2Percent,
+                taxRate,
+                taxAmount: t.taxAmount,
+                totalHT: t.totalHT,
+                totalTTC: t.totalTTC,
+              };
+            })
+          : parsed.data.lignes.map((line) => {
+              // CLASSIC_TTC - unchanged. The operator types the tax-included
+              // unit price and a % discount on the TTC subtotal; HT and VAT
+              // are derived so taxAmount is always totalTTC - totalHT.
+              const taxRate = taxRateFor(line.productId);
+              const grossTTC = line.prixAchatTTC * line.quantite;
+              assertMoneyRange(line.prixAchatTTC, "line.prixAchatTTC");
+              assertMoneyRange(grossTTC, "line.grossTTC");
+              const discountAmount = roundMoney(
+                grossTTC * (line.remisePercent / 100),
+              );
+              const totalTTC = roundMoney(grossTTC - discountAmount);
+              const totalHT = roundMoney(totalTTC / (1 + taxRate / 100));
+              const taxAmount = roundMoney(totalTTC - totalHT);
+              const unitPurchasePriceHT = roundMoney(
+                line.prixAchatTTC / (1 + taxRate / 100),
+              );
+              assertMoneyRange(discountAmount, "line.discountAmount");
+              assertMoneyRange(totalHT, "line.totalHT");
+              assertMoneyRange(taxAmount, "line.taxAmount");
+              assertMoneyRange(totalTTC, "line.totalTTC");
+              return {
+                productId: line.productId,
+                quantite: line.quantite,
+                unitPurchasePriceHT,
+                discountRate: line.remisePercent,
+                discountRate2: 0,
+                taxRate,
+                taxAmount,
+                totalHT,
+                totalTTC,
+              };
+            });
       const subtotalHT = roundMoney(
         computedLines.reduce((sum, line) => sum + line.totalHT, 0),
       );
@@ -215,6 +316,7 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
           supplierId: supplier.id,
           depotId: user.depotId,
           status: "RECEIVED",
+          pricingMode: parsed.data.pricingMode,
           orderDate,
           receivedAt: orderDate,
           paymentMethod: parsed.data.modeReglement,
@@ -239,7 +341,8 @@ export async function createPurchase(input: unknown): Promise<Purchase> {
               orderedQuantity: line.quantite,
               receivedQuantity: line.quantite,
               unitPurchasePrice: line.unitPurchasePriceHT,
-              discountRate: line.remisePercent,
+              discountRate: line.discountRate,
+              discountRate2: line.discountRate2,
               taxRate: line.taxRate,
               taxAmount: line.taxAmount,
               totalHT: line.totalHT,
@@ -380,18 +483,37 @@ function mapPurchaseToDto(purchase: PurchaseWithRelations): Purchase {
     utilisateurNom: purchase.createdBy.fullName,
     observation: purchase.observation ?? "",
     statut: mapPurchaseStatus(purchase.status),
+    pricingMode: purchase.pricingMode,
     lignes: purchase.lines.map((line) => {
       const unitHT = line.unitPurchasePrice.toNumber();
       const rate = line.taxRate.toNumber();
+      const remise1 = line.discountRate.toNumber();
+      const remise2 = line.discountRate2.toNumber();
+      // For DOUBLE_DISCOUNT_HT: rebuild the net unit HT from the three
+      // persisted values (gross, r1, r2) so history / detail / print show
+      // exactly what was entered. Harmless for CLASSIC_TTC (not displayed).
+      const prixNetHT = roundMoney(
+        calculateDoubleDiscountPrice({
+          grossHT: unitHT,
+          discount1: remise1,
+          discount2: remise2,
+        }).netHT,
+      );
       return {
         productId: line.productId,
         productName: line.product.name,
         quantite: line.receivedQuantity || line.orderedQuantity,
         // prixAchat kept HT for backward compatibility; prixAchatTTC is what
-        // the TTC-based UI shows.
+        // the TTC-based (classic) UI shows.
         prixAchat: unitHT,
         prixAchatTTC: roundMoney(unitHT * (1 + rate / 100)),
-        remisePercent: line.discountRate.toNumber(),
+        // Double-remise view: gross HT is the stored unit price; r1/r2 and
+        // the derived net HT.
+        prixBrutHT: unitHT,
+        remise1Percent: remise1,
+        remise2Percent: remise2,
+        prixNetHT,
+        remisePercent: remise1,
         tauxTVA: rate,
         totalHT: line.totalHT.toNumber(),
         totalTVA: line.taxAmount.toNumber(),
@@ -401,20 +523,6 @@ function mapPurchaseToDto(purchase: PurchaseWithRelations): Purchase {
     createdAt: purchase.createdAt,
     updatedAt: purchase.updatedAt,
   };
-}
-
-function normalizeLines(lines: z.infer<typeof purchaseSchema>["lignes"]) {
-  const seen = new Set<string>();
-  return lines.map((line) => {
-    if (seen.has(line.productId)) {
-      throw new OperationsServiceError("Un produit ne peut apparaitre qu'une fois.", 422);
-    }
-    seen.add(line.productId);
-    return {
-      ...line,
-      remisePercent: line.remisePercent ?? 0,
-    };
-  });
 }
 
 async function nextPurchaseNumber(

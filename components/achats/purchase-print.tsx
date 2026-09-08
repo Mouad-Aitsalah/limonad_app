@@ -127,6 +127,26 @@ const PRINT_CSS = `
     white-space: nowrap;
   }
 
+  /* DOUBLE_DISCOUNT_HT: 7 columns, tighter widths for A5 portrait. */
+  table.pp-lines th.pp-d-qty,
+  table.pp-lines th.pp-d-brut,
+  table.pp-lines th.pp-d-r1,
+  table.pp-lines th.pp-d-r2,
+  table.pp-lines th.pp-d-net,
+  table.pp-lines th.pp-d-amt { text-align: right; }
+  .pp-d-prod { width: auto; }
+  .pp-d-qty  { width: 8mm;  text-align: center; }
+  .pp-d-brut { width: 18mm; text-align: right; }
+  .pp-d-r1   { width: 11mm; text-align: right; }
+  .pp-d-r2   { width: 11mm; text-align: right; }
+  .pp-d-net  { width: 18mm; text-align: right; }
+  .pp-d-amt  { width: 20mm; text-align: right; }
+  td.pp-d-prod { overflow-wrap: anywhere; word-break: break-word; }
+  td.pp-d-qty, td.pp-d-brut, td.pp-d-r1, td.pp-d-r2, td.pp-d-net, td.pp-d-amt {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
   .pp-totals {
     margin-left: auto;
     width: 62mm;
@@ -196,16 +216,32 @@ export function PurchasePrint({ purchase, supplierName, onDone }: PurchasePrintP
     purchase.fournisseurNom?.trim() || supplierName?.trim() || "-";
   const paymentLabel = purchasePaymentLabels[purchase.modeReglement] ?? purchase.modeReglement;
   const isCreditSupplier = purchase.modeReglement === "credit_fournisseur";
+  const isDoubleDiscount = purchase.pricingMode === "DOUBLE_DISCOUNT_HT";
+  const pricingModeLabel = isDoubleDiscount
+    ? "Double remise HT"
+    : "Classique TTC";
 
-  const hasDiscount = purchase.lignes.some((line) => (line.remisePercent ?? 0) > 0);
-  const discountTotalTTC = hasDiscount
-    ? purchase.lignes.reduce((sum, line) => {
+  // Classic: discount is expressed on the TTC subtotal. Double: total effect
+  // of the two successive HT discounts = gross HT - net HT.
+  const hasDiscount = isDoubleDiscount
+    ? purchase.lignes.some(
+        (line) =>
+          (line.remise1Percent ?? line.remisePercent ?? 0) > 0 ||
+          (line.remise2Percent ?? 0) > 0,
+      )
+    : purchase.lignes.some((line) => (line.remisePercent ?? 0) > 0);
+  const grossHTTotal = purchase.lignes.reduce(
+    (sum, line) => sum + (line.prixBrutHT ?? line.prixAchat) * line.quantite,
+    0,
+  );
+  const discountTotal = isDoubleDiscount
+    ? Math.max(0, grossHTTotal - totals.totalHT)
+    : purchase.lignes.reduce((sum, line) => {
         const unitTTC = line.prixAchatTTC ?? line.prixAchat;
         const gross = unitTTC * line.quantite;
         const net = line.totalTTC ?? computeLineSousTotal(line);
         return sum + Math.max(0, gross - net);
-      }, 0)
-    : 0;
+      }, 0);
 
   const doc = (
     <>
@@ -229,6 +265,8 @@ export function PurchasePrint({ purchase, supplierName, onDone }: PurchasePrintP
           <dd>{resolvedSupplier}</dd>
           <dt>Utilisateur</dt>
           <dd>{purchase.utilisateurNom ?? purchase.utilisateurId}</dd>
+          <dt>Type d&apos;achat</dt>
+          <dd>{pricingModeLabel}</dd>
           <dt>Mode de règlement</dt>
           <dd>{paymentLabel}</dd>
           {purchase.modeReglement === "cheque" && purchase.numeroCheque ? (
@@ -262,34 +300,70 @@ export function PurchasePrint({ purchase, supplierName, onDone }: PurchasePrintP
           </p>
         ) : null}
 
-        <table className="pp-lines">
-          <thead>
-            <tr>
-              <th className="pp-col-prod">PRODUIT</th>
-              <th className="pp-col-qty">QTÉ</th>
-              <th className="pp-col-pu">PRIX TTC</th>
-              <th className="pp-col-rem">{"REM. %"}</th>
-              <th className="pp-col-amt">MONTANT</th>
-            </tr>
-          </thead>
-          <tbody>
-            {purchase.lignes.map((line, index) => {
-              const unitTTC = line.prixAchatTTC ?? line.prixAchat;
-              const amountTTC = line.totalTTC ?? computeLineSousTotal(line);
-              return (
-                <tr key={`${purchase.id}-${line.productId}-${index}`}>
-                  <td className="pp-col-prod">{line.productName ?? line.productId}</td>
-                  <td className="pp-col-qty">{line.quantite}</td>
-                  <td className="pp-col-pu">{formatCurrency(unitTTC)}</td>
-                  <td className="pp-col-rem">
-                    {(line.remisePercent ?? 0) > 0 ? `${line.remisePercent} %` : "-"}
-                  </td>
-                  <td className="pp-col-amt">{formatCurrency(amountTTC)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        {isDoubleDiscount ? (
+          <table className="pp-lines">
+            <thead>
+              <tr>
+                <th className="pp-d-prod">PRODUIT</th>
+                <th className="pp-d-qty">QTÉ</th>
+                <th className="pp-d-brut">PRIX BRUT HT</th>
+                <th className="pp-d-r1">REM. 1</th>
+                <th className="pp-d-r2">REM. 2</th>
+                <th className="pp-d-net">PRIX NET HT</th>
+                <th className="pp-d-amt">MONTANT HT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {purchase.lignes.map((line, index) => {
+                const brutHT = line.prixBrutHT ?? line.prixAchat;
+                const r1 = line.remise1Percent ?? line.remisePercent ?? 0;
+                const r2 = line.remise2Percent ?? 0;
+                const netHT = line.prixNetHT ?? line.prixAchat;
+                const amountHT = line.totalHT ?? computeLineSousTotal(line);
+                return (
+                  <tr key={`${purchase.id}-${line.productId}-${index}`}>
+                    <td className="pp-d-prod">{line.productName ?? line.productId}</td>
+                    <td className="pp-d-qty">{line.quantite}</td>
+                    <td className="pp-d-brut">{formatCurrency(brutHT)}</td>
+                    <td className="pp-d-r1">{r1 > 0 ? `${r1} %` : "-"}</td>
+                    <td className="pp-d-r2">{r2 > 0 ? `${r2} %` : "-"}</td>
+                    <td className="pp-d-net">{formatCurrency(netHT)}</td>
+                    <td className="pp-d-amt">{formatCurrency(amountHT)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <table className="pp-lines">
+            <thead>
+              <tr>
+                <th className="pp-col-prod">PRODUIT</th>
+                <th className="pp-col-qty">QTÉ</th>
+                <th className="pp-col-pu">PRIX TTC</th>
+                <th className="pp-col-rem">{"REM. %"}</th>
+                <th className="pp-col-amt">MONTANT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {purchase.lignes.map((line, index) => {
+                const unitTTC = line.prixAchatTTC ?? line.prixAchat;
+                const amountTTC = line.totalTTC ?? computeLineSousTotal(line);
+                return (
+                  <tr key={`${purchase.id}-${line.productId}-${index}`}>
+                    <td className="pp-col-prod">{line.productName ?? line.productId}</td>
+                    <td className="pp-col-qty">{line.quantite}</td>
+                    <td className="pp-col-pu">{formatCurrency(unitTTC)}</td>
+                    <td className="pp-col-rem">
+                      {(line.remisePercent ?? 0) > 0 ? `${line.remisePercent} %` : "-"}
+                    </td>
+                    <td className="pp-col-amt">{formatCurrency(amountTTC)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
 
         <div className="pp-totals">
           <div className="pp-row">
@@ -300,10 +374,10 @@ export function PurchasePrint({ purchase, supplierName, onDone }: PurchasePrintP
             <span>TVA</span>
             <span>{formatCurrency(totals.totalTVA)}</span>
           </div>
-          {hasDiscount && discountTotalTTC > 0 ? (
+          {hasDiscount && discountTotal > 0 ? (
             <div className="pp-row">
-              <span>Remise</span>
-              <span>- {formatCurrency(discountTotalTTC)}</span>
+              <span>{isDoubleDiscount ? "Remise (R1 + R2)" : "Remise"}</span>
+              <span>- {formatCurrency(discountTotal)}</span>
             </div>
           ) : null}
           <div className="pp-row pp-grand">

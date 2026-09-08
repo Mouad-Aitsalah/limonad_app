@@ -109,6 +109,7 @@ function buildPurchase(index: number, date: Date): Purchase {
     utilisateurId: pick(eligibleUsers),
     observation: "",
     statut,
+    pricingMode: "CLASSIC_TTC",
     lignes: buildLines(),
     createdAt: date,
     updatedAt: date,

@@ -34,8 +34,16 @@ import {
   computeDraftPurchaseTotalsTTC,
   DEFAULT_PURCHASE_TVA_RATE,
 } from "@/lib/purchase-calculations";
+import {
+  computeDoubleDiscountLine,
+  computeDraftPurchaseTotalsDoubleDiscountHT,
+} from "@/lib/purchase-pricing";
 import { cn, formatCurrency } from "@/lib/utils";
-import type { PurchaseInput, PurchasePaymentMethod } from "@/types/purchase";
+import type {
+  PurchaseInput,
+  PurchasePaymentMethod,
+  PurchasePricingMode,
+} from "@/types/purchase";
 import type { ProductDto, ProductOptionDto } from "@/types/product-dto";
 
 function productPurchasePriceTTC(product: ProductDto | null): number {
@@ -53,9 +61,15 @@ type LineDraft = {
   // searched past it. Mirrors StockAdjustmentDialog's `selectedProduct`.
   product: ProductDto | null;
   quantite: number;
+  // --- CLASSIC_TTC ---
   /** Unit purchase price tax INCLUDED (prefilled from product.purchasePrice + taxRate). */
   prixAchatTTC: number;
   remisePercent: number;
+  // --- DOUBLE_DISCOUNT_HT ---
+  /** Gross HT unit price - prefilled from product.purchasePrice, editable per line. */
+  prixBrutHT: number;
+  remise1Percent: number;
+  remise2Percent: number;
 };
 
 function createLine(key: string, productOptions: ProductDto[]): LineDraft {
@@ -67,6 +81,9 @@ function createLine(key: string, productOptions: ProductDto[]): LineDraft {
     quantite: 1,
     prixAchatTTC: productPurchasePriceTTC(product),
     remisePercent: 0,
+    prixBrutHT: product?.purchasePrice ?? 0,
+    remise1Percent: 0,
+    remise2Percent: 0,
   };
 }
 
@@ -98,6 +115,12 @@ function buildDefaultValues(productOptions: ProductDto[]): PurchaseFormValues {
   };
 }
 
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  if (value > 100) return 100;
+  return value;
+}
+
 type FormErrors = {
   fournisseur?: string;
   numeroCheque?: string;
@@ -105,7 +128,10 @@ type FormErrors = {
   invalidLineKeys: Record<string, boolean>;
 };
 
-function validate(values: PurchaseFormValues): FormErrors {
+function validate(
+  values: PurchaseFormValues,
+  pricingMode: PurchasePricingMode,
+): FormErrors {
   const errors: FormErrors = { invalidLineKeys: {} };
 
   if (values.fournisseurId.trim().length === 0) {
@@ -125,18 +151,20 @@ function validate(values: PurchaseFormValues): FormErrors {
 
   let hasLineError = false;
   for (const line of values.lignes) {
-    if (
-      line.productId.trim().length === 0 ||
-      line.quantite <= 0 ||
-      line.prixAchatTTC <= 0
-    ) {
+    const priceInvalid =
+      pricingMode === "DOUBLE_DISCOUNT_HT"
+        ? line.prixBrutHT <= 0
+        : line.prixAchatTTC <= 0;
+    if (line.productId.trim().length === 0 || line.quantite <= 0 || priceInvalid) {
       errors.invalidLineKeys[line.key] = true;
       hasLineError = true;
     }
   }
   if (hasLineError && !errors.lignesMessage) {
     errors.lignesMessage =
-      "Chaque ligne doit avoir une quantité et un prix supérieurs à 0.";
+      pricingMode === "DOUBLE_DISCOUNT_HT"
+        ? "Chaque ligne doit avoir une quantité et un prix brut HT supérieurs à 0."
+        : "Chaque ligne doit avoir une quantité et un prix supérieurs à 0.";
   }
 
   return errors;
@@ -167,9 +195,17 @@ export function PurchaseForm({
   const [values, setValues] = React.useState<PurchaseFormValues>(
     () => buildDefaultValues(productOptions),
   );
+  // One mode for the whole purchase (mutually exclusive). CLASSIC_TTC keeps
+  // the historical behaviour exactly.
+  const [pricingMode, setPricingMode] =
+    React.useState<PurchasePricingMode>("CLASSIC_TTC");
   const [errors, setErrors] = React.useState<FormErrors>({ invalidLineKeys: {} });
   const [submitting, setSubmitting] = React.useState(false);
   const lineKeyCounter = React.useRef(1);
+  // True once the operator has actually touched the lines - drives the
+  // "changing the mode clears the lines" confirmation (an untouched default
+  // line switches freely).
+  const linesDirtyRef = React.useRef(false);
 
   function handleChange<K extends keyof PurchaseFormValues>(
     field: K,
@@ -179,6 +215,7 @@ export function PurchaseForm({
   }
 
   function updateLine(key: string, patch: Partial<LineDraft>) {
+    linesDirtyRef.current = true;
     setValues((prev) => ({
       ...prev,
       lignes: prev.lignes.map((line) =>
@@ -188,6 +225,7 @@ export function PurchaseForm({
   }
 
   function addLine() {
+    linesDirtyRef.current = true;
     lineKeyCounter.current += 1;
     setValues((prev) => ({
       ...prev,
@@ -199,26 +237,59 @@ export function PurchaseForm({
   }
 
   function removeLine(key: string) {
+    linesDirtyRef.current = true;
     setValues((prev) => ({
       ...prev,
       lignes: prev.lignes.filter((line) => line.key !== key),
     }));
   }
 
-  const totals = computeDraftPurchaseTotalsTTC(
-    values.lignes.map((line) => ({
-      quantite: line.quantite,
-      prixAchatTTC: line.prixAchatTTC,
-      remisePercent: line.remisePercent,
-      taxRate: line.product?.taxRate ?? DEFAULT_PURCHASE_TVA_RATE,
-    })),
-  );
+  // §8: free switch while nothing is entered; otherwise confirm - and never
+  // silently convert prices, always reset to a single fresh line.
+  function switchMode(next: PurchasePricingMode) {
+    if (next === pricingMode) return;
+    if (linesDirtyRef.current) {
+      const ok = window.confirm(
+        "Changer le type d'achat supprimera les lignes déjà saisies.\nContinuer ?",
+      );
+      if (!ok) return;
+    }
+    lineKeyCounter.current += 1;
+    linesDirtyRef.current = false;
+    setValues((prev) => ({
+      ...prev,
+      lignes: [createLine(`line-${lineKeyCounter.current}`, productOptions)],
+    }));
+    setErrors({ invalidLineKeys: {} });
+    setPricingMode(next);
+  }
+
+  const isDouble = pricingMode === "DOUBLE_DISCOUNT_HT";
+
+  const totals = isDouble
+    ? computeDraftPurchaseTotalsDoubleDiscountHT(
+        values.lignes.map((line) => ({
+          quantite: line.quantite,
+          grossHT: line.prixBrutHT,
+          discount1: line.remise1Percent,
+          discount2: line.remise2Percent,
+          taxRate: line.product?.taxRate ?? DEFAULT_PURCHASE_TVA_RATE,
+        })),
+      )
+    : computeDraftPurchaseTotalsTTC(
+        values.lignes.map((line) => ({
+          quantite: line.quantite,
+          prixAchatTTC: line.prixAchatTTC,
+          remisePercent: line.remisePercent,
+          taxRate: line.product?.taxRate ?? DEFAULT_PURCHASE_TVA_RATE,
+        })),
+      );
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting) return;
 
-    const validationErrors = validate(values);
+    const validationErrors = validate(values, pricingMode);
     setErrors(validationErrors);
     if (hasBlockingErrors(validationErrors)) return;
 
@@ -234,12 +305,21 @@ export function PurchaseForm({
         utilisateurId: currentUser?.id ?? "",
         observation: values.observation,
         statut: "validee",
-        lignes: values.lignes.map((line) => ({
-          productId: line.productId,
-          quantite: line.quantite,
-          prixAchatTTC: line.prixAchatTTC,
-          remisePercent: line.remisePercent,
-        })),
+        pricingMode,
+        lignes: isDouble
+          ? values.lignes.map((line) => ({
+              productId: line.productId,
+              quantite: line.quantite,
+              prixBrutHT: line.prixBrutHT,
+              remise1Percent: line.remise1Percent,
+              remise2Percent: line.remise2Percent,
+            }))
+          : values.lignes.map((line) => ({
+              productId: line.productId,
+              quantite: line.quantite,
+              prixAchatTTC: line.prixAchatTTC,
+              remisePercent: line.remisePercent,
+            })),
       });
     } catch (error) {
       toast.error(
@@ -406,6 +486,39 @@ export function PurchaseForm({
         <Separator />
 
         <div>
+          <Label className="text-sm font-semibold text-foreground">
+            Type d&apos;achat
+          </Label>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={pricingMode === "CLASSIC_TTC" ? "default" : "outline"}
+              size="sm"
+              aria-pressed={pricingMode === "CLASSIC_TTC"}
+              onClick={() => switchMode("CLASSIC_TTC")}
+            >
+              Classique TTC
+            </Button>
+            <Button
+              type="button"
+              variant={
+                pricingMode === "DOUBLE_DISCOUNT_HT" ? "default" : "outline"
+              }
+              size="sm"
+              aria-pressed={pricingMode === "DOUBLE_DISCOUNT_HT"}
+              onClick={() => switchMode("DOUBLE_DISCOUNT_HT")}
+            >
+              Double remise HT
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {isDouble
+              ? "Prix brut HT (repris de la fiche produit, modifiable) puis remise 1 puis remise 2 successives."
+              : "Prix d'achat TTC et une remise, comme aujourd'hui."}
+          </p>
+        </div>
+
+        <div>
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-foreground">Produits</h3>
             <Button type="button" variant="outline" size="sm" onClick={addLine}>
@@ -426,15 +539,39 @@ export function PurchaseForm({
                 <TableRow>
                   <TableHead>Produit</TableHead>
                   <TableHead className="w-24 text-right">Quantité</TableHead>
-                  <TableHead className="w-28 text-right">Prix Achat TTC</TableHead>
-                  <TableHead className="w-24 text-right">Remise %</TableHead>
-                  <TableHead className="text-right">Sous-total TTC</TableHead>
+                  {isDouble ? (
+                    <>
+                      <TableHead className="w-28 text-right">
+                        Prix brut HT
+                      </TableHead>
+                      <TableHead className="w-24 text-right">Remise 1 %</TableHead>
+                      <TableHead className="w-24 text-right">Remise 2 %</TableHead>
+                      <TableHead className="text-right">Prix net HT</TableHead>
+                    </>
+                  ) : (
+                    <>
+                      <TableHead className="w-28 text-right">
+                        Prix Achat TTC
+                      </TableHead>
+                      <TableHead className="w-24 text-right">Remise %</TableHead>
+                      <TableHead className="text-right">Sous-total TTC</TableHead>
+                    </>
+                  )}
                   <TableHead className="w-8" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {values.lignes.map((line) => {
                   const invalid = !!errors.invalidLineKeys[line.key];
+                  const taxRate =
+                    line.product?.taxRate ?? DEFAULT_PURCHASE_TVA_RATE;
+                  const netUnitHT = computeDoubleDiscountLine({
+                    quantite: line.quantite,
+                    grossHT: line.prixBrutHT,
+                    discount1: line.remise1Percent,
+                    discount2: line.remise2Percent,
+                    taxRate,
+                  }).netUnitHTDisplay;
 
                   return (
                     <TableRow key={line.key}>
@@ -447,6 +584,7 @@ export function PurchaseForm({
                               productId: product.id,
                               product,
                               prixAchatTTC: productPurchasePriceTTC(product),
+                              prixBrutHT: product.purchasePrice,
                             });
                           }}
                           preload={productOptions}
@@ -471,47 +609,116 @@ export function PurchaseForm({
                           )}
                         />
                       </TableCell>
-                      <TableCell>
-                        <input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={line.prixAchatTTC}
-                          onChange={(event) =>
-                            updateLine(line.key, {
-                              prixAchatTTC: Number(event.target.value),
-                            })
-                          }
-                          aria-invalid={invalid}
-                          className={cn(
-                            "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
-                            invalid && "border-destructive",
-                          )}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          value={line.remisePercent}
-                          onChange={(event) =>
-                            updateLine(line.key, {
-                              remisePercent: Number(event.target.value),
-                            })
-                          }
-                          className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
-                        />
-                      </TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {formatCurrency(
-                          computeDraftLineTotalTTC({
-                            quantite: line.quantite,
-                            prixAchatTTC: line.prixAchatTTC,
-                            remisePercent: line.remisePercent,
-                          }),
-                        )}
-                      </TableCell>
+
+                      {isDouble ? (
+                        <>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={line.prixBrutHT}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  prixBrutHT: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Prix brut HT"
+                              aria-invalid={invalid}
+                              className={cn(
+                                "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
+                                invalid && "border-destructive",
+                              )}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={line.remise1Percent}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  remise1Percent: clampPercent(
+                                    Number(event.target.value),
+                                  ),
+                                })
+                              }
+                              aria-label="Remise 1 en pourcentage"
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={line.remise2Percent}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  remise2Percent: clampPercent(
+                                    Number(event.target.value),
+                                  ),
+                                })
+                              }
+                              aria-label="Remise 2 en pourcentage"
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            {formatCurrency(netUnitHT)}
+                          </TableCell>
+                        </>
+                      ) : (
+                        <>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={line.prixAchatTTC}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  prixAchatTTC: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Prix d'achat TTC"
+                              aria-invalid={invalid}
+                              className={cn(
+                                "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
+                                invalid && "border-destructive",
+                              )}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={line.remisePercent}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  remisePercent: clampPercent(
+                                    Number(event.target.value),
+                                  ),
+                                })
+                              }
+                              aria-label="Remise en pourcentage"
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            {formatCurrency(
+                              computeDraftLineTotalTTC({
+                                quantite: line.quantite,
+                                prixAchatTTC: line.prixAchatTTC,
+                                remisePercent: line.remisePercent,
+                              }),
+                            )}
+                          </TableCell>
+                        </>
+                      )}
+
                       <TableCell>
                         <Button
                           type="button"

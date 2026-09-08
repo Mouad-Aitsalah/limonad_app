@@ -19,6 +19,7 @@ export async function submitPurchase(input: PurchaseInput): Promise<Purchase> {
       banque: input.banque,
       datePaiement: input.datePaiement?.toISOString().slice(0, 10) ?? null,
       observation: input.observation,
+      pricingMode: input.pricingMode,
       lignes: input.lignes,
     }),
   });
