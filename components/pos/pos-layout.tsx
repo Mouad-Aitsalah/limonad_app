@@ -107,10 +107,10 @@ function mapContextProductsToPosProducts(
   }));
 }
 
-function pendingSaleNumber(sale: SaleDto): number | null {
-  const match = /^BR-\d{8}-(\d+)$/.exec(sale.invoiceNumber);
-  return match ? Number(match[1]) : null;
-}
+// Identity of the not-yet-persisted "new invoice" tab. Tab identity is never
+// a parsed/derived number - a persisted tab is keyed by its sale id, this
+// one by a fixed sentinel.
+const NEW_SLOT_KEY = "__new__";
 
 export function PosLayout({ initialContext }: PosLayoutProps) {
   const router = useRouter();
@@ -166,8 +166,20 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   // Server-persisted DRAFT sales awaiting collection, shown as numbered tabs.
   const [pendingSales, setPendingSales] = React.useState<SaleDto[]>([]);
   const [openPendingSale, setOpenPendingSale] = React.useState<SaleDto | null>(null);
-  // This is a client-only slot until it gets products and is persisted as a DRAFT.
-  const [currentSlotNumber, setCurrentSlotNumber] = React.useState(1);
+  // The real commercial number ("33/2026") reserved server-side for the
+  // still-empty "new invoice" slot (POST /api/sales/reserve-number), shown
+  // in the cart header before any product is added - so the header never
+  // reads "Nouveau". createCounterSale consumes it (passed back in the sale
+  // body) instead of reserving a fresh one. The ref mirror keeps it
+  // synchronously readable inside buildSaleBody; the in-flight ref stops a
+  // double reservation (StrictMode / racing callers).
+  const [slotReservation, setSlotReservation] = React.useState<
+    { saleNumber: number; saleYear: number } | null
+  >(null);
+  const slotReservationRef = React.useRef<{ saleNumber: number; saleYear: number } | null>(
+    null,
+  );
+  const reservationInFlightRef = React.useRef(false);
   const [preparing, setPreparing] = React.useState(false);
   const [collecting, setCollecting] = React.useState(false);
 
@@ -305,39 +317,34 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     };
   }, [cartLines]);
 
-  function nextSlotNumber(sales: SaleDto[] = pendingSales) {
-    return Math.max(
-      0,
-      ...sales.map(pendingSaleNumber).filter((number): number is number => number !== null),
-    ) + 1;
-  }
-
-  const currentInvoiceNumber = openPendingSale
-    ? pendingSaleNumber(openPendingSale) ?? currentSlotNumber
-    : currentSlotNumber;
-  // The ordering / selection / navigation key stays the numeric `number`
-  // (unchanged logic - see §3). Only the visible `label` becomes the real
-  // commercial reference: sale.displayNumber ("16/2026"), computed once by
-  // formatSaleDisplayNumber in mapSaleToDto - never rebuilt here.
+  // POS invoice tabs. A tab button shows ONLY a position index (1, 2, 3…)
+  // among the invoices currently open in this POS - it is a navigation
+  // handle, never a commercial reference. The real "N/YYYY" number lives in
+  // the cart header (activeInvoiceLabel), the ticket, /ventes and the
+  // journal - never on a tab. Tab identity is the sale id (or NEW_SLOT_KEY
+  // for the not-yet-persisted slot); pendingSales already arrives
+  // creation-ordered from the server, so index order == creation order.
   const invoiceTabs = React.useMemo(() => {
-    const tabs: { sale: SaleDto | null; number: number; label: string }[] = pendingSales.map(
-      (sale) => ({
-        sale,
-        number: pendingSaleNumber(sale) ?? 0,
-        label: sale.displayNumber,
-      }),
-    );
-    if (!openPendingSale) {
-      tabs.push({ sale: null, number: currentSlotNumber, label: "Nouveau" });
+    const tabs: { key: string; sale: SaleDto | null }[] = pendingSales.map((sale) => ({
+      key: sale.id,
+      sale,
+    }));
+    if (!openPendingSale && !editSale) {
+      tabs.push({ key: NEW_SLOT_KEY, sale: null });
     }
-    return tabs.sort((a, b) => a.number - b.number);
-  }, [currentSlotNumber, openPendingSale, pendingSales]);
-  const activeTabIndex = invoiceTabs.findIndex((tab) => tab.number === currentInvoiceNumber);
+    return tabs.map((tab, index) => ({ ...tab, position: index + 1 }));
+  }, [editSale, openPendingSale, pendingSales]);
+  const activeTabKey = openPendingSale ? openPendingSale.id : NEW_SLOT_KEY;
+  const activeTabIndex = invoiceTabs.findIndex((tab) => tab.key === activeTabKey);
+  // Cart-header "N° Facture": the real commercial reference in every mode.
+  // For the empty slot it is the server-reserved number - never "Nouveau"
+  // ("…" only for the sub-second window before the reservation lands).
   const activeInvoiceLabel =
     editSale?.displayNumber ??
     openPendingSale?.displayNumber ??
-    invoiceTabs.find((tab) => tab.number === currentInvoiceNumber)?.label ??
-    "Nouveau";
+    (slotReservation
+      ? `${slotReservation.saleNumber}/${slotReservation.saleYear}`
+      : "…");
 
   // Negative stock is allowed: the cart quantity is never capped at the
   // product's on-hand stock. The only lower bound is 1.
@@ -433,6 +440,53 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setCart((prev) => prev.filter((line) => line.productId !== productId));
   }
 
+  // Reserves (once) the real commercial number for the current empty slot so
+  // the cart header shows "33/2026" straight away. Reuses the held
+  // reservation if it has not been consumed yet - navigating between tabs
+  // never burns a number; only a sale actually being created does (see
+  // clearSlotReservation, called on the create paths). No-op in edit mode.
+  async function ensureSlotReservation() {
+    if (editSaleId) return null;
+    if (slotReservationRef.current) return slotReservationRef.current;
+    if (reservationInFlightRef.current) return null;
+    reservationInFlightRef.current = true;
+    try {
+      const response = await fetch("/api/sales/reserve-number", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          payload.message ?? "Impossible de réserver le numéro de facture.",
+        );
+      }
+      const reservation = {
+        saleNumber: payload.reservation.saleNumber as number,
+        saleYear: payload.reservation.saleYear as number,
+      };
+      slotReservationRef.current = reservation;
+      setSlotReservation(reservation);
+      return reservation;
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Impossible de réserver le numéro de facture.",
+      );
+      return null;
+    } finally {
+      reservationInFlightRef.current = false;
+    }
+  }
+
+  // A sale has taken the held reservation: drop it so the next empty slot
+  // reserves a fresh number.
+  function clearSlotReservation() {
+    slotReservationRef.current = null;
+    setSlotReservation(null);
+  }
+
   // Resets everything tied to the invoice currently being typed: cart,
   // customer (back to the default), payment method, and the idempotency key
   // (a fresh sale attempt starts here). It never touches a persisted DRAFT.
@@ -447,12 +501,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     idempotencyKeyRef.current = crypto.randomUUID();
   }
 
-  function startNewInvoice(slotNumber = nextSlotNumber()) {
+  function startNewInvoice() {
     setCheckoutOpen(false);
     setLastSale(null);
     setOpenPendingSale(null);
-    setCurrentSlotNumber(slotNumber);
     resetOperation();
+    void ensureSlotReservation();
   }
 
   // "+ Nouvelle facture" never discards products: an unprepared cart is
@@ -469,10 +523,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       return;
     }
 
-    // An unused provisional slot stays the same: no empty Sale and no gap.
+    // An unused provisional slot stays the same: no empty Sale and no gap,
+    // and it keeps the commercial number it already reserved.
     setCheckoutOpen(false);
     setLastSale(null);
     resetOperation();
+    void ensureSlotReservation();
   }
 
   async function refreshContext() {
@@ -512,6 +568,15 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         // server keeps using the catalogue price.
         ...(line.priceOverridden ? { unitPriceHT: line.unitPriceHT } : {}),
       })),
+      // The commercial number the "new invoice" tab already displayed -
+      // reused verbatim by createCounterSale so the persisted sale carries
+      // exactly that "N/YYYY" (guarded server-side).
+      ...(slotReservationRef.current
+        ? {
+            reservedSaleNumber: slotReservationRef.current.saleNumber,
+            reservedSaleYear: slotReservationRef.current.saleYear,
+          }
+        : {}),
       idempotencyKey: idempotencyKeyRef.current,
       ...extra,
     });
@@ -600,17 +665,26 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       .then((response) => (response.ok ? response.json() : { sales: [] }))
       .then((payload: { sales?: SaleDto[] }) => {
         if (!active) return;
-        const sales = payload.sales ?? [];
-        setPendingSales(sales);
-        setCurrentSlotNumber((current) =>
-          cart.length === 0 && !openPendingSale ? nextSlotNumber(sales) : current,
-        );
+        setPendingSales(payload.sales ?? []);
       })
       .catch(() => {});
     return () => {
       active = false;
     };
   }, []);
+
+  // The first empty slot gets its commercial number immediately, so the cart
+  // header never shows "Nouveau". No-op in edit mode. The reservation state
+  // is only ever set AFTER an awaited network round trip (never synchronously
+  // in this effect body), so it cannot cascade renders.
+  React.useEffect(() => {
+    if (editSaleId) return;
+    const timer = window.setTimeout(() => void ensureSlotReservation(), 0);
+    return () => window.clearTimeout(timer);
+    // ensureSlotReservation is a stable in-component function; it only reads
+    // refs and editSaleId (checked above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editSaleId]);
 
   // Edit mode: load the sale referenced by ?editSaleId and seed the POS from
   // it (client, lines with historical prices/discounts, payment method).
@@ -696,6 +770,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     }
 
     const sale = payload.sale as SaleDto;
+    // This draft took the slot's reserved number; the next empty slot must
+    // get a fresh one.
+    clearSlotReservation();
     setLastSale(sale);
     return sale;
   }
@@ -729,8 +806,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       setLastSale(payload.sale as SaleDto);
       toast.success(`Vente ${payload.sale.displayNumber} enregistrée.`);
       setCheckoutOpen(false);
+      // That sale consumed the slot's reserved number - start the next slot
+      // on a fresh one.
+      clearSlotReservation();
       resetOperation();
       await refreshContext();
+      void ensureSlotReservation();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Impossible d'enregistrer la vente.",
@@ -754,10 +835,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       );
       await syncPendingSalesState();
       if (startAnotherInvoice) {
-        startNewInvoice(Math.max(nextSlotNumber(), (pendingSaleNumber(sale) ?? 0) + 1));
+        startNewInvoice();
       } else {
         setOpenPendingSale(sale);
-        setCurrentSlotNumber(pendingSaleNumber(sale) ?? currentSlotNumber);
       }
     } catch (error) {
       toast.error(
@@ -797,7 +877,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       toast.success(`Facture ${payload.sale.displayNumber} encaissée.`);
       const remainingSales = pendingSales.filter((sale) => sale.id !== openPendingSale.id);
       setPendingSales(remainingSales);
-      startNewInvoice(nextSlotNumber(remainingSales));
+      startNewInvoice();
       await Promise.all([refreshContext(), refreshPending()]);
     } catch (error) {
       toast.error(
@@ -823,7 +903,6 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       try {
         const sale = await createDraftSale();
         setOpenPendingSale(sale);
-        setCurrentSlotNumber(pendingSaleNumber(sale) ?? currentSlotNumber);
         await syncPendingSalesState();
         toast.success(`Facture ${sale.displayNumber} preparee. Impression lancee.`);
         schedulePrint();
@@ -865,7 +944,6 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     try {
       const sale = await createDraftSale();
       setOpenPendingSale(sale);
-      setCurrentSlotNumber(pendingSaleNumber(sale) ?? currentSlotNumber);
       await syncPendingSalesState();
       return true;
     } catch (error) {
@@ -893,20 +971,19 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setLastSale(sale);
   }
 
-  async function navigateToInvoice(sale: SaleDto | null, targetNumber: number) {
+  async function navigateToInvoice(sale: SaleDto | null) {
     if (sale?.id === openPendingSale?.id || (!sale && !openPendingSale)) return;
     if (!(await persistCurrentSlotBeforeNavigating())) return;
     if (sale) {
       openPendingInvoice(sale);
     } else {
-      startNewInvoice(targetNumber);
+      startNewInvoice();
     }
   }
 
   async function navigateByOffset(offset: number) {
-    const currentIndex = invoiceTabs.findIndex((tab) => tab.number === currentInvoiceNumber);
-    const target = invoiceTabs[currentIndex + offset];
-    if (target) await navigateToInvoice(target.sale, target.number);
+    const target = invoiceTabs[activeTabIndex + offset];
+    if (target) await navigateToInvoice(target.sale);
   }
 
   const paymentMethodLabel =
@@ -956,19 +1033,20 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         </Button>
         <div className="flex max-w-full flex-1 items-center gap-2 overflow-x-auto pb-1">
           {invoiceTabs.map((tab) => {
-            const active = tab.number === currentInvoiceNumber;
+            const active = tab.key === activeTabKey;
             return (
               <Button
-                key={tab.sale?.id ?? `slot-${tab.number}`}
+                key={tab.key}
                 type="button"
                 size="sm"
                 variant={active ? "default" : "outline"}
-                aria-label={`Ouvrir la facture ${tab.label}`}
-                className="h-8 shrink-0 px-2.5 font-semibold tabular-nums"
+                aria-label={`Onglet facture ${tab.position}`}
+                aria-current={active ? "true" : undefined}
+                className="h-8 w-8 shrink-0 p-0 font-semibold tabular-nums"
                 disabled={preparing || submitting || collecting}
-                onClick={() => void navigateToInvoice(tab.sale, tab.number)}
+                onClick={() => void navigateToInvoice(tab.sale)}
               >
-                {tab.label}
+                {tab.position}
               </Button>
             );
           })}

@@ -12,6 +12,7 @@ import {
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
+import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import {
   createMixedPayments,
@@ -23,6 +24,7 @@ import {
   normalizeSaleLines,
   resolveMixedPaymentSplit,
   resolvePaymentAmounts,
+  resolvePosSession,
   resolveSaleSequencing,
   roundMoney,
   saleInclude,
@@ -79,6 +81,13 @@ const counterSaleSchema = z.object({
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
+  // The commercial number the POS "new invoice" tab already reserved and
+  // displayed (reserveCounterSaleNumber). When both are present and pass the
+  // guards in createCounterSale, the sale is persisted with exactly this
+  // number instead of reserving a fresh one - so "33/2026" on screen is
+  // "33/2026" in the database. Absent = reserve normally at creation.
+  reservedSaleNumber: z.coerce.number().int().positive().optional(),
+  reservedSaleYear: z.coerce.number().int().positive().optional(),
 });
 
 // Phase 3: the POS product grid preloads this many sellable products for
@@ -463,12 +472,32 @@ export async function createCounterSale(
       // it and never re-reserves. `invoiceNumber` stays a throwaway BR- ref
       // for an uncollected draft (internal only), swapped for the real VC-
       // number at collection.
-      const sequencing = await resolveSaleSequencing(
+      //
+      // If the POS "new invoice" tab already reserved a number
+      // (reserveCounterSaleNumber) and passed it back, reuse it verbatim so
+      // the on-screen "33/2026" is exactly what gets persisted. Guards: same
+      // calendar year, actually issued by the sequence (not a fabricated
+      // future value), and not already taken by another sale. Any guard
+      // failing -> reserve a fresh number, exactly as before.
+      const currentYear = saleDate.getFullYear();
+      const reservedSequencing = await resolveReservedSaleSequencing(
         tx,
         saleDate,
         sessionUser.id,
         sessionUser.organizationId,
+        parsed.data.reservedSaleYear === currentYear
+          ? parsed.data.reservedSaleNumber ?? null
+          : null,
+        currentYear,
       );
+      const sequencing =
+        reservedSequencing ??
+        (await resolveSaleSequencing(
+          tx,
+          saleDate,
+          sessionUser.id,
+          sessionUser.organizationId,
+        ));
       const invoiceNumber = collectNow
         ? await nextInvoiceNumber(tx, "CTR", sessionUser.organizationId)
         : await nextPendingSaleRef(tx, sessionUser.organizationId);
@@ -626,6 +655,83 @@ export async function createCounterSale(
   );
 
   return mapSaleToDto(sale);
+}
+
+/**
+ * Reserves the next year-scoped commercial Sale number ("N/YYYY") WITHOUT
+ * creating a Sale row. The counter POS calls this the moment a new invoice
+ * tab is opened, so the cart header can show its definitive "33/2026"
+ * before any product is added (no more "Nouveau").
+ *
+ * Committed independently (bare `prisma`, no surrounding transaction): the
+ * number is spent the instant it is handed out and is never recycled. If
+ * the operator abandons the invoice it simply leaves a gap in the per-year
+ * sequence, exactly like an abandoned DRAFT (pending-sales.ts) or a
+ * cancelled sale. Concurrency-safe: the reservation is one atomic upsert
+ * (reserveDocumentSequence), so two terminals reserving at the same instant
+ * always get two different numbers.
+ */
+export async function reserveCounterSaleNumber(): Promise<{
+  saleNumber: number;
+  saleYear: number;
+}> {
+  const sessionUser = await requireOrganizationUser([
+    "admin",
+    "depot_manager",
+    "cashier",
+  ]);
+  const saleYear = new Date().getFullYear();
+  const saleNumber = await reserveDocumentSequence(
+    prisma,
+    sessionUser.organizationId,
+    DocumentType.Sale,
+    String(saleYear),
+  );
+  return { saleNumber, saleYear };
+}
+
+/**
+ * Validates a pre-reserved commercial number (from reserveCounterSaleNumber,
+ * passed back in the sale body) and, if it holds up, returns a `sequencing`
+ * shaped exactly like resolveSaleSequencing's - reusing that number and
+ * resolving today's POS session normally. Returns `null` (caller then
+ * reserves a fresh number) when there is no candidate or any guard fails:
+ *  - not actually issued yet (candidate > the sequence's current value), or
+ *  - already taken by another sale of the same year.
+ */
+async function resolveReservedSaleSequencing(
+  tx: Pick<
+    typeof prisma,
+    "sale" | "posSession" | "$queryRaw" | "documentSequence"
+  >,
+  now: Date,
+  userId: string,
+  organizationId: string,
+  candidate: number | null,
+  year: number,
+): Promise<{ saleYear: number; saleNumber: number; posSessionId: string } | null> {
+  if (candidate == null) return null;
+
+  const sequence = await tx.documentSequence.findUnique({
+    where: {
+      organizationId_documentType_scopeKey: {
+        organizationId,
+        documentType: DocumentType.Sale,
+        scopeKey: String(year),
+      },
+    },
+    select: { currentValue: true },
+  });
+  if (!sequence || candidate > sequence.currentValue) return null;
+
+  const clash = await tx.sale.findFirst({
+    where: { organizationId, saleYear: year, saleNumber: candidate },
+    select: { id: true },
+  });
+  if (clash) return null;
+
+  const posSessionId = await resolvePosSession(tx, now, userId, organizationId);
+  return { saleYear: year, saleNumber: candidate, posSessionId };
 }
 
 // Same pattern as lib/server/stock-movements.ts's withSerializableRetry, but

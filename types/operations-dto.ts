@@ -827,7 +827,13 @@ export type DriverSaleInput = {
   }[];
 };
 
-export type CounterSaleInput = DriverSaleInput;
+export type CounterSaleInput = DriverSaleInput & {
+  // Pre-reserved commercial number from the POS "new invoice" tab
+  // (POST /api/sales/reserve-number). Consumed as-is by createCounterSale
+  // when it passes the year/issued/uniqueness guards.
+  reservedSaleNumber?: number;
+  reservedSaleYear?: number;
+};
 
 export interface InventoryLineDto {
   id: string;
