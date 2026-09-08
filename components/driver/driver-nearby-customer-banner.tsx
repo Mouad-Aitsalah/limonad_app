@@ -25,7 +25,7 @@ export function DriverNearbyCustomerBanner({
     <div
       className={cn(
         floating
-          ? "pointer-events-none fixed top-[4.4rem] right-3 left-3 z-[760] lg:right-5 lg:left-[306px]"
+          ? "pointer-events-none fixed top-[calc(4.4rem+env(safe-area-inset-top))] right-3 left-3 z-[760] lg:top-[4.4rem] lg:right-5 lg:left-[306px]"
           : "px-4 pt-3 sm:px-5",
       )}
     >

@@ -15,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
-import { getDefaultRouteForRole } from "@/lib/auth/default-route";
+import { getBrowserHomeRoute } from "@/lib/auth/browser-home-route";
 
 export function LoginForm() {
   const { currentUser, isLoading, login } = useAuth();
@@ -40,7 +40,7 @@ export function LoginForm() {
 
   React.useEffect(() => {
     if (isLoading || !currentUser) return;
-    router.replace(getDefaultRouteForRole(currentUser.role));
+    router.replace(getBrowserHomeRoute(currentUser.role));
   }, [isLoading, currentUser, router]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -56,7 +56,7 @@ export function LoginForm() {
         return;
       }
 
-      router.replace(getDefaultRouteForRole(result.user.role));
+      router.replace(getBrowserHomeRoute(result.user.role));
     } catch {
       setError("Impossible de se connecter.");
       setIsSubmitting(false);

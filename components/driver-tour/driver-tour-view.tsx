@@ -477,7 +477,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
 
       <div className="mx-auto max-w-[1120px]">
         <section className="relative overflow-hidden bg-background">
-          <div className="relative h-[calc(100dvh-54px)] min-h-[620px] lg:h-[calc(100dvh-32px)]">
+          <div className="relative h-[calc(100dvh-66px-env(safe-area-inset-top))] min-h-[620px] lg:h-[calc(100dvh-32px)]">
             <div className="absolute inset-0">
               <DriverTourMap
                 customers={customers}
@@ -509,7 +509,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
               ) : null}
             </div>
 
-            <div className="pointer-events-none absolute inset-x-4 bottom-3 z-[650] flex flex-col-reverse gap-2 sm:bottom-4">
+            <div className="pointer-events-none absolute inset-x-4 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[650] flex flex-col-reverse gap-2 sm:bottom-[max(1rem,env(safe-area-inset-bottom))] lg:bottom-4">
               <div className="pointer-events-auto flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                 <div className="order-2 md:order-1">
                   {!selectedCustomer ? (

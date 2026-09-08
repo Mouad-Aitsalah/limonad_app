@@ -1,8 +1,8 @@
 "use client";
 
-import { Menu, Settings } from "lucide-react";
+import { Settings } from "lucide-react";
 
-import { useSidebar } from "@/hooks/use-sidebar";
+import { MobileBackLink } from "@/components/mobile/mobile-back-link";
 import type { GpsStatus } from "@/lib/gps/gps-utils";
 import { isNativeGpsPlatform, openNativeLocationSettings } from "@/lib/gps/native-tracking";
 import { cn } from "@/lib/utils";
@@ -36,24 +36,15 @@ export function DriverTourHeader({
   truckCode?: string | null;
   gpsStatus: GpsStatus;
 }) {
-  const { openMobile } = useSidebar();
-
   return (
-    <header className="sticky top-0 z-[700] border-b border-border/70 bg-background/94 backdrop-blur">
-      <div className="flex items-center justify-between gap-3 px-3 py-2.5 sm:px-4">
+    <header className="mobile-safe-top sticky top-0 z-[700] border-b border-border/70 bg-background/94 backdrop-blur">
+      <div className="mobile-safe-x flex items-center justify-between gap-2 px-3 py-2.5 sm:gap-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-3">
-          <button
-            type="button"
-            onClick={openMobile}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-sm lg:hidden"
-            aria-label="Ouvrir le menu"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
+          <MobileBackLink />
 
           <div className="min-w-0">
             <p className="text-sm font-semibold text-foreground sm:text-base">
-              Ma tournee
+              Ma tournée
             </p>
             <p className="truncate text-xs text-muted-foreground">
               {driverName || "Chauffeur"} {truckCode ? `• ${truckCode}` : ""}
@@ -61,12 +52,12 @@ export function DriverTourHeader({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 rounded-full bg-muted/70 px-3 py-2 text-xs font-medium text-foreground">
+        <div className="flex max-w-[45%] items-center gap-2 rounded-full bg-muted/70 px-2 py-2 text-xs font-medium text-foreground sm:px-3 lg:max-w-none">
           <span
             aria-hidden="true"
-            className={cn("h-2.5 w-2.5 rounded-full", gpsStatusClasses[gpsStatus])}
+            className={cn("h-2.5 w-2.5 shrink-0 rounded-full", gpsStatusClasses[gpsStatus])}
           />
-          <span className="whitespace-nowrap">{gpsStatusLabels[gpsStatus]}</span>
+          <span>{gpsStatusLabels[gpsStatus]}</span>
           {gpsStatus === "DENIED" && isNativeGpsPlatform() ? (
             <button
               type="button"

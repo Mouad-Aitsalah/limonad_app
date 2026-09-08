@@ -43,7 +43,7 @@ export function CommerceProductCard({
           <p className="mt-1 text-[11px] text-muted-foreground">{product.barcode}</p>
         ) : null}
 
-        <div className="mt-auto flex items-end justify-between gap-3 pt-4">
+        <div className="mt-auto flex items-end justify-between gap-3 pt-4 max-lg:flex-wrap">
           <div>
             <p className="text-sm font-semibold text-emerald-700">
               {formatCurrency(computePriceTTC(product.salePrice, product.taxRate))}

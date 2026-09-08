@@ -41,7 +41,7 @@ export function DriverBackgroundHint() {
   if (!visible) return null;
 
   return (
-    <div className="flex items-start gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <div className="flex items-start gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 max-lg:pt-[max(0.75rem,env(safe-area-inset-top))]">
       <BatteryCharging aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0" />
       <div className="flex-1 space-y-2">
         <p>

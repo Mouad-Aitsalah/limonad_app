@@ -1,7 +1,14 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 import { AuthProvider } from "@/hooks/use-auth";
+import { DriverRuntimeBoundary } from "@/components/driver/driver-runtime-boundary";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   title: "COMDIS",
@@ -16,7 +23,9 @@ export default function RootLayout({
   return (
     <html lang="fr" className="h-full antialiased">
       <body className="min-h-full bg-background text-foreground">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <DriverRuntimeBoundary>{children}</DriverRuntimeBoundary>
+        </AuthProvider>
       </body>
     </html>
   );

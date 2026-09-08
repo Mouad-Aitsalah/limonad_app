@@ -617,7 +617,7 @@ export function DriverPosView({
         </div>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/96 p-3 backdrop-blur xl:hidden">
+      <div className="mobile-safe-bottom mobile-safe-x fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/96 p-3 backdrop-blur xl:hidden">
         <div className="mx-auto flex max-w-3xl items-center gap-3">
           <div className="min-w-0 flex-1 rounded-2xl bg-muted/60 px-4 py-3">
             <p className="text-xs text-muted-foreground">

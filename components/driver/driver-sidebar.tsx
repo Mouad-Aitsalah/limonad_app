@@ -6,13 +6,11 @@ import { LogOut } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
-import { useSidebar } from "@/hooks/use-sidebar";
-import { driverNavItems } from "@/components/driver/driver-nav-items";
+import { getVisibleNavItems } from "@/components/layout/navigation";
 
 export function DriverSidebar() {
   const pathname = usePathname();
-  const { mobileOpen, closeMobile } = useSidebar();
-  const { logout } = useAuth();
+  const { currentUser, logout } = useAuth();
   const router = useRouter();
 
   async function handleLogout() {
@@ -22,20 +20,9 @@ export function DriverSidebar() {
 
   return (
     <>
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-[#061120]/48 backdrop-blur-sm lg:hidden"
-          onClick={closeMobile}
-          aria-hidden="true"
-        />
-      )}
-
       <aside
-        className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-[286px] flex-col border-r border-[var(--sidebar-border)] bg-[linear-gradient(180deg,#0f223a_0%,#10253f_52%,#0b1a2e_100%)] transition-transform duration-300 ease-out",
-          mobileOpen ? "translate-x-0" : "-translate-x-full",
-          "lg:translate-x-0",
-        )}
+        aria-label="Navigation desktop"
+        className="fixed inset-y-0 left-0 z-50 hidden w-[286px] flex-col border-r border-[var(--sidebar-border)] bg-[linear-gradient(180deg,#0f223a_0%,#10253f_52%,#0b1a2e_100%)] transition-transform duration-300 ease-out lg:flex"
       >
         <div className="border-b border-[var(--sidebar-border)] px-5 py-6">
           <div className="flex items-start gap-3">
@@ -55,7 +42,8 @@ export function DriverSidebar() {
         </div>
 
         <nav className="flex-1 space-y-3 overflow-y-auto px-4 py-5">
-          {driverNavItems.map((item, index) => {
+          {getVisibleNavItems(currentUser?.role).map((item, index) => {
+            if (!item.href) return null;
             const active =
               item.href === "/driver"
                 ? pathname === item.href
@@ -66,7 +54,6 @@ export function DriverSidebar() {
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={closeMobile}
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-3 rounded-[22px] border px-3 py-3.5 transition-all duration-200",

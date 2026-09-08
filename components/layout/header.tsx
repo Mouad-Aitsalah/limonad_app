@@ -1,10 +1,8 @@
 "use client";
 
-import { Menu } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 import { useAuth } from "@/hooks/use-auth";
-import { useSidebar } from "@/hooks/use-sidebar";
 import { navItems } from "@/components/layout/nav-items";
 import { UserMenu } from "@/components/layout/user-menu";
 
@@ -26,7 +24,6 @@ function findPageLabel(pathname: string) {
 
 export function Header() {
   const pathname = usePathname();
-  const { openMobile } = useSidebar();
   const { currentUser } = useAuth();
   const currentLabel = findPageLabel(pathname);
   const today = new Date().toLocaleDateString("fr-FR", {
@@ -37,17 +34,8 @@ export function Header() {
   });
 
   return (
-    <header className="sticky top-0 z-30 border-b border-white/60 bg-[color:rgb(244_248_252_/_0.82)] backdrop-blur-xl">
+    <header className="sticky top-0 z-30 hidden border-b border-white/60 bg-[color:rgb(244_248_252_/_0.82)] backdrop-blur-xl lg:block">
       <div className="page-shell flex min-h-[104px] items-center gap-4 px-4 py-4 sm:px-6 lg:px-8">
-        <button
-          type="button"
-          onClick={openMobile}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-border bg-white/75 text-foreground shadow-[0_8px_20px_rgba(15,23,42,0.06)] lg:hidden"
-          aria-label="Ouvrir le menu"
-        >
-          <Menu className="h-5 w-5" />
-        </button>
-
         <div className="min-w-0 flex-1">
           <p className="page-eyebrow">Workspace</p>
           <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">

@@ -9,13 +9,13 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { useSidebar } from "@/hooks/use-sidebar";
-import { navItems } from "@/components/layout/nav-items";
+import { getVisibleNavItems } from "@/components/layout/navigation";
 import { SidebarItem } from "@/components/layout/sidebar-item";
 import { Button } from "@/components/ui/button";
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { collapsed, toggleCollapsed, mobileOpen, closeMobile } = useSidebar();
+  const { collapsed, toggleCollapsed } = useSidebar();
   const { currentUser, logout } = useAuth();
   const { identity } = useCompanyIdentity();
   const homeHref = currentUser?.role === "super_admin" ? "/organisations" : "/dashboard";
@@ -28,14 +28,7 @@ export function Sidebar() {
     undefined,
   );
 
-  const visibleNavItems = navItems.filter(
-    (item) =>
-      currentUser
-        ? currentUser.role === "super_admin"
-          ? item.roles?.includes("super_admin") ?? false
-          : !item.roles || item.roles.includes(currentUser.role)
-        : false,
-  );
+  const visibleNavItems = getVisibleNavItems(currentUser?.role);
 
   const matchesRoute = (href: string) =>
     pathname === href || pathname.startsWith(`${href}/`);
@@ -49,20 +42,11 @@ export function Sidebar() {
 
   return (
     <>
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-[#061120]/48 backdrop-blur-sm lg:hidden"
-          onClick={closeMobile}
-          aria-hidden="true"
-        />
-      )}
-
       <aside
+        aria-label="Navigation desktop"
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex flex-col border-r border-[var(--sidebar-border)] bg-[linear-gradient(180deg,#0f223a_0%,#10253f_52%,#0b1a2e_100%)] text-[var(--sidebar-foreground)] transition-all duration-300 ease-out",
+          "fixed inset-y-0 left-0 z-50 hidden flex-col border-r border-[var(--sidebar-border)] bg-[linear-gradient(180deg,#0f223a_0%,#10253f_52%,#0b1a2e_100%)] text-[var(--sidebar-foreground)] transition-all duration-300 ease-out lg:flex",
           collapsed ? "w-[104px]" : "w-[296px]",
-          mobileOpen ? "translate-x-0" : "-translate-x-full",
-          "lg:translate-x-0",
         )}
       >
         <div className={cn("border-b border-[var(--sidebar-border)] px-5 py-6", collapsed && "px-3")}>
@@ -98,20 +82,7 @@ export function Sidebar() {
 
         <nav className="flex-1 space-y-3 overflow-y-auto px-4 py-5">
           {visibleNavItems.map((item) => {
-            const visibleChildren = item.children?.filter(
-              (child) =>
-                currentUser
-                  ? currentUser.role === "super_admin"
-                    ? child.roles?.includes("super_admin") ?? false
-                    : !child.roles || child.roles.includes(currentUser.role)
-                  : false,
-            );
-
-            // A group whose children are all hidden for this role (and which
-            // has no page of its own) would render as a dead link - skip it.
-            if (item.children && !item.href && (visibleChildren?.length ?? 0) === 0) {
-              return null;
-            }
+            const visibleChildren = item.children;
 
             const itemKey = item.href ?? item.label;
             const active = item.href
@@ -131,7 +102,6 @@ export function Sidebar() {
                   })
                 }
                 collapsed={collapsed}
-                onNavigate={closeMobile}
                 pathname={pathname}
                 onExpandSidebar={() => {
                   if (collapsed) toggleCollapsed();
@@ -162,7 +132,6 @@ export function Sidebar() {
               variant="ghost"
               onClick={() => {
                 void logout();
-                closeMobile();
               }}
               className="w-full justify-start border border-white/10 bg-transparent px-4 text-white/72 hover:bg-white/8 hover:text-white"
             >

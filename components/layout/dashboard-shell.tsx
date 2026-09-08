@@ -6,13 +6,14 @@ import { cn } from "@/lib/utils";
 import { SidebarProvider, useSidebar } from "@/hooks/use-sidebar";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
+import { MobileHeader } from "@/components/mobile/mobile-header";
 import { Toaster } from "@/components/ui/sonner";
 
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const { collapsed } = useSidebar();
 
   return (
-    <div className="min-h-screen">
+    <div className="mobile-workspace min-h-screen">
       <Sidebar />
 
       <div
@@ -22,7 +23,8 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         )}
       >
         <Header />
-        <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <MobileHeader />
+        <main className="mobile-safe-bottom mobile-safe-x min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           <div className="page-shell">{children}</div>
         </main>
       </div>

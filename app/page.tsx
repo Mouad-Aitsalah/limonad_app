@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { getDefaultRouteForRole } from "@/lib/auth/default-route";
+import { HomeRedirect } from "@/components/auth/home-redirect";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 
 export default async function HomePage() {
@@ -10,5 +10,5 @@ export default async function HomePage() {
     redirect("/login");
   }
 
-  redirect(getDefaultRouteForRole(user.role));
+  return <HomeRedirect role={user.role} />;
 }

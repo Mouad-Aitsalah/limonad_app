@@ -151,7 +151,7 @@ export function AccountingJournalView({
         </div>
       )}
 
-      <div className="grid gap-3 rounded-xl border border-border bg-card p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:grid-cols-6">
+      <div className="grid grid-cols-1 gap-3 rounded-xl border border-border bg-card p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] max-lg:[&>select]:min-w-0 lg:grid-cols-6">
         <div className="relative lg:col-span-2">
           <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
