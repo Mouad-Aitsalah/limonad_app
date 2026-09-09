@@ -83,7 +83,10 @@ function ComboboxContent({
         <ComboboxPrimitive.Popup
           data-slot="combobox-content"
           className={cn(
-            "relative isolate z-[1000] max-h-(--available-height) w-(--anchor-width) min-w-56 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            // Height hugs the options (auto when few, capped + internal scroll
+            // when many) - never a fixed tall box. Width tracks the anchor but
+            // is clamped so it can't overflow a narrow screen on mobile.
+            "relative isolate z-[1000] max-h-[min(20rem,var(--available-height))] w-(--anchor-width) max-w-[calc(100vw-1rem)] min-w-56 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             className
           )}
           {...props}
@@ -100,7 +103,10 @@ function ComboboxItem({ className, children, ...props }: ComboboxPrimitive.Item.
     <ComboboxPrimitive.Item
       data-slot="combobox-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1.5 pr-8 pl-2 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50",
+        // Hover AND keyboard both drive data-highlighted (Base UI
+        // highlightItemOnHover) - one clear background for the targeted row;
+        // data-selected keeps a lighter marker on the current choice.
+        "relative flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1.5 pr-8 pl-2 text-sm outline-hidden transition-colors select-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[selected]:bg-accent/60 data-[selected]:font-medium data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       {...props}
@@ -117,7 +123,14 @@ function ComboboxEmpty({ className, ...props }: ComboboxPrimitive.Empty.Props) {
   return (
     <ComboboxPrimitive.Empty
       data-slot="combobox-empty"
-      className={cn("px-2 py-6 text-center text-sm text-muted-foreground", className)}
+      // Base UI keeps this node mounted even when there ARE items (it only
+      // nulls its children) for screen-reader announcements. Padding must be
+      // conditional on it having content, otherwise every dropdown carries a
+      // ~48px blank band above the first option.
+      className={cn(
+        "text-center text-sm text-muted-foreground [&:not(:empty)]:px-3 [&:not(:empty)]:py-6",
+        className
+      )}
       {...props}
     />
   )
