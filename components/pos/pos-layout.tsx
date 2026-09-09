@@ -1216,7 +1216,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           invoiceLabel={activeInvoiceLabel}
         />
 
-        <div className="grid gap-3 max-lg:grid-cols-2 max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr]">
+        <div className="grid gap-3 max-lg:grid-cols-[3fr_1fr] max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr]">
           <CustomerCombobox
             value={selectedCustomer}
             onChange={setSelectedCustomer}
