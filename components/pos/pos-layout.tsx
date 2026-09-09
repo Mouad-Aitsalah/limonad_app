@@ -18,6 +18,7 @@ import {
 } from "@/types/pos";
 import { ProductSearch } from "@/components/pos/product-search";
 import { ProductGrid } from "@/components/pos/product-grid";
+import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { InvoiceHeader } from "@/components/pos/invoice-header";
@@ -124,6 +125,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
+  const [mobileView, setMobileView] = React.useState<"products" | "cart">("cart");
   const cartSectionRef = React.useRef<HTMLDivElement>(null);
   const cartButtonRef = React.useRef<HTMLDivElement>(null);
   const [cartPulse, setCartPulse] = React.useState(false);
@@ -329,6 +331,18 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     };
   }, [cartLines]);
 
+  const mobileSelectedProduct = React.useMemo(() => {
+    const line = cartLines[0];
+    if (!line) return null;
+
+    return {
+      designation: line.designation,
+      quantity: line.quantity,
+      priceTTC: line.unitPriceTTC,
+      imageUrl: productById.get(line.productId)?.imageUrl,
+    };
+  }, [cartLines, productById]);
+
   // POS invoice tabs. A tab button shows ONLY a position index (1, 2, 3…)
   // among the invoices currently open in this POS - it is a navigation
   // handle, never a commercial reference. The real "N/YYYY" number lives in
@@ -364,8 +378,18 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     const product = productById.get(productId);
     if (!product) return false;
 
+    const singleProductMobile = window.matchMedia("(max-width: 63.999rem)").matches;
+
     setCart((prev) => {
       const existing = prev.find((line) => line.productId === productId);
+      if (singleProductMobile) {
+        if (existing) {
+          return [{ ...existing, quantity: existing.quantity + 1 }];
+        }
+
+        return [{ productId, quantity: 1, discountPercent: 0 }];
+      }
+
       if (existing) {
         return prev.map((line) =>
           line.productId === productId
@@ -400,8 +424,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     });
   }
 
-  function scrollToMobileCart() {
-    cartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  function openMobileCart() {
+    setMobileView("cart");
+    requestAnimationFrame(() => {
+      cartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function updateQuantity(productId: string, quantity: number) {
@@ -1035,7 +1062,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           type="button"
           size="icon"
           aria-label={`Voir le panier, ${cartItemCount} article${cartItemCount > 1 ? "s" : ""}`}
-          onClick={scrollToMobileCart}
+          onClick={openMobileCart}
           className="relative h-11 w-11 rounded-full shadow-lg"
         >
           <ShoppingCart aria-hidden="true" className="h-5 w-5" />
@@ -1126,8 +1153,40 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       </div>
       )}
 
+      <div
+        className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1 lg:hidden"
+        role="tablist"
+        aria-label="Vues du point de vente"
+      >
+        <Button
+          type="button"
+          role="tab"
+          aria-selected={mobileView === "products"}
+          variant={mobileView === "products" ? "default" : "ghost"}
+          onClick={() => setMobileView("products")}
+          className="h-10 rounded-xl text-sm"
+        >
+          Les produits
+        </Button>
+        <Button
+          type="button"
+          role="tab"
+          aria-selected={mobileView === "cart"}
+          variant={mobileView === "cart" ? "default" : "ghost"}
+          onClick={() => setMobileView("cart")}
+          className="h-10 rounded-xl text-sm"
+        >
+          Panier ({cartItemCount})
+        </Button>
+      </div>
+
       <div className="grid gap-4 lg:h-[calc(100vh-11rem)] lg:grid-cols-2 lg:gap-6">
-      <div className="order-2 flex min-w-0 flex-col gap-3 lg:order-1 lg:h-full lg:gap-4 lg:overflow-hidden">
+      <div
+        className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4 lg:overflow-hidden`}
+      >
+        <div className="lg:hidden">
+          <MobileSelectedProduct product={mobileSelectedProduct} />
+        </div>
         <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
         <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1">
         <ProductGrid
@@ -1148,7 +1207,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       <div
         id="mobile-pos-cart"
         ref={cartSectionRef}
-        className="order-1 flex min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:h-full lg:gap-4 lg:overflow-y-auto lg:p-4"
+        className={`${mobileView === "cart" ? "flex" : "hidden"} order-1 min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:flex lg:h-full lg:gap-4 lg:overflow-y-auto lg:p-4`}
       >
         <InvoiceHeader
           userName={context.user.name}

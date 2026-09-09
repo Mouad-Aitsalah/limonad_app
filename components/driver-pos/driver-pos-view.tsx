@@ -21,6 +21,7 @@ import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { CustomerNumberInput } from "@/components/pos/customer-number-input";
 import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
 import { ProductGrid } from "@/components/pos/product-grid";
+import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
 import { ProductSearch } from "@/components/pos/product-search";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
@@ -73,6 +74,7 @@ export function DriverPosView({
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
+  const [mobileView, setMobileView] = React.useState<"products" | "cart">("cart");
   const cartSectionRef = React.useRef<HTMLDivElement>(null);
   const cartButtonRef = React.useRef<HTMLDivElement>(null);
   const [cartPulse, setCartPulse] = React.useState(false);
@@ -177,11 +179,33 @@ export function DriverPosView({
     [cartRows],
   );
 
+  const mobileSelectedProduct = React.useMemo(() => {
+    const row = cartRows[0];
+    if (!row) return null;
+
+    return {
+      designation: row.product.name,
+      quantity: row.quantity,
+      priceTTC: row.product.salePriceTTC,
+      imageUrl: row.product.imageUrl,
+    };
+  }, [cartRows]);
+
   // Negative truck stock is allowed: cart quantity is never capped at the
   // product's on-hand quantity, only floored at 1.
   function addProduct(product: DriverPosProductDto) {
+    const singleProductMobile = window.matchMedia("(max-width: 79.999rem)").matches;
+
     setCart((current) => {
       const existing = current.find((line) => line.productId === product.id);
+      if (singleProductMobile) {
+        if (existing) {
+          return [{ ...existing, quantity: existing.quantity + 1 }];
+        }
+
+        return [{ productId: product.id, quantity: 1, discountRate: 0 }];
+      }
+
       if (!existing) {
         return [...current, { productId: product.id, quantity: 1, discountRate: 0 }];
       }
@@ -213,8 +237,11 @@ export function DriverPosView({
     });
   }
 
-  function scrollToMobileCart() {
-    cartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  function openMobileCart() {
+    setMobileView("cart");
+    requestAnimationFrame(() => {
+      cartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function updateQuantity(productId: string, quantity: number) {
@@ -392,7 +419,7 @@ export function DriverPosView({
           type="button"
           size="icon"
           aria-label={`Voir le panier, ${totals.quantity} article${totals.quantity > 1 ? "s" : ""}`}
-          onClick={scrollToMobileCart}
+          onClick={openMobileCart}
           className="relative h-11 w-11 rounded-full shadow-lg"
         >
           <ShoppingCart aria-hidden="true" className="h-5 w-5" />
@@ -414,9 +441,39 @@ export function DriverPosView({
         onPrintLastSale={printLastSale}
       />
 
+      <div
+        className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1 xl:hidden"
+        role="tablist"
+        aria-label="Vues du point de vente chauffeur"
+      >
+        <Button
+          type="button"
+          role="tab"
+          aria-selected={mobileView === "products"}
+          variant={mobileView === "products" ? "default" : "ghost"}
+          onClick={() => setMobileView("products")}
+          className="h-10 rounded-xl text-sm"
+        >
+          Les produits
+        </Button>
+        <Button
+          type="button"
+          role="tab"
+          aria-selected={mobileView === "cart"}
+          variant={mobileView === "cart" ? "default" : "ghost"}
+          onClick={() => setMobileView("cart")}
+          className="h-10 rounded-xl text-sm"
+        >
+          Panier ({totals.quantity})
+        </Button>
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="order-2 space-y-4 xl:order-1">
+        <div
+          className={`${mobileView === "products" ? "block" : "hidden"} order-2 space-y-4 xl:order-1 xl:block`}
+        >
           <div className="space-y-3 xl:hidden">
+            <MobileSelectedProduct product={mobileSelectedProduct} />
             <ProductSearch value={search} onChange={setSearch} />
             <ProductGrid
               products={productTiles}
@@ -489,7 +546,7 @@ export function DriverPosView({
         <div
           id="mobile-driver-pos-cart"
           ref={cartSectionRef}
-          className="order-1 scroll-mt-16 space-y-4 xl:sticky xl:top-20 xl:order-2 xl:self-start"
+          className={`${mobileView === "cart" ? "block" : "hidden"} order-1 scroll-mt-16 space-y-4 xl:sticky xl:top-20 xl:order-2 xl:block xl:self-start`}
         >
           <Card className="rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
             <CardContent className="space-y-4 p-4">
