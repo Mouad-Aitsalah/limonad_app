@@ -468,12 +468,14 @@ export function DriverPosView({
         </Button>
       </div>
 
+      {mobileView === "products" && (
+        <MobileSelectedProduct product={mobileSelectedProduct} className="xl:hidden" />
+      )}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div
           className={`${mobileView === "products" ? "block" : "hidden"} order-2 space-y-4 xl:order-1 xl:block`}
         >
           <div className="space-y-3 xl:hidden">
-            <MobileSelectedProduct product={mobileSelectedProduct} />
             <ProductSearch value={search} onChange={setSearch} />
             <ProductGrid
               products={productTiles}

@@ -1,7 +1,8 @@
 import { ProductMedia } from "@/components/products/product-media";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 
 type MobileSelectedProductProps = {
+  className?: string;
   product:
     | {
         designation: string;
@@ -12,31 +13,41 @@ type MobileSelectedProductProps = {
     | null;
 };
 
-/** A compact, visual summary displayed above the mobile product grid. */
-export function MobileSelectedProduct({ product }: MobileSelectedProductProps) {
-  if (!product) {
-    return (
-      <div className="rounded-2xl border border-dashed border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-        Aucun produit sélectionné
-      </div>
-    );
-  }
+/** Non-interactive mobile notification, always derived from the real cart. */
+export function MobileSelectedProduct({ product, className }: MobileSelectedProductProps) {
+  if (!product) return null;
 
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-2.5">
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      className={cn(
+        "pointer-events-none fixed z-40 flex items-center gap-3 rounded-2xl border border-emerald-200 bg-card/95 p-2.5 shadow-lg backdrop-blur-sm print:hidden",
+        className,
+      )}
+      style={{
+        bottom: "calc(env(safe-area-inset-bottom) + 5rem)",
+        left: "max(0.75rem, env(safe-area-inset-left))",
+        right: "max(0.75rem, env(safe-area-inset-right))",
+        maxWidth: "26rem",
+        marginInline: "auto",
+      }}
+    >
       <ProductMedia
         imageUrl={product.imageUrl}
         alt={`Photo du produit ${product.designation}`}
         fit="cover"
-        className="h-12 w-12 shrink-0 rounded-xl"
+        className="h-14 w-14 shrink-0 rounded-xl"
+        sizes="56px"
       />
-      <div className="min-w-0">
-        <p className="text-[11px] font-medium text-emerald-700">Produit sélectionné</p>
-        <p className="truncate text-sm font-semibold text-foreground">{product.designation}</p>
-        <p className="text-xs text-muted-foreground">
-          Quantité : {product.quantity} · {formatCurrency(product.priceTTC)}
-        </p>
+      <div className="min-w-0 flex-1">
+        <p className="line-clamp-2 text-sm font-semibold leading-snug text-foreground">{product.designation}</p>
+        <p className="mt-0.5 text-xs font-medium text-emerald-700">{formatCurrency(product.priceTTC)}</p>
       </div>
+      <span className="shrink-0 text-right text-xl font-bold tabular-nums text-emerald-700" aria-label={`Quantité : ${product.quantity}`}>
+        ×{product.quantity}
+      </span>
     </div>
   );
 }

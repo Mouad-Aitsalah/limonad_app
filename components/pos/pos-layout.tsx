@@ -1180,13 +1180,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         </Button>
       </div>
 
+      {mobileView === "products" && (
+        <MobileSelectedProduct product={mobileSelectedProduct} className="lg:hidden" />
+      )}
       <div className="grid gap-4 lg:h-[calc(100vh-11rem)] lg:grid-cols-2 lg:gap-6">
       <div
         className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4 lg:overflow-hidden`}
       >
-        <div className="lg:hidden">
-          <MobileSelectedProduct product={mobileSelectedProduct} />
-        </div>
         <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
         <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1">
         <ProductGrid
