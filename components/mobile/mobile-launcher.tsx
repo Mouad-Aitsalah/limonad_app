@@ -50,13 +50,24 @@ const appearance: Record<string, TileAppearance> = {
   "/driver": { label: "Mon camion", icon: Truck, order: 5 },
 };
 
+// Indexed by the tile's `order` (see `appearance`): 0 Dashboard, 1 POS,
+// 2 Factures, 3 Produits, 4 Stock, 5 Achats, 6 Clients, 7 Compta,
+// 8 Employés, 9 Avoirs, 10 Chargements, 11 Administration. Additional
+// tiles (no `order`) fall back to their list index and wrap around.
+// Presentation only - never affects which tiles a role can see.
 const tileColors = [
-  "from-[#173156] to-[#294f80]",
-  "from-[#087f65] to-[#13a382]",
-  "from-[#3174b7] to-[#5494d1]",
-  "from-[#b46b29] to-[#d4974c]",
-  "from-[#526b90] to-[#7a92b4]",
-  "from-[#7561a9] to-[#9983c4]",
+  "from-[#0F4FA8] to-[#2E6AC6]", // bleu foncé
+  "from-[#00A67A] to-[#10C193]", // vert / turquoise
+  "from-[#2496E8] to-[#52AEF0]", // bleu clair
+  "from-[#FF7A00] to-[#FF9836]", // orange
+  "from-[#7489A5] to-[#90A3BC]", // gris bleu
+  "from-[#EC168C] to-[#F646A9]", // rose / magenta
+  "from-[#E71919] to-[#F04444]", // rouge
+  "from-[#10B8AD] to-[#38D0C6]", // turquoise clair
+  "from-[#2496E8] to-[#52AEF0]", // bleu clair
+  "from-[#FF7A00] to-[#FF9836]", // orange
+  "from-[#7489A5] to-[#90A3BC]", // gris bleu
+  "from-[#B332BA] to-[#C95FCE]", // violet / magenta
 ];
 
 type LauncherLink = ReturnType<typeof getNavigationLinks>[number];
