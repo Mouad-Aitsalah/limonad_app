@@ -45,6 +45,25 @@ type CartTableProps = {
   onRemove: (productId: string) => void;
 };
 
+// Column widths are the SINGLE source of truth for the layout: `table-fixed`
+// on the <table> makes every <td> take its column's <th> width exactly, so a
+// header can never end up wider/narrower than the field under it. Produit is
+// the only flexible column (takes the remaining space on desktop, a fixed
+// readable width on mobile). Values are set here once and reused by header +
+// body so th and td always agree.
+const COL = {
+  // Mobile widths ~match the previously validated compact table; desktop
+  // widths give each numeric column room so its header centers over the
+  // field. Produit is fixed on mobile (name truncates) and flexible on
+  // desktop (takes the remaining space).
+  produit: "w-[8rem] lg:w-auto",
+  qte: "w-[6.5rem] px-0.5 lg:w-[7.5rem] lg:px-2",
+  prix: "w-[4.5rem] px-0.5 lg:w-24 lg:px-2",
+  rem: "w-[3.25rem] px-0.5 lg:w-[4.25rem] lg:px-2",
+  total: "w-[4.75rem] px-0.5 pr-2 lg:w-[6.25rem] lg:px-2 lg:pr-3",
+  action: "w-8 px-0.5 lg:w-10 lg:px-2",
+} as const;
+
 export function CartTable({
   lines,
   operationType,
@@ -75,34 +94,41 @@ export function CartTable({
     );
   }
 
-  // Numeric columns are packed tight together on the right (px-0.5, and the
-  // Qte stepper is right-aligned) while the Produit column (w-full) absorbs
-  // the slack - so Qte and Prix TTC sit right next to each other. The VAT
-  // column is intentionally NOT rendered
-  // (line.tvaAmount is still computed upstream, still persisted, still used
-  // by accounting / ticket - only its display here is removed).
+  // The VAT column is intentionally NOT rendered (line.tvaAmount is still
+  // computed upstream, still persisted, still used by accounting / ticket -
+  // only its display here is removed). The table stays inside the cart's
+  // own `overflow-x-auto` wrapper: when it is wider than the panel the
+  // scroll is internal, the page never scrolls sideways.
   return (
-    <Table>
+    // `min-w` keeps the columns at their intended sizes: `table-fixed`
+    // ignores a per-cell min-width, so the floor lives on the table. When
+    // the cart panel is narrower than this, the scroll is internal to the
+    // wrapper (overflow-x-auto) and the page never scrolls sideways.
+    <Table className="table-fixed min-w-[29rem] lg:min-w-[34rem]">
       <TableHeader>
         <TableRow>
-          <TableHead className="w-full min-w-[6rem]">Produit</TableHead>
-          <TableHead className="px-0.5 text-right">Qte</TableHead>
-          <TableHead className="px-0.5 text-right">
+          <TableHead className={COL.produit}>Produit</TableHead>
+          <TableHead className={cn(COL.qte, "text-right lg:text-center")}>
+            Qte
+          </TableHead>
+          <TableHead className={cn(COL.prix, "text-right lg:text-center")}>
             {isTransfer ? "Valeur unit." : "Prix TTC"}
           </TableHead>
           {!isTransfer && (
-            <TableHead className="px-0.5 text-right">Rem. %</TableHead>
+            <TableHead className={cn(COL.rem, "text-right lg:text-center")}>
+              Rem.
+            </TableHead>
           )}
-          <TableHead className="px-0.5 pr-2 text-right">
+          <TableHead className={cn(COL.total, "text-right")}>
             {isTransfer ? "Valeur" : "Total"}
           </TableHead>
-          <TableHead className="w-8 px-0.5" />
+          <TableHead className={COL.action} />
         </TableRow>
       </TableHeader>
       <TableBody>
         {lines.map((line) => (
           <TableRow key={line.productId}>
-            <TableCell className="max-w-[150px] pr-1 sm:max-w-[240px]">
+            <TableCell className={cn(COL.produit, "pr-1")}>
               <p className="truncate font-medium text-foreground">
                 {line.designation}
               </p>
@@ -110,8 +136,8 @@ export function CartTable({
                 {line.reference}
               </p>
             </TableCell>
-            <TableCell className="px-0.5">
-              <div className="flex items-center justify-end gap-0.5">
+            <TableCell className={COL.qte}>
+              <div className="flex items-center justify-end gap-0.5 lg:justify-center">
                 <Button
                   type="button"
                   variant="outline"
@@ -149,7 +175,9 @@ export function CartTable({
                 </Button>
               </div>
             </TableCell>
-            <TableCell className="px-0.5 text-right tabular-nums">
+            <TableCell
+              className={cn(COL.prix, "text-right tabular-nums lg:text-center")}
+            >
               {priceEditable ? (
                 <input
                   type="number"
@@ -165,7 +193,7 @@ export function CartTable({
                   }
                   aria-label={`Prix TTC de ${line.designation}`}
                   className={cn(
-                    "h-7 w-16 rounded-md border bg-transparent text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 sm:w-20",
+                    "h-7 w-16 rounded-md border bg-transparent text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 sm:w-20 lg:text-center",
                     line.priceOverridden
                       ? "border-amber-400 font-medium text-amber-700"
                       : "border-input",
@@ -176,7 +204,9 @@ export function CartTable({
               )}
             </TableCell>
             {!isTransfer && (
-              <TableCell className="px-0.5 text-right">
+              <TableCell
+                className={cn(COL.rem, "text-right lg:text-center")}
+              >
                 <input
                   type="number"
                   min={0}
@@ -191,14 +221,19 @@ export function CartTable({
                     )
                   }
                   aria-label="Remise en pourcentage"
-                  className="h-7 w-11 rounded-md border border-input bg-transparent text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 sm:w-14"
+                  className="h-7 w-11 rounded-md border border-input bg-transparent text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 sm:w-14 lg:text-center"
                 />
               </TableCell>
             )}
-            <TableCell className="px-0.5 pr-2 text-right font-medium tabular-nums">
+            <TableCell
+              className={cn(
+                COL.total,
+                "text-right font-medium tabular-nums",
+              )}
+            >
               {formatCurrency(isTransfer ? line.transferValue : line.totalTTC)}
             </TableCell>
-            <TableCell className="px-0.5">
+            <TableCell className={COL.action}>
               <Button
                 type="button"
                 variant="ghost"
