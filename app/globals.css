@@ -196,6 +196,17 @@ body {
 
 /* Outside layers so safe areas take precedence over spacing utilities. */
 @media screen and (width < 64rem) {
+  /* Safari zooms the viewport when a text field is smaller than 16px.
+     Keep mobile controls compact through their existing height and padding,
+     while preserving manual pinch zoom for accessibility. */
+  input,
+  select,
+  textarea,
+  [contenteditable="true"],
+  [data-slot="select-trigger"] {
+    font-size: 1rem !important;
+  }
+
   .mobile-workspace {
     font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
