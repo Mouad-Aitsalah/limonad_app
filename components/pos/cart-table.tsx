@@ -45,24 +45,26 @@ type CartTableProps = {
   onRemove: (productId: string) => void;
 };
 
-// Column widths are the SINGLE source of truth for the layout: `table-fixed`
-// on the <table> makes every <td> take its column's <th> width exactly, so a
-// header can never end up wider/narrower than the field under it. Produit is
-// the only flexible column (takes the remaining space on desktop, a fixed
-// readable width on mobile). Values are set here once and reused by header +
-// body so th and td always agree.
+// Column widths are the single source of truth (`table-fixed` makes every
+// <td> take its <th> width exactly). Two regimes:
+//  - MOBILE (< lg): percentages that sum to 100% -> the whole table fits the
+//    cart panel, no internal horizontal scroll, all 5 columns visible.
+//  - DESKTOP (lg+): the previously-validated fixed rem widths, untouched.
 const COL = {
-  // Mobile widths ~match the previously validated compact table; desktop
-  // widths give each numeric column room so its header centers over the
-  // field. Produit is fixed on mobile (name truncates) and flexible on
-  // desktop (takes the remaining space).
-  produit: "w-[8rem] lg:w-auto",
-  qte: "w-[6.5rem] px-0.5 lg:w-[7.5rem] lg:px-2",
-  prix: "w-[4.5rem] px-0.5 lg:w-24 lg:px-2",
-  rem: "w-[3.25rem] px-0.5 lg:w-[4.25rem] lg:px-2",
-  total: "w-[4.75rem] px-0.5 pr-2 lg:w-[6.25rem] lg:px-2 lg:pr-3",
-  action: "w-8 px-0.5 lg:w-10 lg:px-2",
+  produit: "w-[28%] px-1 lg:w-auto lg:px-4",
+  qte: "w-[26%] px-0.5 lg:w-[7.5rem] lg:px-2",
+  prix: "w-[15%] px-0.5 lg:w-24 lg:px-2",
+  rem: "w-[11%] px-0.5 lg:w-[4.25rem] lg:px-2",
+  total: "w-[20%] px-0.5 pr-1 lg:w-[6.25rem] lg:px-2 lg:pr-3",
+  // Own column on desktop only; on mobile the delete icon lives inside the
+  // Produit cell so it never steals width from TOTAL (see below).
+  action: "max-lg:hidden lg:w-10 lg:px-2",
 } as const;
+
+// Mobile headers must fit their (narrow) column - shrink font + drop the
+// wide letter-spacing so "PRIX TTC" never spills into "REM.". Desktop keeps
+// the default header type.
+const H_MOBILE = "max-lg:text-[10px] max-lg:tracking-normal";
 
 export function CartTable({
   lines,
@@ -96,30 +98,27 @@ export function CartTable({
 
   // The VAT column is intentionally NOT rendered (line.tvaAmount is still
   // computed upstream, still persisted, still used by accounting / ticket -
-  // only its display here is removed). The table stays inside the cart's
-  // own `overflow-x-auto` wrapper: when it is wider than the panel the
-  // scroll is internal, the page never scrolls sideways.
+  // only its display here is removed).
   return (
-    // `min-w` keeps the columns at their intended sizes: `table-fixed`
-    // ignores a per-cell min-width, so the floor lives on the table. When
-    // the cart panel is narrower than this, the scroll is internal to the
-    // wrapper (overflow-x-auto) and the page never scrolls sideways.
-    <Table className="table-fixed min-w-[29rem] lg:min-w-[34rem]">
+    // Mobile: w-full + min-w-0 -> the table is exactly the panel width and
+    // the % columns fill it (no internal scroll). Desktop keeps its floor so
+    // `table-fixed` never collapses the flexible Produit column.
+    <Table className="table-fixed min-w-0 lg:min-w-[34rem]">
       <TableHeader>
         <TableRow>
-          <TableHead className={COL.produit}>Produit</TableHead>
-          <TableHead className={cn(COL.qte, "text-right lg:text-center")}>
+          <TableHead className={cn(COL.produit, H_MOBILE)}>Produit</TableHead>
+          <TableHead className={cn(COL.qte, "text-center", H_MOBILE)}>
             Qte
           </TableHead>
-          <TableHead className={cn(COL.prix, "text-right lg:text-center")}>
+          <TableHead className={cn(COL.prix, "text-center", H_MOBILE)}>
             {isTransfer ? "Valeur unit." : "Prix TTC"}
           </TableHead>
           {!isTransfer && (
-            <TableHead className={cn(COL.rem, "text-right lg:text-center")}>
+            <TableHead className={cn(COL.rem, "text-center", H_MOBILE)}>
               Rem.
             </TableHead>
           )}
-          <TableHead className={cn(COL.total, "text-right")}>
+          <TableHead className={cn(COL.total, "text-right", H_MOBILE)}>
             {isTransfer ? "Valeur" : "Total"}
           </TableHead>
           <TableHead className={COL.action} />
@@ -129,19 +128,34 @@ export function CartTable({
         {lines.map((line) => (
           <TableRow key={line.productId}>
             <TableCell className={cn(COL.produit, "pr-1")}>
-              <p className="truncate font-medium text-foreground">
-                {line.designation}
-              </p>
-              <p className="truncate text-xs text-muted-foreground">
-                {line.reference}
-              </p>
+              <div className="flex items-start gap-1">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium text-foreground">
+                    {line.designation}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {line.reference}
+                  </p>
+                </div>
+                {/* Mobile-only compact delete - desktop uses its own column. */}
+                <button
+                  type="button"
+                  aria-label={`Retirer ${line.designation} du panier`}
+                  disabled={readOnly}
+                  onClick={() => onRemove(line.productId)}
+                  className="mt-0.5 shrink-0 rounded-md p-0.5 text-muted-foreground hover:text-red-600 disabled:opacity-40 lg:hidden"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </TableCell>
             <TableCell className={COL.qte}>
-              <div className="flex items-center justify-end gap-0.5 lg:justify-center">
+              <div className="flex items-center justify-center gap-0 lg:gap-0.5">
                 <Button
                   type="button"
                   variant="outline"
                   size="icon-xs"
+                  className="size-6 lg:size-8"
                   aria-label="Diminuer la quantite"
                   disabled={readOnly}
                   onClick={() => onDecrement(line.productId)}
@@ -161,12 +175,13 @@ export function CartTable({
                     )
                   }
                   aria-label="Quantite"
-                  className="h-7 w-9 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 sm:w-11"
+                  className="h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-11"
                 />
                 <Button
                   type="button"
                   variant="outline"
                   size="icon-xs"
+                  className="size-6 lg:size-8"
                   aria-label="Augmenter la quantite"
                   disabled={readOnly}
                   onClick={() => onIncrement(line.productId)}
@@ -175,9 +190,7 @@ export function CartTable({
                 </Button>
               </div>
             </TableCell>
-            <TableCell
-              className={cn(COL.prix, "text-right tabular-nums lg:text-center")}
-            >
+            <TableCell className={cn(COL.prix, "text-center tabular-nums")}>
               {priceEditable ? (
                 <input
                   type="number"
@@ -193,20 +206,20 @@ export function CartTable({
                   }
                   aria-label={`Prix TTC de ${line.designation}`}
                   className={cn(
-                    "h-7 w-16 rounded-md border bg-transparent text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 sm:w-20 lg:text-center",
+                    "h-7 w-9 rounded-md border bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-20",
                     line.priceOverridden
                       ? "border-amber-400 font-medium text-amber-700"
                       : "border-input",
                   )}
                 />
               ) : (
-                formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC)
+                <span className="max-lg:text-xs">
+                  {formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC)}
+                </span>
               )}
             </TableCell>
             {!isTransfer && (
-              <TableCell
-                className={cn(COL.rem, "text-right lg:text-center")}
-              >
+              <TableCell className={cn(COL.rem, "text-center")}>
                 <input
                   type="number"
                   min={0}
@@ -221,14 +234,14 @@ export function CartTable({
                     )
                   }
                   aria-label="Remise en pourcentage"
-                  className="h-7 w-11 rounded-md border border-input bg-transparent text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 sm:w-14 lg:text-center"
+                  className="h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-14"
                 />
               </TableCell>
             )}
             <TableCell
               className={cn(
                 COL.total,
-                "text-right font-medium tabular-nums",
+                "text-right font-medium tabular-nums max-lg:overflow-hidden max-lg:text-xs",
               )}
             >
               {formatCurrency(isTransfer ? line.transferValue : line.totalTTC)}
