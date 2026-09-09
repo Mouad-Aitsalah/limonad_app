@@ -651,6 +651,16 @@ export function DriverPosView({
                                 type="number"
                                 min={1}
                                 value={row.quantity}
+                                onFocus={(event) => {
+                                  const input = event.currentTarget;
+                                  requestAnimationFrame(() => {
+                                    try {
+                                      input.select();
+                                    } catch {
+                                      /* input detached */
+                                    }
+                                  });
+                                }}
                                 onChange={(event) =>
                                   updateQuantity(row.productId, Number(event.target.value))
                                 }
