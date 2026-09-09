@@ -46,7 +46,7 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
         // Mobile: a small, near-square launcher tile - centred rounded-square
         // icon, 2-line name, one tight price/stock row and a mini add pill.
         // Desktop keeps the wide-photo card above (classes apply at >= lg).
-        "max-lg:min-w-0 max-lg:touch-manipulation max-lg:items-center max-lg:gap-0.5 max-lg:p-1.5",
+        "max-lg:min-w-0 max-lg:touch-manipulation max-lg:items-center max-lg:gap-0 max-lg:p-1",
       )}
     >
       {tone.alert && (
@@ -72,8 +72,8 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
         imageClassName="transition-transform duration-200 group-hover:scale-[1.03]"
       />
 
-      <div className="mt-1.5 flex flex-1 flex-col px-0.5 max-lg:mt-1 max-lg:w-full max-lg:flex-none max-lg:px-0">
-        <p className="line-clamp-2 pr-12 text-[12px] font-medium leading-snug text-foreground max-lg:pr-0 max-lg:text-center max-lg:text-[10px] max-lg:leading-[12px]">
+      <div className="mt-1.5 flex flex-1 flex-col px-0.5 max-lg:mt-0.5 max-lg:w-full max-lg:flex-none max-lg:px-0">
+        <p className="line-clamp-2 pr-12 text-[12px] font-medium leading-snug text-foreground max-lg:pr-0 max-lg:text-center max-lg:text-[11px] max-lg:font-semibold max-lg:leading-[13px]">
           {product.designation}
         </p>
         {product.reference ? (
@@ -82,7 +82,7 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
           </p>
         ) : null}
 
-        <div className="mt-auto flex items-end justify-between gap-2 pt-1.5 max-lg:mt-1 max-lg:w-full max-lg:items-center max-lg:gap-1 max-lg:pt-0.5">
+        <div className="mt-auto flex items-end justify-between gap-2 pt-1.5 max-lg:mt-0.5 max-lg:w-full max-lg:items-center max-lg:gap-0.5 max-lg:pt-0">
           <div className="min-w-0 max-lg:text-center">
             <span className="text-[12px] font-semibold text-emerald-700 max-lg:block max-lg:text-[11px] max-lg:leading-none">
               {formatCurrency(product.prixVenteTTC)}
@@ -96,7 +96,7 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
               {tone.label(product.quantiteStock)}
             </p>
           </div>
-          <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.06em] text-emerald-700 max-lg:px-2 max-lg:py-0.5 max-lg:text-[8px] max-lg:tracking-normal">
+          <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.06em] text-emerald-700 max-lg:px-1.5 max-lg:py-px max-lg:text-[8px] max-lg:tracking-normal">
             <span className="max-lg:hidden">Ajouter</span>
             <span className="hidden items-center gap-0.5 max-lg:inline-flex">
               {justAdded ? (
