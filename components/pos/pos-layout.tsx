@@ -18,6 +18,7 @@ import {
 } from "@/types/pos";
 import { ProductSearch } from "@/components/pos/product-search";
 import { ProductGrid } from "@/components/pos/product-grid";
+import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { InvoiceHeader } from "@/components/pos/invoice-header";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
@@ -124,6 +125,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
   const cartSectionRef = React.useRef<HTMLDivElement>(null);
+  const cartButtonRef = React.useRef<HTMLDivElement>(null);
   const [cartPulse, setCartPulse] = React.useState(false);
   const cartPulseTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Phase 2 - admin edit of an existing counter sale (from /ventes). When
@@ -185,6 +187,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const reservationInFlightRef = React.useRef(false);
   const [preparing, setPreparing] = React.useState(false);
   const [collecting, setCollecting] = React.useState(false);
+  const flyToCart = useFlyToCart();
 
   React.useEffect(() => {
     return () => {
@@ -359,7 +362,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   // product's on-hand stock. The only lower bound is 1.
   function addToCart(productId: string) {
     const product = productById.get(productId);
-    if (!product) return;
+    if (!product) return false;
 
     setCart((prev) => {
       const existing = prev.find((line) => line.productId === productId);
@@ -379,12 +382,22 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     if (window.matchMedia("(min-width: 64rem)").matches) {
       searchInputRef.current?.focus();
     }
+    return true;
   }
 
   function showMobileCartFeedback() {
     setCartPulse(true);
     if (cartPulseTimeoutRef.current) clearTimeout(cartPulseTimeoutRef.current);
     cartPulseTimeoutRef.current = setTimeout(() => setCartPulse(false), 700);
+  }
+
+  function handleMobileProductAdded(product: PosProduct, sourceElement: HTMLElement) {
+    flyToCart({
+      product,
+      sourceElement,
+      cartElement: cartButtonRef.current,
+      onComplete: showMobileCartFeedback,
+    });
   }
 
   function scrollToMobileCart() {
@@ -1013,20 +1026,26 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
   return (
     <div className="space-y-4">
-      <Button
-        type="button"
-        size="icon"
-        aria-label={`Voir le panier, ${cartItemCount} article${cartItemCount > 1 ? "s" : ""}`}
-        onClick={scrollToMobileCart}
-        className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] left-3 z-40 h-11 w-11 rounded-full shadow-lg lg:hidden"
+      <div
+        ref={cartButtonRef}
+        className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] z-40 lg:hidden"
+        style={{ right: "max(0.75rem, env(safe-area-inset-right))" }}
       >
-        <ShoppingCart aria-hidden="true" className="h-5 w-5" />
-        <span
-          className={`absolute -top-1 -right-1 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-background bg-foreground px-1 text-[10px] font-bold text-background ${cartPulse ? "motion-safe:animate-bounce" : ""}`}
+        <Button
+          type="button"
+          size="icon"
+          aria-label={`Voir le panier, ${cartItemCount} article${cartItemCount > 1 ? "s" : ""}`}
+          onClick={scrollToMobileCart}
+          className="relative h-11 w-11 rounded-full shadow-lg"
         >
-          {cartItemCount}
-        </span>
-      </Button>
+          <ShoppingCart aria-hidden="true" className="h-5 w-5" />
+          <span
+            className={`absolute -top-1 -right-1 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-background bg-foreground px-1 text-[10px] font-bold text-background ${cartPulse ? "motion-safe:animate-bounce" : ""}`}
+          >
+            {cartItemCount}
+          </span>
+        </Button>
+      </div>
 
       {editSale ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
@@ -1115,10 +1134,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           products={filteredProducts}
           onAdd={
             openPendingSale && !editSale
-              ? () => toast.info("Cette facture est déjà préparée.")
+              ? () => {
+                  toast.info("Cette facture est déjà préparée.");
+                  return false;
+                }
               : addToCart
           }
-          onAdded={openPendingSale && !editSale ? undefined : showMobileCartFeedback}
+          onAdded={openPendingSale && !editSale ? undefined : handleMobileProductAdded}
         />
         </div>
       </div>

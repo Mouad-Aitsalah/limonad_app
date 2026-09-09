@@ -23,6 +23,7 @@ import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
 import { ProductGrid } from "@/components/pos/product-grid";
 import { ProductSearch } from "@/components/pos/product-search";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
+import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import type { PosPaymentMethodValue } from "@/types/pos";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { ProductMedia } from "@/components/products/product-media";
@@ -73,6 +74,7 @@ export function DriverPosView({
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
   const cartSectionRef = React.useRef<HTMLDivElement>(null);
+  const cartButtonRef = React.useRef<HTMLDivElement>(null);
   const [cartPulse, setCartPulse] = React.useState(false);
   const cartPulseTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Phase 3: the fully-resolved customer object (or null for "Client
@@ -95,6 +97,7 @@ export function DriverPosView({
   const [collectTarget, setCollectTarget] = React.useState<SaleDto | null>(null);
   const [collectOpen, setCollectOpen] = React.useState(false);
   const [collecting, setCollecting] = React.useState(false);
+  const flyToCart = useFlyToCart();
 
   React.useEffect(() => {
     return () => {
@@ -190,13 +193,24 @@ export function DriverPosView({
 
   function addProductById(productId: string) {
     const product = productById.get(productId);
-    if (product) addProduct(product);
+    if (!product) return false;
+    addProduct(product);
+    return true;
   }
 
   function showMobileCartFeedback() {
     setCartPulse(true);
     if (cartPulseTimeoutRef.current) clearTimeout(cartPulseTimeoutRef.current);
     cartPulseTimeoutRef.current = setTimeout(() => setCartPulse(false), 700);
+  }
+
+  function handleMobileProductAdded(product: PosProduct, sourceElement: HTMLElement) {
+    flyToCart({
+      product,
+      sourceElement,
+      cartElement: cartButtonRef.current,
+      onComplete: showMobileCartFeedback,
+    });
   }
 
   function scrollToMobileCart() {
@@ -369,20 +383,26 @@ export function DriverPosView({
 
   return (
     <div className="space-y-4 pb-6">
-      <Button
-        type="button"
-        size="icon"
-        aria-label={`Voir le panier, ${totals.quantity} article${totals.quantity > 1 ? "s" : ""}`}
-        onClick={scrollToMobileCart}
-        className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] left-3 z-40 h-11 w-11 rounded-full shadow-lg xl:hidden"
+      <div
+        ref={cartButtonRef}
+        className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] z-40 xl:hidden"
+        style={{ right: "max(0.75rem, env(safe-area-inset-right))" }}
       >
-        <ShoppingCart aria-hidden="true" className="h-5 w-5" />
-        <span
-          className={`absolute -top-1 -right-1 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-background bg-foreground px-1 text-[10px] font-bold text-background ${cartPulse ? "motion-safe:animate-bounce" : ""}`}
+        <Button
+          type="button"
+          size="icon"
+          aria-label={`Voir le panier, ${totals.quantity} article${totals.quantity > 1 ? "s" : ""}`}
+          onClick={scrollToMobileCart}
+          className="relative h-11 w-11 rounded-full shadow-lg"
         >
-          {totals.quantity}
-        </span>
-      </Button>
+          <ShoppingCart aria-hidden="true" className="h-5 w-5" />
+          <span
+            className={`absolute -top-1 -right-1 grid min-h-5 min-w-5 place-items-center rounded-full border-2 border-background bg-foreground px-1 text-[10px] font-bold text-background ${cartPulse ? "motion-safe:animate-bounce" : ""}`}
+          >
+            {totals.quantity}
+          </span>
+        </Button>
+      </div>
 
       <DriverInvoiceHeader
         driverName={context.driver.name}
@@ -401,7 +421,7 @@ export function DriverPosView({
             <ProductGrid
               products={productTiles}
               onAdd={addProductById}
-              onAdded={showMobileCartFeedback}
+              onAdded={handleMobileProductAdded}
             />
           </div>
           <Card className="hidden overflow-hidden rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)] xl:block">

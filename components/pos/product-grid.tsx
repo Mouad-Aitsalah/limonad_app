@@ -5,8 +5,8 @@ import type { PosProduct } from "@/types/pos";
 
 type ProductGridProps = {
   products: PosProduct[];
-  onAdd: (productId: string) => void;
-  onAdded?: () => void;
+  onAdd: (productId: string) => boolean | void;
+  onAdded?: (product: PosProduct, sourceElement: HTMLElement) => void;
 };
 
 export function ProductGrid({ products, onAdd, onAdded }: ProductGridProps) {

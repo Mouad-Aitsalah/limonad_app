@@ -10,8 +10,8 @@ import type { PosProduct } from "@/types/pos";
 
 type ProductCardProps = {
   product: PosProduct;
-  onAdd: (productId: string) => void;
-  onAdded?: () => void;
+  onAdd: (productId: string) => boolean | void;
+  onAdded?: (product: PosProduct, sourceElement: HTMLElement) => void;
 };
 
 export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
@@ -27,12 +27,12 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
     };
   }, []);
 
-  function handleAdd() {
-    onAdd(product.id);
-    if (!onAdded) return;
+  function handleAdd(event: React.MouseEvent<HTMLButtonElement>) {
+    const added = onAdd(product.id);
+    if (added === false || !onAdded) return;
 
     setJustAdded(true);
-    onAdded();
+    onAdded(product, event.currentTarget);
     if (resetAddedRef.current) clearTimeout(resetAddedRef.current);
     resetAddedRef.current = setTimeout(() => setJustAdded(false), 900);
   }
