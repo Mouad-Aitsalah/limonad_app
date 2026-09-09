@@ -75,6 +75,9 @@ export function DriverPosView({
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
+  // Last product tapped in the mobile "Produits" launcher - drives the
+  // floating notification only (never the cart, which stays multi-line).
+  const [lastAddedProductId, setLastAddedProductId] = React.useState<string | null>(null);
   const [mobileView, setMobileView] = React.useState<"products" | "cart">("cart");
   const cartSectionRef = React.useRef<HTMLDivElement>(null);
   const cartButtonRef = React.useRef<HTMLDivElement>(null);
@@ -184,7 +187,10 @@ export function DriverPosView({
   );
 
   const mobileSelectedProduct = React.useMemo(() => {
-    const row = cartRows[0];
+    // Feedback for the LAST tapped product only - its live cart quantity
+    // and line total - not cartRows[0] and not the whole cart.
+    if (!lastAddedProductId) return null;
+    const row = cartRows.find((line) => line.productId === lastAddedProductId);
     if (!row) return null;
 
     return {
@@ -193,23 +199,13 @@ export function DriverPosView({
       priceTTC: row.product.salePriceTTC,
       imageUrl: row.product.imageUrl,
     };
-  }, [cartRows]);
+  }, [cartRows, lastAddedProductId]);
 
   // Negative truck stock is allowed: cart quantity is never capped at the
   // product's on-hand quantity, only floored at 1.
   function addProduct(product: DriverPosProductDto) {
-    const singleProductMobile = window.matchMedia("(max-width: 79.999rem)").matches;
-
     setCart((current) => {
       const existing = current.find((line) => line.productId === product.id);
-      if (singleProductMobile) {
-        if (existing) {
-          return [{ ...existing, quantity: existing.quantity + 1 }];
-        }
-
-        return [{ productId: product.id, quantity: 1, discountRate: 0 }];
-      }
-
       if (!existing) {
         return [...current, { productId: product.id, quantity: 1, discountRate: 0 }];
       }
@@ -217,6 +213,7 @@ export function DriverPosView({
         line.productId === product.id ? { ...line, quantity: line.quantity + 1 } : line,
       );
     });
+    setLastAddedProductId(product.id);
   }
 
   function addProductById(productId: string) {
@@ -288,6 +285,7 @@ export function DriverPosView({
 
   function resetForNextSale() {
     setCart([]);
+    setLastAddedProductId(null);
     setPaidAmount("");
     setPaymentMethod("CASH");
     setBankAccountId("");

@@ -125,6 +125,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
+  // Last product tapped in the mobile "Produits" launcher - drives the
+  // floating notification only (never the cart, which stays multi-line).
+  const [lastAddedProductId, setLastAddedProductId] = React.useState<string | null>(null);
   const [mobileView, setMobileView] = React.useState<"products" | "cart">("cart");
   const cartSectionRef = React.useRef<HTMLDivElement>(null);
   const cartButtonRef = React.useRef<HTMLDivElement>(null);
@@ -336,7 +339,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   }, [cartLines]);
 
   const mobileSelectedProduct = React.useMemo(() => {
-    const line = cartLines[0];
+    // Feedback for the LAST tapped product only - its live cart quantity
+    // and line total - not cartLines[0] and not the whole cart.
+    if (!lastAddedProductId) return null;
+    const line = cartLines.find((item) => item.productId === lastAddedProductId);
     if (!line) return null;
 
     return {
@@ -345,7 +351,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       priceTTC: line.unitPriceTTC,
       imageUrl: productById.get(line.productId)?.imageUrl,
     };
-  }, [cartLines, productById]);
+  }, [cartLines, lastAddedProductId, productById]);
 
   // POS invoice tabs. A tab button shows ONLY a position index (1, 2, 3…)
   // among the invoices currently open in this POS - it is a navigation
@@ -382,18 +388,8 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     const product = productById.get(productId);
     if (!product) return false;
 
-    const singleProductMobile = window.matchMedia("(max-width: 63.999rem)").matches;
-
     setCart((prev) => {
       const existing = prev.find((line) => line.productId === productId);
-      if (singleProductMobile) {
-        if (existing) {
-          return [{ ...existing, quantity: existing.quantity + 1 }];
-        }
-
-        return [{ productId, quantity: 1, discountPercent: 0 }];
-      }
-
       if (existing) {
         return prev.map((line) =>
           line.productId === productId
@@ -403,6 +399,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       }
       return [...prev, { productId, quantity: 1, discountPercent: 0 }];
     });
+    setLastAddedProductId(productId);
 
     // Keep scanner/keyboard focus on desktop. On mobile, do not reopen the
     // keyboard or scroll away from the product the user just tapped.
@@ -557,6 +554,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   // (a fresh sale attempt starts here). It never touches a persisted DRAFT.
   function resetOperation() {
     setCart([]);
+    setLastAddedProductId(null);
     setSelectedCustomer(resolveDefaultCustomer(context.customers));
     setPaymentMethod(defaultPaymentMethod);
     setChequeNumber("");
@@ -792,6 +790,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             discountPercent: line.discountRate,
           })),
         );
+        setLastAddedProductId(null);
         const resolvedCustomer = sale.customer
           ? context.customers.find((item) => item.id === sale.customer?.id) ??
             (sale.customer as unknown as CustomerDto)
@@ -1054,6 +1053,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setDateEcheance("");
     setMixedAmounts({ cash: 0, cheque: 0 });
     setCart([]);
+    setLastAddedProductId(null);
     setOpenPendingSale(sale);
     setLastSale(sale);
   }
