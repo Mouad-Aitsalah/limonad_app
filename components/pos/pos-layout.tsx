@@ -150,6 +150,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     React.useState<PosPaymentMethodValue>(defaultPaymentMethod);
   const [chequeNumber, setChequeNumber] = React.useState("");
   const [banque, setBanque] = React.useState("");
+  // BANK_TRANSFER only: the chosen active 5141 account id (mandatory before
+  // checkout). Kept across a mode switch so returning to Virement restores
+  // it; only sent to the server when paymentMethod === "BANK_TRANSFER".
+  const [bankAccountId, setBankAccountId] = React.useState("");
   const [dateEcheance, setDateEcheance] = React.useState("");
   // Paiement mixte: espèces + chèque doivent couvrir exactement le total,
   // saisis côte à côte dès que ce mode est choisi (voir PaymentSelector).
@@ -557,6 +561,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setPaymentMethod(defaultPaymentMethod);
     setChequeNumber("");
     setBanque("");
+    setBankAccountId("");
     setDateEcheance("");
     setMixedAmounts({ cash: 0, cheque: 0 });
     idempotencyKeyRef.current = crypto.randomUUID();
@@ -618,6 +623,11 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           : paymentMethod === "BANK_TRANSFER"
             ? banque || null
             : null,
+      // Only sent for a bank transfer - switching to another method never
+      // carries a stale bank account into the transaction (§7).
+      ...(paymentMethod === "BANK_TRANSFER"
+        ? { bankAccountingAccountId: bankAccountId || null }
+        : {}),
       ...(paymentMethod === "MIXED"
         ? { cashAmount: mixedAmounts.cash, chequeAmount: mixedAmounts.cheque }
         : {}),
@@ -653,6 +663,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       toast.error("Sélectionnez un client.");
       return;
     }
+    if (paymentMethod === "BANK_TRANSFER" && !bankAccountId) {
+      toast.error(
+        "Veuillez sélectionner le compte bancaire qui a reçu le virement.",
+      );
+      return;
+    }
     setSavingEdit(true);
     try {
       const response = await fetch(`/api/sales/${editSale.id}`, {
@@ -667,6 +683,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
               : paymentMethod === "BANK_TRANSFER"
                 ? banque || null
                 : null,
+          ...(paymentMethod === "BANK_TRANSFER"
+            ? { bankAccountingAccountId: bankAccountId || null }
+            : {}),
           ...(paymentMethod === "MIXED"
             ? { cashAmount: mixedAmounts.cash, chequeAmount: mixedAmounts.cheque }
             : {}),
@@ -779,6 +798,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           : null;
         setSelectedCustomer(resolvedCustomer);
         setPaymentMethod(sale.paymentMethod as PosPaymentMethodValue);
+        setBankAccountId(sale.bankAccountingAccountId ?? "");
         if (sale.paymentMethod === "MIXED") {
           const cash = sale.payments
             .filter((p) => p.method === "CASH")
@@ -925,6 +945,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
               : paymentMethod === "BANK_TRANSFER"
                 ? banque || null
                 : null,
+          ...(paymentMethod === "BANK_TRANSFER"
+            ? { bankAccountingAccountId: bankAccountId || null }
+            : {}),
           ...(paymentMethod === "MIXED"
             ? { cashAmount: mixedAmounts.cash, chequeAmount: mixedAmounts.cheque }
             : {}),
@@ -1025,6 +1048,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     setPaymentMethod(defaultPaymentMethod);
     setChequeNumber("");
     setBanque("");
+    // Restore the DRAFT's bank account (if it was prepared as a transfer) so
+    // it is preselected should the operator collect as BANK_TRANSFER.
+    setBankAccountId(sale.bankAccountingAccountId ?? "");
     setDateEcheance("");
     setMixedAmounts({ cash: 0, cheque: 0 });
     setCart([]);
@@ -1230,6 +1256,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             onChequeNumberChange={setChequeNumber}
             banque={banque}
             onBanqueChange={setBanque}
+            bankAccounts={context.bankAccounts}
+            bankAccountId={bankAccountId}
+            onBankAccountChange={setBankAccountId}
             dateEcheance={dateEcheance}
             onDateEcheanceChange={setDateEcheance}
             mixedAmounts={mixedAmounts}
@@ -1284,6 +1313,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           disabled={cartLines.length === 0}
           loading={submitting || collecting}
           onCheckout={() => {
+            if (paymentMethod === "BANK_TRANSFER" && !bankAccountId) {
+              toast.error(
+                "Veuillez sélectionner le compte bancaire qui a reçu le virement.",
+              );
+              return;
+            }
             if (paymentMethod === "MIXED") {
               const mixedError = describeMixedPaymentError(mixedAmounts, totals.netAPayer);
               if (mixedError) {

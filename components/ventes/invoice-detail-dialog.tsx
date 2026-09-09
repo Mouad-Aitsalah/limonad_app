@@ -151,6 +151,16 @@ export function InvoiceDetailDialog({ listItem, open, onOpenChange }: InvoiceDet
                       {paymentMethodLabels[sale.paymentMethod] ?? sale.paymentMethod}
                     </p>
                   </div>
+                  {sale.paymentMethod === "BANK_TRANSFER" &&
+                  sale.bankAccountingAccountCode ? (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Compte bancaire</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {sale.bankAccountingAccountCode} —{" "}
+                        {sale.bankAccountingAccountName}
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
 
                 <Table>

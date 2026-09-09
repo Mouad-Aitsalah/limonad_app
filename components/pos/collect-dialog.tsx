@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Printer } from "lucide-react";
 
+import { BankAccountCombobox } from "@/components/pos/bank-account-combobox";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,40 +17,57 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatCustomerCode } from "@/lib/customer-code";
 import { formatCurrency } from "@/lib/utils";
-import type { SaleDto } from "@/types/operations-dto";
+import type { PosBankAccountOptionDto, SaleDto } from "@/types/operations-dto";
 import { defaultPaymentMethod, posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
+
+type OnCollect = (
+  method: PosPaymentMethodValue,
+  paidAmount?: number,
+  bankAccountingAccountId?: string,
+) => Promise<void> | void;
 
 type CollectDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sale: SaleDto | null;
   submitting?: boolean;
-  onCollect: (method: PosPaymentMethodValue, paidAmount?: number) => Promise<void> | void;
+  /** Active 5141 accounts for the BANK_TRANSFER "Compte bancaire" picker. */
+  bankAccounts: PosBankAccountOptionDto[];
+  onCollect: OnCollect;
   onPrint: () => void;
 };
 
 function CollectForm({
   sale,
   submitting,
+  bankAccounts,
   onCollect,
   onPrint,
 }: {
   sale: SaleDto;
   submitting: boolean;
-  onCollect: (method: PosPaymentMethodValue, paidAmount?: number) => Promise<void> | void;
+  bankAccounts: PosBankAccountOptionDto[];
+  onCollect: OnCollect;
   onPrint: () => void;
 }) {
   const total = sale.totalTTC;
   const [method, setMethod] = React.useState<PosPaymentMethodValue>(defaultPaymentMethod);
   const [received, setReceived] = React.useState(total);
+  const [bankAccountId, setBankAccountId] = React.useState("");
   const changeDue = Math.max(0, received - total);
+  const bankAccountMissing = method === "BANK_TRANSFER" && !bankAccountId;
 
   return (
     <form
       className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault();
-        void onCollect(method, method === "MIXED" ? received : undefined);
+        if (bankAccountMissing) return;
+        void onCollect(
+          method,
+          method === "MIXED" ? received : undefined,
+          method === "BANK_TRANSFER" ? bankAccountId : undefined,
+        );
       }}
     >
       <div className="space-y-2">
@@ -67,6 +85,29 @@ function CollectForm({
           ))}
         </select>
       </div>
+
+      {method === "BANK_TRANSFER" ? (
+        <div className="space-y-2">
+          <Label htmlFor="collect-bank-account">
+            Compte bancaire <span className="text-red-600">*</span>
+          </Label>
+          <BankAccountCombobox
+            id="collect-bank-account"
+            accounts={bankAccounts}
+            accountId={bankAccountId}
+            onChange={setBankAccountId}
+          />
+          {bankAccounts.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Aucun compte 5141 actif.
+            </p>
+          ) : bankAccountMissing ? (
+            <p className="text-xs font-medium text-red-600">
+              Veuillez sélectionner le compte bancaire qui a reçu le virement.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {method === "MIXED" ? (
         <div className="space-y-2">
@@ -90,7 +131,7 @@ function CollectForm({
           <Printer aria-hidden="true" className="h-4 w-4" />
           Imprimer
         </Button>
-        <Button type="submit" disabled={submitting}>
+        <Button type="submit" disabled={submitting || bankAccountMissing}>
           {submitting ? "Encaissement..." : "Encaisser"}
         </Button>
       </DialogFooter>
@@ -109,6 +150,7 @@ export function CollectDialog({
   onOpenChange,
   sale,
   submitting = false,
+  bankAccounts,
   onCollect,
   onPrint,
 }: CollectDialogProps) {
@@ -130,6 +172,7 @@ export function CollectDialog({
             key={`${sale.id}:${open ? "open" : "closed"}`}
             sale={sale}
             submitting={submitting}
+            bankAccounts={bankAccounts}
             onCollect={onCollect}
             onPrint={onPrint}
           />

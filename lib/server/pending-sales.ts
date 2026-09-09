@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
+  resolveSaleTransferBankAccountId,
 } from "@/lib/server/accounting";
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { OperationsServiceError } from "@/lib/server/depots";
@@ -67,6 +68,9 @@ const collectSchema = z.object({
   cashAmount: z.coerce.number().min(0).optional(),
   chequeAmount: z.coerce.number().min(0).optional(),
   reference: z.string().trim().nullable().optional(),
+  // BANK_TRANSFER only: the chosen active 5141 account. Mandatory when the
+  // draft is collected as a bank transfer (validated below + at posting).
+  bankAccountingAccountId: z.string().trim().nullable().optional(),
 });
 
 export type CollectPendingSaleInput = z.infer<typeof collectSchema>;
@@ -262,6 +266,18 @@ async function collectSaleCore(
           paymentMethod,
         });
 
+        // BANK_TRANSFER collection: the 5141 account is mandatory here (the
+        // payment method is only chosen at collection). Any other method
+        // clears a bank account a BANK_TRANSFER draft may have carried.
+        const bankAccountingAccountId =
+          paymentMethod === "BANK_TRANSFER"
+            ? await resolveSaleTransferBankAccountId(
+                tx,
+                organizationId,
+                parsed.data.bankAccountingAccountId ?? null,
+              )
+            : null;
+
         const scopeCode =
           scope.origin === "COUNTER"
             ? "CTR"
@@ -336,6 +352,7 @@ async function collectSaleCore(
             ? { cashAmount: mixedSplit.cashAmount, chequeAmount: mixedSplit.chequeAmount }
             : null,
           paymentMethod,
+          bankAccountingAccountId,
           paymentId: createdPayment?.id ?? null,
           paymentReference: createdPayment?.reference ?? null,
           createdByUserId: collectedByUserId,
@@ -351,6 +368,7 @@ async function collectSaleCore(
                   ? "PARTIALLY_PAID"
                   : "PAID",
             paymentMethod,
+            bankAccountingAccountId,
             paidAmount: payment.paidAmount,
             creditAmount: payment.creditAmount,
             stampAmount,

@@ -7,7 +7,9 @@ import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
   computeCashSaleStampAmount,
+  listActiveBankAccountOptions,
   postSaleAccountingEntry,
+  resolveSaleTransferBankAccountId,
 } from "@/lib/server/accounting";
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { getPosCustomerPreload } from "@/lib/server/customers";
@@ -43,6 +45,9 @@ const driverSaleSchema = z.object({
   // tax (see assertMoneyRange calls below, the actual gate).
   paidAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   reference: z.string().trim().nullable().optional(),
+  // BANK_TRANSFER only: the chosen active 5141 account. Mandatory for a
+  // collected bank-transfer sale (validated below + at posting).
+  bankAccountingAccountId: z.string().trim().nullable().optional(),
   stampAmount: z.coerce.number().min(0).optional(),
   // Same idempotency contract as counter-sales.ts's counterSaleSchema - see
   // the comment there.
@@ -137,7 +142,7 @@ export async function getDriverPosContext(
     }, driver.truck, activeTour);
   }
 
-  const [productRows, customers] = await Promise.all([
+  const [productRows, customers, bankAccounts] = await Promise.all([
     // Same rule as the counter POS: visibility = every ACTIVE product the
     // driver is allowed to sell, NOT "what has a stock row on this truck".
     // A product not (yet) loaded on the truck (no StockLevel row) is still
@@ -172,6 +177,7 @@ export async function getDriverPosContext(
       },
       guaranteeCustomerId: initialCustomerId,
     }),
+    listActiveBankAccountOptions(prisma, user.organizationId),
   ]);
 
   const productsTruncated = productRows.length > POS_PRODUCT_LIST_LIMIT;
@@ -207,6 +213,7 @@ export async function getDriverPosContext(
     customers: customers.filter((customer) => customer.status === "ACTIVE"),
     stockLocationId: driver.truck.stockLocation.id,
     productsTruncated,
+    bankAccounts,
     products: pageProducts.map((product) => {
       const salePriceHT = product.salePrice.toNumber();
       const taxRate = product.taxRate.toNumber();
@@ -345,6 +352,19 @@ export async function createDriverSale(
       if (customer && customer.status !== "ACTIVE") {
         throw new OperationsServiceError("Client inactif ou bloque.", 409);
       }
+
+      // BANK_TRANSFER: mandatory 5141 account as soon as the sale is
+      // collected; validated whenever an id is supplied (same rule as the
+      // counter POS).
+      const bankAccountingAccountId =
+        parsed.data.paymentMethod === "BANK_TRANSFER" &&
+        (collectNow || parsed.data.bankAccountingAccountId)
+          ? await resolveSaleTransferBankAccountId(
+              tx,
+              user.organizationId,
+              parsed.data.bankAccountingAccountId ?? null,
+            )
+          : null;
 
       const productIds = lines.map((line) => line.productId);
       const products = await tx.product.findMany({
@@ -523,6 +543,7 @@ export async function createDriverSale(
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
           paymentMethod: parsed.data.paymentMethod,
+          bankAccountingAccountId,
           createdByUserId: user.id,
           validatedAt: collectNow ? new Date() : null,
           idempotencyKey: parsed.data.idempotencyKey,
@@ -586,6 +607,7 @@ export async function createDriverSale(
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
           paymentMethod: parsed.data.paymentMethod,
+          bankAccountingAccountId,
           paymentId: createdPayment?.id ?? null,
           paymentReference: createdPayment?.reference ?? null,
           createdByUserId: user.id,
@@ -767,5 +789,6 @@ function blockedContext(
     products: [],
     stockLocationId: null,
     productsTruncated: false,
+    bankAccounts: [],
   };
 }

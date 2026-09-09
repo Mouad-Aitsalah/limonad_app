@@ -162,6 +162,13 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
           ) : (
             <>
               <p>Paiement : {paymentLabel}</p>
+              {sale.paymentMethod === "BANK_TRANSFER" &&
+              sale.bankAccountingAccountCode ? (
+                <p>
+                  Compte bancaire : {sale.bankAccountingAccountCode} —{" "}
+                  {sale.bankAccountingAccountName}
+                </p>
+              ) : null}
               {sale.paymentMethod === "MIXED" ? (
                 <>
                   <p>Espèces : {formatCurrency(cashAmount)}</p>

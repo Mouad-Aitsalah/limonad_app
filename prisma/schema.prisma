@@ -1279,6 +1279,13 @@ model Sale {
   paidAmount      Decimal       @default(0) @db.Decimal(12, 2)
   creditAmount    Decimal       @default(0) @db.Decimal(12, 2)
   paymentMethod   PaymentMethod
+  // Selected only for a BANK_TRANSFER sale: the specific 5141 sub-account
+  // that received the transfer. Mandatory for every NEW bank-transfer sale
+  // (server 422 otherwise, no silent default). Historical rows stay NULL and
+  // keep using the org's default bank account in accounting - never
+  // backfilled.
+  bankAccountingAccountId String?
+  bankAccountingAccount   AccountingAccount? @relation("SaleBankAccountingAccount", fields: [bankAccountingAccountId], references: [id], onDelete: Restrict)
   createdByUserId String
   createdBy       User          @relation("SaleCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   validatedAt     DateTime?
@@ -1307,6 +1314,7 @@ model Sale {
   @@index([depotId])
   @@index([truckId])
   @@index([posSessionId])
+  @@index([bankAccountingAccountId])
   // BI Phase 2A: covers the CA/marge/ventes/clients-actifs helpers, which
   // all filter by organizationId + a validatedAt range.
   @@index([organizationId, validatedAt])
@@ -1548,6 +1556,7 @@ model AccountingAccount {
   cashSettings             AccountingSettings[]  @relation("AccountingSettingsCashAccount")
   bankSettings             AccountingSettings[]  @relation("AccountingSettingsBankAccount")
   purchasesWithBankAccount Purchase[]            @relation("PurchaseBankAccountingAccount")
+  salesWithBankAccount     Sale[]               @relation("SaleBankAccountingAccount")
   customerSettings         AccountingSettings[]  @relation("AccountingSettingsCustomerAccount")
   supplierSettings         AccountingSettings[]  @relation("AccountingSettingsSupplierAccount")
   customerReturnSettings   AccountingSettings[]  @relation("AccountingSettingsCustomerReturnAccount")

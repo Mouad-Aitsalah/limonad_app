@@ -156,6 +156,12 @@ type SaleAccountingPayload = {
   paymentId?: string | null;
   paymentReference?: string | null;
   /**
+   * BANK_TRANSFER only: the 5141 account the transfer landed on. MANDATORY
+   * for every new BANK_TRANSFER settlement - the settlement debit line uses
+   * this exact account, never a silent fallback to settings.bankAccountId.
+   */
+  bankAccountingAccountId?: string | null;
+  /**
    * Set only for a counter-POS MIXED sale (cash+cheque split covering the
    * full total). When present, the settlement posts TWO debit lines (cash
    * to the usual cash account, cheque to 51111) instead of the single
@@ -1104,6 +1110,19 @@ export async function postSaleAccountingEntry(
     return;
   }
 
+  // BANK_TRANSFER: the settlement must debit the EXACT 5141 account the
+  // operator picked - never a silent default. Missing / wrong-org / inactive
+  // / non-5141 -> hard 422 (the sale itself is rejected). CARD (legacy, no
+  // picker) still resolves to the org default bank account.
+  const bankTransferAccountId =
+    payload.paymentMethod === "BANK_TRANSFER"
+      ? await resolveSaleTransferBankAccountId(
+          db,
+          organizationId,
+          payload.bankAccountingAccountId ?? null,
+        )
+      : null;
+
   const debitLines = payload.paymentSplit
     ? await buildMixedSettlementDebitLines(db, organizationId, settings.cashAccountId, payload.paymentSplit)
     : [
@@ -1116,9 +1135,11 @@ export async function postSaleAccountingEntry(
                   accountingSystemAccountCodes.chequeInPortfolio,
                   "Cheque en portefeuille",
                 )
-              : usesBankAccount(payload.paymentMethod)
-                ? settings.bankAccountId
-                : settings.cashAccountId,
+              : payload.paymentMethod === "BANK_TRANSFER"
+                ? bankTransferAccountId!
+                : usesBankAccount(payload.paymentMethod)
+                  ? settings.bankAccountId
+                  : settings.cashAccountId,
           label: buildSaleSettlementLabel(),
           debit: paidAmount,
           credit: 0,
@@ -1993,6 +2014,61 @@ async function resolveCustomerAuxiliaryAccountId(
     name: customer.name,
     type: "RECEIVABLE",
   });
+}
+
+/**
+ * Resolves (and defends) the 5141 account a BANK_TRANSFER sale settlement
+ * must debit. There is NO fallback: a new bank-transfer settlement without a
+ * valid pick is rejected (422). Mirrors the purchase-side check
+ * (postPurchaseAccountingEntry) so the same rule applies on both journals.
+ */
+/**
+ * Active 5141 accounting accounts of one organisation, as {id, code, name}.
+ * Used to populate the POS "Compte bancaire" picker for a BANK_TRANSFER sale
+ * (preloaded in the POS context so the driver role - which cannot call
+ * /api/accounting/accounts - still gets the list).
+ */
+export async function listActiveBankAccountOptions(
+  db: DbClient,
+  organizationId: string,
+): Promise<{ id: string; code: string; name: string }[]> {
+  const accounts = await db.accountingAccount.findMany({
+    where: {
+      organizationId,
+      isActive: true,
+      code: { startsWith: "5141" },
+    },
+    select: { id: true, code: true, name: true },
+    orderBy: { code: "asc" },
+  });
+  return accounts;
+}
+
+export async function resolveSaleTransferBankAccountId(
+  db: DbClient,
+  organizationId: string,
+  bankAccountingAccountId: string | null,
+): Promise<string> {
+  const requestedId = bankAccountingAccountId?.trim();
+  const invalid = () =>
+    new OperationsServiceError(
+      "Veuillez sélectionner le compte bancaire qui a reçu le virement.",
+      422,
+      { bankAccountingAccountId: "Compte bancaire 5141 actif obligatoire." },
+    );
+  if (!requestedId) throw invalid();
+
+  const account = await db.accountingAccount.findFirst({
+    where: {
+      id: requestedId,
+      organizationId,
+      isActive: true,
+      code: { startsWith: "5141" },
+    },
+    select: { id: true },
+  });
+  if (!account) throw invalid();
+  return account.id;
 }
 
 async function resolveSupplierAuxiliaryAccountId(

@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
+  resolveSaleTransferBankAccountId,
   reverseAccountingEntryForSource,
 } from "@/lib/server/accounting";
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
@@ -65,6 +66,9 @@ const reviseSchema = z.object({
   cashAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   chequeAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   reference: z.string().trim().nullable().optional(),
+  // BANK_TRANSFER only: the chosen active 5141 account. Mandatory when the
+  // revised sale is a bank transfer (validated + re-posted).
+  bankAccountingAccountId: z.string().trim().nullable().optional(),
   expectedUpdatedAt: z.string().trim().min(1).nullable().optional(),
   lines: z
     .array(
@@ -482,6 +486,19 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
           paymentMethod: data.paymentMethod,
         });
 
+        // BANK_TRANSFER revision: a real 5141 account is mandatory for a
+        // non-DRAFT bank transfer (the settlement is re-posted). Any other
+        // method clears the previously-stored bank account.
+        const bankAccountingAccountId =
+          data.paymentMethod === "BANK_TRANSFER" &&
+          (!isDraft || data.bankAccountingAccountId)
+            ? await resolveSaleTransferBankAccountId(
+                tx,
+                sessionUser.organizationId,
+                data.bankAccountingAccountId ?? null,
+              )
+            : null;
+
         const mixedSplit =
           !isDraft &&
           data.paymentMethod === "MIXED" &&
@@ -727,6 +744,7 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
             paidAmount: payment.paidAmount,
             creditAmount: payment.creditAmount,
             paymentMethod: data.paymentMethod,
+            bankAccountingAccountId,
             paymentSplit: mixedSplit
               ? { cashAmount: mixedSplit.cashAmount, chequeAmount: mixedSplit.chequeAmount }
               : null,
@@ -775,6 +793,7 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
             paidAmount: payment.paidAmount,
             creditAmount: payment.creditAmount,
             paymentMethod: data.paymentMethod,
+            bankAccountingAccountId,
             status: newStatus,
             lines: {
               create: computedLines.map((line) => ({

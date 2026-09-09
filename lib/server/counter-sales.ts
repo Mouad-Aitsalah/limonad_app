@@ -7,7 +7,9 @@ import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
   computeCashSaleStampAmount,
+  listActiveBankAccountOptions,
   postSaleAccountingEntry,
+  resolveSaleTransferBankAccountId,
 } from "@/lib/server/accounting";
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { getPosCustomerPreload } from "@/lib/server/customers";
@@ -51,6 +53,10 @@ const counterSaleSchema = z.object({
   cashAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   chequeAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
   reference: z.string().trim().nullable().optional(),
+  // BANK_TRANSFER only: the chosen active 5141 accounting account. Mandatory
+  // for a collected bank-transfer sale - validated + enforced below and
+  // again when the settlement entry is posted (no silent default).
+  bankAccountingAccountId: z.string().trim().nullable().optional(),
   stampAmount: z.coerce.number().min(0).optional(),
   // Client-generated, stable for one logical sale attempt (see
   // components/pos - the POS form keeps the same key across a network retry
@@ -125,7 +131,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     throw new OperationsServiceError("Emplacement depot introuvable.", 404);
   }
 
-  const [productRows, customers] = await Promise.all([
+  const [productRows, customers, bankAccounts] = await Promise.all([
     // Source of truth for POS visibility = every ACTIVE product of the
     // organisation, NOT "what has a stock row at this depot". A product
     // never received/loaded here (no StockLevel row) must still be sellable
@@ -154,6 +160,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     // Phase 3 report. Anything beyond this small set is reached through
     // the customer combobox's GET /api/customers/search fallback.
     getPosCustomerPreload({ organizationId: sessionUser.organizationId, guaranteeType: "COUNTER" }),
+    listActiveBankAccountOptions(prisma, sessionUser.organizationId),
   ]);
 
   const productsTruncated = productRows.length > POS_PRODUCT_LIST_LIMIT;
@@ -201,6 +208,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     customers,
     products,
     productsTruncated,
+    bankAccounts,
   };
 }
 
@@ -307,6 +315,20 @@ export async function createCounterSale(
       if (customer && customer.status !== "ACTIVE") {
         throw new OperationsServiceError("Client inactif ou bloque.", 409);
       }
+
+      // BANK_TRANSFER: the specific 5141 account is MANDATORY as soon as the
+      // sale is collected (collectNow), and is validated (active, same org,
+      // "5141" prefix) whenever an id is supplied - a not-yet-collected DRAFT
+      // may still carry no bank account and gets one enforced at collection.
+      const bankAccountingAccountId =
+        parsed.data.paymentMethod === "BANK_TRANSFER" &&
+        (collectNow || parsed.data.bankAccountingAccountId)
+          ? await resolveSaleTransferBankAccountId(
+              tx,
+              sessionUser.organizationId,
+              parsed.data.bankAccountingAccountId ?? null,
+            )
+          : null;
 
       const productIds = lines.map((line) => line.productId);
       const products = await tx.product.findMany({
@@ -531,6 +553,7 @@ export async function createCounterSale(
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
           paymentMethod: parsed.data.paymentMethod,
+          bankAccountingAccountId,
           createdByUserId: sessionUser.id,
           validatedAt: collectNow ? new Date() : null,
           idempotencyKey: parsed.data.idempotencyKey,
@@ -603,6 +626,7 @@ export async function createCounterSale(
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
           paymentMethod: parsed.data.paymentMethod,
+          bankAccountingAccountId,
           paymentSplit: mixedSplit
             ? { cashAmount: mixedSplit.cashAmount, chequeAmount: mixedSplit.chequeAmount }
             : null,

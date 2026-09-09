@@ -640,6 +640,15 @@ export interface DriverPosProductDto {
   availableQuantity: number;
 }
 
+/** Active 5141 accounting account, offered as the "Compte bancaire" choice
+ *  when a POS sale is paid by BANK_TRANSFER. Preloaded in the POS context so
+ *  the driver role (no access to /api/accounting/accounts) can list them. */
+export interface PosBankAccountOptionDto {
+  id: string;
+  code: string;
+  name: string;
+}
+
 export interface DriverPosContextDto {
   canSell: boolean;
   message?: string;
@@ -656,6 +665,8 @@ export interface DriverPosContextDto {
    * frontend must fall back to a server search instead of trusting the
    * preloaded list to contain everything. */
   productsTruncated: boolean;
+  /** Active 5141 accounts for the BANK_TRANSFER "Compte bancaire" picker. */
+  bankAccounts: PosBankAccountOptionDto[];
 }
 
 export interface CounterPosContextDto {
@@ -668,6 +679,8 @@ export interface CounterPosContextDto {
   products: DriverPosProductDto[];
   /** See DriverPosContextDto.productsTruncated. */
   productsTruncated: boolean;
+  /** Active 5141 accounts for the BANK_TRANSFER "Compte bancaire" picker. */
+  bankAccounts: PosBankAccountOptionDto[];
 }
 
 export interface SaleLineDto {
@@ -756,6 +769,11 @@ export interface SaleDto {
   paidAmount: number;
   creditAmount: number;
   paymentMethod: string;
+  /** BANK_TRANSFER sales only: the 5141 account that received the transfer.
+   *  NULL on historical rows (they use the org default in accounting). */
+  bankAccountingAccountId?: string | null;
+  bankAccountingAccountCode?: string | null;
+  bankAccountingAccountName?: string | null;
   createdByUserName: string;
   validatedAt?: string | null;
   createdAt: string;
@@ -819,6 +837,9 @@ export type DriverSaleInput = {
   paymentMethod: string;
   paidAmount?: number;
   reference?: string | null;
+  /** Mandatory when paymentMethod === "BANK_TRANSFER": the chosen active
+   *  5141 account id (server re-validates org / active / 5141 prefix). */
+  bankAccountingAccountId?: string | null;
   stampAmount?: number;
   lines: {
     productId: string;

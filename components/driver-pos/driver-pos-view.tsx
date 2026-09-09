@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { BankAccountCombobox } from "@/components/pos/bank-account-combobox";
 import { CollectDialog } from "@/components/pos/collect-dialog";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { CustomerNumberInput } from "@/components/pos/customer-number-input";
@@ -90,6 +91,9 @@ export function DriverPosView({
     resolveInitialCustomer(initialContext, initialCustomerId),
   );
   const [paymentMethod, setPaymentMethod] = React.useState("CASH");
+  // BANK_TRANSFER only: chosen active 5141 account id (mandatory before a
+  // bank-transfer sale). Only sent when paymentMethod === "BANK_TRANSFER".
+  const [bankAccountId, setBankAccountId] = React.useState("");
   const [paidAmount, setPaidAmount] = React.useState("");
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -273,6 +277,9 @@ export function DriverPosView({
       customerId: selectedCustomer?.id ?? null,
       paymentMethod,
       paidAmount: paidAmount ? Number(paidAmount) : undefined,
+      ...(paymentMethod === "BANK_TRANSFER"
+        ? { bankAccountingAccountId: bankAccountId || null }
+        : {}),
       lines: cart,
       idempotencyKey: idempotencyKeyRef.current,
       ...extra,
@@ -283,6 +290,7 @@ export function DriverPosView({
     setCart([]);
     setPaidAmount("");
     setPaymentMethod("CASH");
+    setBankAccountId("");
     idempotencyKeyRef.current = crypto.randomUUID();
   }
 
@@ -311,6 +319,12 @@ export function DriverPosView({
   }, []);
 
   async function validateSale() {
+    if (paymentMethod === "BANK_TRANSFER" && !bankAccountId) {
+      toast.error(
+        "Veuillez sélectionner le compte bancaire qui a reçu le virement.",
+      );
+      return;
+    }
     const handledCustomerId = selectedCustomer?.id ?? null;
     setBusy(true);
     try {
@@ -362,7 +376,11 @@ export function DriverPosView({
     }
   }
 
-  async function collectPending(method: PosPaymentMethodValue, collectPaidAmount?: number) {
+  async function collectPending(
+    method: PosPaymentMethodValue,
+    collectPaidAmount?: number,
+    bankAccountingAccountId?: string,
+  ) {
     if (!collectTarget) return;
     setCollecting(true);
     try {
@@ -373,6 +391,9 @@ export function DriverPosView({
           paymentMethod: method,
           paidAmount: collectPaidAmount,
           reference: null,
+          ...(method === "BANK_TRANSFER"
+            ? { bankAccountingAccountId: bankAccountingAccountId ?? null }
+            : {}),
         }),
       });
       const payload = (await response.json()) as { sale?: SaleDto; message?: string };
@@ -588,6 +609,21 @@ export function DriverPosView({
                   </select>
                 </Field>
 
+                {paymentMethod === "BANK_TRANSFER" && (
+                  <Field label="Compte bancaire *">
+                    <BankAccountCombobox
+                      accounts={context.bankAccounts}
+                      accountId={bankAccountId}
+                      onChange={setBankAccountId}
+                    />
+                    {context.bankAccounts.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Aucun compte 5141 actif.
+                      </p>
+                    ) : null}
+                  </Field>
+                )}
+
                 {paymentMethod === "MIXED" && (
                   <Field label="Montant encaissé">
                     <Input
@@ -743,6 +779,7 @@ export function DriverPosView({
         }}
         sale={collectTarget}
         submitting={collecting}
+        bankAccounts={context.bankAccounts}
         onCollect={collectPending}
         onPrint={() => {
           if (collectTarget) printPending(collectTarget);

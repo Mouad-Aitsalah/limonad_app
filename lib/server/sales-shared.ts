@@ -16,6 +16,7 @@ export const saleInclude = {
   truck: { select: { id: true, code: true, registration: true } },
   tour: { select: { id: true, code: true, status: true, date: true } },
   createdBy: { select: { fullName: true } },
+  bankAccountingAccount: { select: { id: true, code: true, name: true } },
   lines: {
     include: {
       product: { select: { reference: true, name: true } },
@@ -62,6 +63,10 @@ export function mapSaleToDto(sale: SaleWithRelations): SaleDto {
     paidAmount: sale.paidAmount.toNumber(),
     creditAmount: sale.creditAmount.toNumber(),
     paymentMethod: sale.paymentMethod,
+    // BANK_TRANSFER only: the specific 5141 account chosen for the transfer.
+    bankAccountingAccountId: sale.bankAccountingAccountId,
+    bankAccountingAccountCode: sale.bankAccountingAccount?.code ?? null,
+    bankAccountingAccountName: sale.bankAccountingAccount?.name ?? null,
     createdByUserName: sale.createdBy.fullName,
     validatedAt: sale.validatedAt?.toISOString() ?? null,
     createdAt: sale.createdAt.toISOString(),

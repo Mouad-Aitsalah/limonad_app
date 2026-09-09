@@ -1,5 +1,6 @@
 import { CreditCard } from "lucide-react";
 
+import { BankAccountCombobox } from "@/components/pos/bank-account-combobox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -10,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/utils";
+import type { PosBankAccountOptionDto } from "@/types/operations-dto";
 import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
 
 export type MixedPaymentAmounts = { cash: number; cheque: number };
@@ -38,6 +40,11 @@ type PaymentSelectorProps = {
   onChequeNumberChange: (value: string) => void;
   banque: string;
   onBanqueChange: (value: string) => void;
+  /** Active 5141 accounts (from the POS context) for the BANK_TRANSFER picker. */
+  bankAccounts: PosBankAccountOptionDto[];
+  /** Selected 5141 account id - mandatory when paymentMethod === "BANK_TRANSFER". */
+  bankAccountId: string;
+  onBankAccountChange: (accountId: string) => void;
   dateEcheance: string;
   onDateEcheanceChange: (value: string) => void;
   mixedAmounts: MixedPaymentAmounts;
@@ -52,6 +59,9 @@ export function PaymentSelector({
   onChequeNumberChange,
   banque,
   onBanqueChange,
+  bankAccounts,
+  bankAccountId,
+  onBankAccountChange,
   dateEcheance,
   onDateEcheanceChange,
   mixedAmounts,
@@ -179,14 +189,32 @@ export function PaymentSelector({
       )}
 
       {paymentMethod === "BANK_TRANSFER" && (
-        <div className="space-y-2">
-          <Label htmlFor="banque">Référence virement</Label>
-          <Input
-            id="banque"
-            value={banque}
-            onChange={(event) => onBanqueChange(event.target.value)}
-            placeholder="Référence bancaire"
-          />
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="bankAccount">
+              Compte bancaire <span className="text-red-600">*</span>
+            </Label>
+            <BankAccountCombobox
+              id="bankAccount"
+              accounts={bankAccounts}
+              accountId={bankAccountId}
+              onChange={onBankAccountChange}
+            />
+            {bankAccounts.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Aucun compte 5141 actif. Créez-en un dans Comptabilité &gt; Comptes.
+              </p>
+            ) : null}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="banque">Référence virement</Label>
+            <Input
+              id="banque"
+              value={banque}
+              onChange={(event) => onBanqueChange(event.target.value)}
+              placeholder="Facultatif (ex : TRX-458963)"
+            />
+          </div>
         </div>
       )}
 
