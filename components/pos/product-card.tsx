@@ -47,6 +47,8 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
         // icon, 2-line name, one tight price/stock row and a mini add pill.
         // Desktop keeps the wide-photo card above (classes apply at >= lg).
         "max-lg:min-w-0 max-lg:touch-manipulation max-lg:items-center max-lg:gap-0 max-lg:p-1",
+        // Press feedback is independent of add success and never shifts the grid.
+        "max-lg:transition-transform max-lg:duration-150 max-lg:hover:translate-y-0 max-lg:motion-safe:active:scale-95 max-lg:motion-reduce:transition-none",
       )}
     >
       {tone.alert && (
