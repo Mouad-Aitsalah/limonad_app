@@ -126,27 +126,36 @@ export function CartTable({
       </TableHeader>
       <TableBody>
         {lines.map((line) => (
-          <TableRow key={line.productId}>
-            <TableCell className={cn(COL.produit, "pr-1")}>
-              <div className="flex items-start gap-1">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-foreground">
-                    {line.designation}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {line.reference}
-                  </p>
-                </div>
-                {/* Mobile-only compact delete - desktop uses its own column. */}
-                <button
-                  type="button"
-                  aria-label={`Retirer ${line.designation} du panier`}
-                  disabled={readOnly}
-                  onClick={() => onRemove(line.productId)}
-                  className="mt-0.5 shrink-0 rounded-md p-0.5 text-muted-foreground hover:text-red-600 disabled:opacity-40 lg:hidden"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+          // Mobile: cells align to the top so QTE / PRIX / REM. / TOTAL stay
+          // readable when the product name wraps to 2-3 lines. Desktop keeps
+          // its previously-validated vertical-align (middle).
+          <TableRow key={line.productId} className="max-lg:[&>td]:align-top">
+            <TableCell className={cn(COL.produit, "relative pr-1")}>
+              {/* Mobile-only compact delete - pulled out of the text flow
+                  (absolute, top-right) so the name can use the full column
+                  width on every line; `pr-5` keeps the first line clear of it.
+                  Desktop uses its own dedicated column instead. */}
+              <button
+                type="button"
+                aria-label={`Retirer ${line.designation} du panier`}
+                disabled={readOnly}
+                onClick={() => onRemove(line.productId)}
+                className="absolute right-0 top-2 rounded-md p-0.5 text-muted-foreground hover:text-red-600 disabled:opacity-40 lg:hidden"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+              <div className="min-w-0">
+                {/* Full product name - never clipped with an ellipsis.
+                    `whitespace-normal` overrides the `whitespace-nowrap`
+                    TableCell sets by default; wrapping happens on spaces and
+                    `break-words` only splits a single word when it is itself
+                    too wide for the column, so it can never overflow. */}
+                <p className="pr-5 font-medium whitespace-normal break-words text-foreground lg:pr-0">
+                  {line.designation}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {line.reference}
+                </p>
               </div>
             </TableCell>
             <TableCell className={COL.qte}>
