@@ -494,6 +494,8 @@ export async function searchPosProducts(params: {
     imageUrl: true,
     salePrice: true,
     taxRate: true,
+    defaultSupplierId: true,
+    defaultSupplier: { select: { name: true } },
   } as const;
 
   type ProductRow = {
@@ -504,6 +506,8 @@ export async function searchPosProducts(params: {
     imageUrl: string | null;
     salePrice: Prisma.Decimal;
     taxRate: Prisma.Decimal;
+    defaultSupplierId: string | null;
+    defaultSupplier: { name: string } | null;
   };
 
   async function withLevels(products: ProductRow[]): Promise<DriverPosProductDto[]> {
@@ -531,6 +535,8 @@ export async function searchPosProducts(params: {
         salePriceTTC: computePriceTTC(salePriceHT, taxRate),
         taxRate,
         availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
+        supplierId: product.defaultSupplierId,
+        supplierName: product.defaultSupplier?.name ?? null,
       };
     });
   }

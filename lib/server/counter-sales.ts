@@ -149,6 +149,8 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
         imageUrl: true,
         salePrice: true,
         taxRate: true,
+        defaultSupplierId: true,
+        defaultSupplier: { select: { name: true } },
       },
       orderBy: { name: "asc" },
       take: POS_PRODUCT_LIST_LIMIT + 1,
@@ -196,6 +198,8 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       taxRate,
       // No stock row at this depot -> shown as 0 (still sellable).
       availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
+      supplierId: product.defaultSupplierId,
+      supplierName: product.defaultSupplier?.name ?? null,
     };
   });
 

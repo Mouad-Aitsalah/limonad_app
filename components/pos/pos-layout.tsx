@@ -18,6 +18,7 @@ import {
 } from "@/types/pos";
 import { ProductSearch } from "@/components/pos/product-search";
 import { ProductGrid } from "@/components/pos/product-grid";
+import { SupplierFilter, type SupplierOption } from "@/components/pos/supplier-filter";
 import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
@@ -229,10 +230,29 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     return new Map(sellableProducts.map((product) => [product.id, product]));
   }, [sellableProducts]);
 
-  const filteredProducts = React.useMemo(
-    () => mapContextProductsToPosProducts(matchedProducts),
-    [matchedProducts],
-  );
+  // Mobile-only "Fournisseur" filter (§16: hidden >= lg). Options are the
+  // unique suppliers of the products this POS context already exposes - so
+  // it inherits every existing visibility rule for free and never widens
+  // them. Null = "Tous les fournisseurs" = today's behaviour untouched.
+  const [supplierFilter, setSupplierFilter] = React.useState<SupplierOption | null>(null);
+  const supplierOptions = React.useMemo<SupplierOption[]>(() => {
+    const byId = new Map<string, string>();
+    for (const product of allKnownProducts) {
+      if (product.supplierId && product.supplierName) {
+        byId.set(product.supplierId, product.supplierName);
+      }
+    }
+    return Array.from(byId, ([id, name]) => ({ id, name })).sort((a, b) =>
+      a.name.localeCompare(b.name, "fr"),
+    );
+  }, [allKnownProducts]);
+
+  const filteredProducts = React.useMemo(() => {
+    const bySupplier = supplierFilter
+      ? matchedProducts.filter((product) => product.supplierId === supplierFilter.id)
+      : matchedProducts;
+    return mapContextProductsToPosProducts(bySupplier);
+  }, [matchedProducts, supplierFilter]);
 
   // Edit mode: the frozen per-line economics of the sale being modified, so
   // a line keeps its historical unit price / VAT even if the catalog price
@@ -1233,6 +1253,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4 lg:overflow-hidden`}
       >
         <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
+        <SupplierFilter
+          className="lg:hidden"
+          suppliers={supplierOptions}
+          value={supplierFilter}
+          onChange={setSupplierFilter}
+        />
         <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1">
         <ProductGrid
           products={filteredProducts}

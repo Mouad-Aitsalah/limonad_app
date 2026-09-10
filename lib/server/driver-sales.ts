@@ -158,6 +158,8 @@ export async function getDriverPosContext(
         imageUrl: true,
         salePrice: true,
         taxRate: true,
+        defaultSupplierId: true,
+        defaultSupplier: { select: { name: true } },
       },
       orderBy: { name: "asc" },
       take: POS_PRODUCT_LIST_LIMIT + 1,
@@ -230,6 +232,8 @@ export async function getDriverPosContext(
         taxRate,
         // No stock row on this truck -> shown as 0 (still sellable).
         availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
+        supplierId: product.defaultSupplierId,
+        supplierName: product.defaultSupplier?.name ?? null,
       };
     }),
   };

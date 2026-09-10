@@ -24,6 +24,7 @@ import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
 import { ProductGrid } from "@/components/pos/product-grid";
 import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
 import { ProductSearch } from "@/components/pos/product-search";
+import { SupplierFilter, type SupplierOption } from "@/components/pos/supplier-filter";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
@@ -139,12 +140,37 @@ export function DriverPosView({
     [allKnownProducts],
   );
 
+  // Mobile-only "Fournisseur" filter (< xl). Its options are derived from
+  // the driver's already truck-scoped product list, so selecting a supplier
+  // can only ever narrow to products that ARE in the truck stock - it never
+  // pulls in global catalogue products. Null = "Tous les fournisseurs".
+  const [supplierFilter, setSupplierFilter] = React.useState<SupplierOption | null>(null);
+  const supplierOptions = React.useMemo<SupplierOption[]>(() => {
+    const byId = new Map<string, string>();
+    for (const product of allKnownProducts) {
+      if (product.supplierId && product.supplierName) {
+        byId.set(product.supplierId, product.supplierName);
+      }
+    }
+    return Array.from(byId, ([id, name]) => ({ id, name })).sort((a, b) =>
+      a.name.localeCompare(b.name, "fr"),
+    );
+  }, [allKnownProducts]);
+
+  const supplierFilteredProducts = React.useMemo(
+    () =>
+      supplierFilter
+        ? filteredProducts.filter((product) => product.supplierId === supplierFilter.id)
+        : filteredProducts,
+    [filteredProducts, supplierFilter],
+  );
+
   // ProductGrid/ProductCard are shared with the admin POS for the mobile
   // launcher layout. The values still come exclusively from the driver
   // context, whose availableQuantity is the truck-stock quantity.
   const productTiles = React.useMemo<PosProduct[]>(
     () =>
-      filteredProducts.map((product) => ({
+      supplierFilteredProducts.map((product) => ({
         id: product.id,
         reference: product.reference,
         barcode: product.barcode,
@@ -155,7 +181,7 @@ export function DriverPosView({
         quantiteStock: product.availableQuantity,
         imageUrl: product.imageUrl,
       })),
-    [filteredProducts],
+    [supplierFilteredProducts],
   );
 
   const cartRows = React.useMemo(
@@ -554,6 +580,11 @@ export function DriverPosView({
         >
           <div className="space-y-3 xl:hidden">
             <ProductSearch value={search} onChange={setSearch} />
+            <SupplierFilter
+              suppliers={supplierOptions}
+              value={supplierFilter}
+              onChange={setSupplierFilter}
+            />
             <ProductGrid
               products={productTiles}
               onAdd={addProductById}

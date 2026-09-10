@@ -638,6 +638,11 @@ export interface DriverPosProductDto {
   salePriceTTC: number;
   taxRate: number;
   availableQuantity: number;
+  /** Real business relation Product.defaultSupplier (never derived from an
+   *  accounting account). Null when the product has no supplier. Display /
+   *  mobile "Fournisseur" filter only - never affects visibility or stock. */
+  supplierId?: string | null;
+  supplierName?: string | null;
 }
 
 /** Active 5141 accounting account, offered as the "Compte bancaire" choice
