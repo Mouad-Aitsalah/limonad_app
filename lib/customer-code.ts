@@ -31,6 +31,20 @@ export function formatCustomerCode(code: string | null | undefined): string {
 }
 
 /**
+ * The bare per-organisation counter shown/typed in the POS "N° client" box:
+ * "34211" -> "1", "342115" -> "15". A legacy / hand-entered code that is not
+ * `CUSTOMER_ACCOUNT_PREFIX` + digits is returned unchanged so it can still be
+ * displayed. Pure string work - never touches the database, invents nothing.
+ */
+export function customerAccountNumber(code: string | null | undefined): string {
+  if (!code) return "";
+  if (!code.startsWith(CUSTOMER_ACCOUNT_PREFIX)) return code;
+  const rest = code.slice(CUSTOMER_ACCOUNT_PREFIX.length);
+  if (rest.length === 0 || !/^\d+$/.test(rest)) return code;
+  return rest.replace(/^0+(?=\d)/, "");
+}
+
+/**
  * Turns whatever an operator typed in the POS "N° client" box into the exact
  * stored code to look up, or null when the input can't be a customer number.
  *

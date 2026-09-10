@@ -1,17 +1,17 @@
 type InvoiceHeaderProps = {
   userName: string;
-  depotName: string;
-  stockLocationName: string;
   /** Commercial reference of the invoice being prepared/edited (§5). */
   invoiceLabel?: string;
 };
 
-export function InvoiceHeader({
-  userName,
-  depotName,
-  stockLocationName,
-  invoiceLabel,
-}: InvoiceHeaderProps) {
+/**
+ * Cart-header metadata strip. Screen display only - the depot / stock-source
+ * this sale draws from are still sent to the backend (buildSaleBody) and
+ * still printed on the ticket; they were only removed from this on-screen
+ * strip. The whole strip is hidden on mobile (< lg) so the phone cart goes
+ * straight to Client / N° client / Mode de règlement / panier.
+ */
+export function InvoiceHeader({ userName, invoiceLabel }: InvoiceHeaderProps) {
   const now = new Date();
   const date = now.toLocaleDateString("fr-FR", {
     day: "2-digit",
@@ -24,7 +24,7 @@ export function InvoiceHeader({
   });
 
   return (
-    <div className="grid grid-cols-2 gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm max-lg:grid-cols-3 max-lg:gap-2 max-lg:p-2.5 max-lg:text-xs max-lg:[&>div]:min-w-0 max-lg:[&_p]:break-words sm:grid-cols-6">
+    <div className="hidden gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm lg:grid lg:grid-cols-4">
       <div>
         <p className="text-xs text-muted-foreground">N° Facture</p>
         <p className="font-semibold text-foreground tabular-nums">{invoiceLabel ?? "-"}</p>
@@ -44,14 +44,6 @@ export function InvoiceHeader({
         <p className="font-medium text-foreground" suppressHydrationWarning>
           {heure}
         </p>
-      </div>
-      <div>
-        <p className="text-xs text-muted-foreground">Dépôt</p>
-        <p className="font-medium text-foreground">{depotName}</p>
-      </div>
-      <div className="col-span-2 max-lg:col-span-1 sm:col-span-1">
-        <p className="text-xs text-muted-foreground">Stock source</p>
-        <p className="font-medium text-foreground">{stockLocationName}</p>
       </div>
     </div>
   );

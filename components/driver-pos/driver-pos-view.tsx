@@ -25,6 +25,7 @@ import { ProductGrid } from "@/components/pos/product-grid";
 import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
 import { ProductSearch } from "@/components/pos/product-search";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
+import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import type { PosPaymentMethodValue } from "@/types/pos";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
@@ -418,6 +419,63 @@ export function DriverPosView({
     window.setTimeout(() => window.print(), 0);
   }
 
+  // "Imprimer" from the driver cart: same behaviour as the counter POS.
+  // Prints the ticket for the cart as it stands - built entirely in the
+  // browser, keeping the driver / camion / tournee / client context. It
+  // never touches truck stock, ends the tour, collects, creates a second
+  // sale, changes quantities, or locks the cart.
+  function printCurrentCart() {
+    if (cartRows.length === 0) {
+      printLastSale();
+      return;
+    }
+    const bankAccount =
+      paymentMethod === "BANK_TRANSFER"
+        ? context.bankAccounts.find((account) => account.id === bankAccountId) ?? null
+        : null;
+    setLastSale(
+      buildPreviewSale({
+        displayNumber: lastSale?.displayNumber ?? "—",
+        createdByUserName: context.driver.name,
+        customer: selectedCustomer
+          ? {
+              id: selectedCustomer.id,
+              code: selectedCustomer.code,
+              name: selectedCustomer.name,
+            }
+          : null,
+        driver: { id: context.driver.id, name: context.driver.name },
+        truck: context.truck
+          ? {
+              id: context.truck.id,
+              code: context.truck.code,
+              registration: context.truck.registration,
+            }
+          : null,
+        tour: context.tour
+          ? {
+              id: context.tour.id,
+              code: context.tour.code,
+              status: context.tour.status,
+              date: "",
+            }
+          : null,
+        paymentMethod,
+        bankAccount,
+        lines: cartRows.map((row) => ({
+          productId: row.productId,
+          productReference: row.product.reference,
+          productName: row.product.name,
+          quantity: row.quantity,
+          unitPriceHT: row.product.salePriceHT,
+          discountRate: row.discountRate,
+          taxRate: row.product.taxRate,
+        })),
+      }),
+    );
+    window.setTimeout(() => window.print(), 0);
+  }
+
   function printPending(sale: SaleDto) {
     setLastSale(sale);
     window.setTimeout(() => window.print(), 0);
@@ -591,7 +649,10 @@ export function DriverPosView({
                   placeholder="Client comptoir"
                 />
 
-                <CustomerNumberInput onResolved={setSelectedCustomer} />
+                <CustomerNumberInput
+                  customer={selectedCustomer}
+                  onResolved={setSelectedCustomer}
+                />
 
                 <Field label="Paiement">
                   <select
@@ -744,24 +805,36 @@ export function DriverPosView({
                 }}
               />
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={preparing || cartRows.length === 0}
+                    onClick={prepareInvoice}
+                    className="h-12 rounded-2xl"
+                  >
+                    {preparing ? "..." : "Préparer"}
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={busy || cartRows.length === 0}
+                    onClick={validateSale}
+                    className="h-12 rounded-2xl"
+                  >
+                    <ShoppingCart className="h-4 w-4" />
+                    Valider
+                  </Button>
+                </div>
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={preparing || cartRows.length === 0}
-                  onClick={prepareInvoice}
-                  className="h-12 rounded-2xl"
+                  disabled={cartRows.length === 0 && !lastSale}
+                  onClick={printCurrentCart}
+                  className="h-12 w-full rounded-2xl"
                 >
-                  {preparing ? "..." : "Préparer"}
-                </Button>
-                <Button
-                  type="button"
-                  disabled={busy || cartRows.length === 0}
-                  onClick={validateSale}
-                  className="h-12 rounded-2xl"
-                >
-                  <ShoppingCart className="h-4 w-4" />
-                  Valider
+                  <Printer className="h-4 w-4" />
+                  Imprimer
                 </Button>
               </div>
             </CardContent>
@@ -834,13 +907,17 @@ function DriverInvoiceHeader({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-border bg-muted/40 p-2.5 text-xs sm:grid-cols-6 sm:gap-3 sm:p-4">
+      {/* Metadata strip: hidden on mobile (< xl) so the phone cart goes
+          straight to Client / N° client / Paiement / panier. Screen display
+          only - depot / stock-source stay in the sale payload and on the
+          printed ticket; "Stock source" (which just repeated the truck code)
+          was dropped from this strip. */}
+      <div className="hidden rounded-2xl border border-border bg-muted/40 p-4 text-xs xl:grid xl:grid-cols-6 xl:gap-3">
         <HeaderMetric label="N° Facture" value={invoiceLabel} strong />
         <HeaderMetric label="Chauffeur" value={driverName} />
         <HeaderMetric label="Date" value={date} suppressHydrationWarning />
         <HeaderMetric label="Heure" value={heure} suppressHydrationWarning />
         <HeaderMetric label="Camion" value={`${truckCode} · ${truckRegistration}`} />
-        <HeaderMetric label="Stock source" value={truckCode} />
         {tourCode ? <HeaderMetric label="Tournée" value={tourCode} /> : null}
       </div>
     </section>

@@ -34,6 +34,7 @@ import { CartSummary } from "@/components/pos/cart-summary";
 import { InvoiceActions } from "@/components/pos/invoice-actions";
 import { CheckoutDialog } from "@/components/pos/checkout-dialog";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
+import { buildPreviewSale } from "@/lib/pos-preview-sale";
 
 export type CartLine = {
   productId: string;
@@ -971,31 +972,49 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     }
   }
 
-  async function printInvoice() {
+  // Builds the ticket for the cart as it stands right now, entirely in the
+  // browser - no API call, no persisted DRAFT, no reserved number consumed.
+  function buildPrintPreview(): SaleDto {
+    const bankAccount =
+      paymentMethod === "BANK_TRANSFER"
+        ? context.bankAccounts.find((account) => account.id === bankAccountId) ?? null
+        : null;
+    return buildPreviewSale({
+      displayNumber: activeInvoiceLabel,
+      createdByUserName: context.user.name,
+      customer: selectedCustomer
+        ? {
+            id: selectedCustomer.id,
+            code: selectedCustomer.code,
+            name: selectedCustomer.name,
+          }
+        : null,
+      paymentMethod,
+      bankAccount,
+      lines: cartLines.map((line) => ({
+        productId: line.productId,
+        productReference: line.reference,
+        productName: line.designation,
+        quantity: line.quantity,
+        unitPriceHT: line.unitPriceHT,
+        discountRate: line.discountPercent,
+        taxRate: line.tauxTVA,
+      })),
+    });
+  }
+
+  // "Imprimer" ONLY opens the print dialog. It never persists a sale,
+  // reserves the number for good, moves stock, collects, or switches the
+  // cart to read-only - the panel (Prix TTC, quantite, remise, ...) stays
+  // exactly as editable after printing as before.
+  function printInvoice() {
     if (openPendingSale) {
       printPending(openPendingSale);
       return;
     }
     if (cartLines.length > 0) {
-      if (!selectedCustomer) {
-        toast.error("Selectionnez un client avant d'imprimer la facture.");
-        return;
-      }
-
-      setPreparing(true);
-      try {
-        const sale = await createDraftSale();
-        setOpenPendingSale(sale);
-        await syncPendingSalesState();
-        toast.success(`Facture ${sale.displayNumber} preparee. Impression lancee.`);
-        schedulePrint();
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Impossible d'imprimer la facture.",
-        );
-      } finally {
-        setPreparing(false);
-      }
+      setLastSale(buildPrintPreview());
+      schedulePrint();
       return;
     }
 
@@ -1237,8 +1256,6 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       >
         <InvoiceHeader
           userName={context.user.name}
-          depotName={context.depot.name}
-          stockLocationName={context.stockLocation.name}
           invoiceLabel={activeInvoiceLabel}
         />
 
@@ -1248,7 +1265,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             onChange={setSelectedCustomer}
             initialSuggestions={context.customers}
           />
-          <CustomerNumberInput onResolved={setSelectedCustomer} />
+          <CustomerNumberInput customer={selectedCustomer} onResolved={setSelectedCustomer} />
           <PaymentSelector
             paymentMethod={paymentMethod}
             onPaymentMethodChange={setPaymentMethod}
@@ -1349,7 +1366,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         <div className="rounded-2xl border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
           <p className="font-medium text-foreground">État du POS</p>
           <p>
-            Produits disponibles : {context.products.length} | Dépôt : {context.depot.code}
+            Produits disponibles : {context.products.length}
+            {/* Depot code kept for desktop only - mobile drops every
+                depot / stock-source mention from the cart screen (§4). */}
+            <span className="hidden lg:inline"> | Dépôt : {context.depot.code}</span>
           </p>
           {context.message && <p className="mt-1 text-amber-700">{context.message}</p>}
           {lastSale && (

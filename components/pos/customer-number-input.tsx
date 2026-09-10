@@ -6,10 +6,18 @@ import { toast } from "sonner";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { customerAccountNumber } from "@/lib/customer-code";
 import type { CustomerDto } from "@/types/operations-dto";
 
 type CustomerNumberInputProps = {
-  /** Called with the resolved customer once a number is found. */
+  /**
+   * The customer currently selected in the POS (from the Client combobox, a
+   * previous lookup, or a business default). The box mirrors this customer's
+   * real account number and clears when it becomes null - the two fields
+   * always describe the SAME customer.
+   */
+  customer: CustomerDto | null;
+  /** Called with the resolved customer once a typed number is found. */
   onResolved: (customer: CustomerDto) => void;
   /** Optional: where to send focus after a successful lookup (e.g. product search). */
   focusAfterResolve?: React.RefObject<HTMLInputElement | null>;
@@ -17,24 +25,51 @@ type CustomerNumberInputProps = {
 };
 
 /**
- * The small "N° client" box next to the POS customer combobox. The operator
- * types just the counter ("1", "15", "125"); GET /api/customers/by-number
- * turns that into "3421/<n>" and returns the customer, always scoped to the
- * current organisation. A missing number shows "Client introuvable" inline -
- * never an error toast stack, never a 500.
+ * The small "N° client" box next to the POS customer combobox.
+ *
+ * Two-way sync with the Client field:
+ *  - Client selected/changed/cleared elsewhere  -> this box shows that
+ *    customer's real account counter ("1", "15", ...) or empties.
+ *  - Operator types a counter here + Enter/blur -> GET
+ *    /api/customers/by-number resolves it (always scoped to the current
+ *    organisation, driver visibility included) and selects that customer,
+ *    which then flows back through `customer` and re-syncs the box.
+ *
+ * A missing number shows "Client introuvable" inline - never an error toast
+ * stack, never a 500. Nothing here writes to the database.
  */
 export function CustomerNumberInput({
+  customer,
   onResolved,
   focusAfterResolve,
   disabled,
 }: CustomerNumberInputProps) {
-  const [value, setValue] = React.useState("");
+  const syncedNumber = customer ? customerAccountNumber(customer.code) : "";
+  const [value, setValue] = React.useState(syncedNumber);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // Re-mirror the box whenever the selected customer *identity* changes
+  // (combobox pick, X clear, a number lookup landing a different customer).
+  // Keyed on the id so it never fights the operator while they are typing a
+  // number for the same still-selected customer.
+  const lastSyncedId = React.useRef<string | null>(customer?.id ?? null);
+  React.useEffect(() => {
+    const id = customer?.id ?? null;
+    if (id === lastSyncedId.current) return;
+    lastSyncedId.current = id;
+    setValue(customer ? customerAccountNumber(customer.code) : "");
+    setError(null);
+  }, [customer]);
 
   async function lookup() {
     const trimmed = value.trim();
     if (!trimmed || loading) return;
+    // Already showing this customer - nothing to resolve.
+    if (customer && trimmed === customerAccountNumber(customer.code)) {
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -49,7 +84,6 @@ export function CustomerNumberInput({
       }
       onResolved(body.customer);
       toast.success(`Client ${body.customer.displayCode} — ${body.customer.name}`);
-      setValue("");
       setError(null);
       focusAfterResolve?.current?.focus();
     } catch {
