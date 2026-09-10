@@ -11,11 +11,17 @@ export async function GET(request: Request, context: RouteContext) {
   const url = new URL(request.url);
   const page = Number(url.searchParams.get("page") ?? "1");
   const pageSize = Number(url.searchParams.get("pageSize") ?? "20");
+  // Multi-select "Utilisateur" filter (display only) - comma-separated ids.
+  const createdByUserIds = (url.searchParams.get("userIds") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
   try {
     return NextResponse.json(
       await getCustomerJournal(id, {
         page: Number.isFinite(page) ? page : 1,
         pageSize: Number.isFinite(pageSize) ? pageSize : 20,
+        createdByUserIds,
       }),
     );
   } catch (error) {

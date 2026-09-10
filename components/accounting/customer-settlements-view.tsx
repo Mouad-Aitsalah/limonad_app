@@ -1,9 +1,18 @@
 "use client";
 
 import * as React from "react";
+import { ChevronDown, Users } from "lucide-react";
 import { toast } from "sonner";
 
+import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -39,13 +48,12 @@ function formatDate(iso: string) {
 }
 
 export function CustomerSettlementsView() {
-  const [code, setCode] = React.useState("");
-  const [lookingUp, setLookingUp] = React.useState(false);
-  const [lookupError, setLookupError] = React.useState<string | null>(null);
-
   const [customer, setCustomer] = React.useState<CustomerDto | null>(null);
   const [journal, setJournal] = React.useState<CustomerJournalDto | null>(null);
   const [loadingJournal, setLoadingJournal] = React.useState(false);
+
+  // Display-only multi-select filter (empty = "Tous les utilisateurs").
+  const [userFilter, setUserFilter] = React.useState<string[]>([]);
 
   const [amount, setAmount] = React.useState("");
   const [method, setMethod] = React.useState<SettlementMethod>("CASH");
@@ -56,54 +64,48 @@ export function CustomerSettlementsView() {
 
   const debt = journal?.debt.debt ?? null;
 
-  async function loadJournal(customerId: string, page: number) {
-    setLoadingJournal(true);
-    try {
-      const response = await fetch(
-        `/api/customers/${customerId}/journal?page=${page}&pageSize=20`,
-        { cache: "no-store" },
-      );
-      const body = (await response.json()) as CustomerJournalDto & { message?: string };
-      if (!response.ok || !body.debt) {
-        toast.error(body.message ?? "Impossible de charger le compte du client.");
-        return;
+  const loadJournal = React.useCallback(
+    async (customerId: string, page: number, userIds: string[]) => {
+      setLoadingJournal(true);
+      try {
+        const params = new URLSearchParams({
+          page: String(page),
+          pageSize: "20",
+        });
+        if (userIds.length > 0) params.set("userIds", userIds.join(","));
+        const response = await fetch(
+          `/api/customers/${customerId}/journal?${params.toString()}`,
+          { cache: "no-store" },
+        );
+        const body = (await response.json()) as CustomerJournalDto & { message?: string };
+        if (!response.ok || !body.debt) {
+          toast.error(body.message ?? "Impossible de charger le compte du client.");
+          return;
+        }
+        setJournal(body);
+      } catch {
+        toast.error("Impossible de charger le compte du client.");
+      } finally {
+        setLoadingJournal(false);
       }
-      setJournal(body);
-    } catch {
-      toast.error("Impossible de charger le compte du client.");
-    } finally {
-      setLoadingJournal(false);
-    }
+    },
+    [],
+  );
+
+  function handleSelectCustomer(next: CustomerDto | null) {
+    setCustomer(next);
+    // Nothing of the previous client must linger.
+    setJournal(null);
+    setUserFilter([]);
+    setAmount("");
+    setFormError(null);
+    idempotencyKeyRef.current = crypto.randomUUID();
+    if (next) void loadJournal(next.id, 1, []);
   }
 
-  async function lookupCustomer() {
-    const trimmed = code.trim();
-    if (!trimmed || lookingUp) return;
-    setLookingUp(true);
-    setLookupError(null);
-    try {
-      const response = await fetch(
-        `/api/customers/by-number?n=${encodeURIComponent(trimmed)}`,
-        { cache: "no-store" },
-      );
-      const body = (await response.json()) as { customer?: CustomerDto; message?: string };
-      if (!response.ok || !body.customer) {
-        setLookupError(body.message ?? "Client introuvable.");
-        setCustomer(null);
-        setJournal(null);
-        return;
-      }
-      setCustomer(body.customer);
-      setJournal(null);
-      setAmount("");
-      setFormError(null);
-      idempotencyKeyRef.current = crypto.randomUUID();
-      await loadJournal(body.customer.id, 1);
-    } catch {
-      setLookupError("Recherche impossible.");
-    } finally {
-      setLookingUp(false);
-    }
+  function handleUserFilterChange(next: string[]) {
+    setUserFilter(next);
+    if (customer) void loadJournal(customer.id, 1, next);
   }
 
   const parsedAmount = Number(amount.replace(",", "."));
@@ -115,7 +117,12 @@ export function CustomerSettlementsView() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!customer || debt === null || submitting) return;
+    if (submitting) return;
+    if (!customer) {
+      setFormError("Veuillez sélectionner un client.");
+      return;
+    }
+    if (debt === null) return;
 
     if (!hasValidAmount) {
       setFormError("Le montant du règlement doit être strictement positif.");
@@ -153,7 +160,9 @@ export function CustomerSettlementsView() {
       toast.success(`Règlement de ${formatCurrency(parsedAmount)} enregistré.`);
       setAmount("");
       idempotencyKeyRef.current = crypto.randomUUID();
-      await loadJournal(customer.id, 1);
+      // The filter is display-only: reload the current selection so the new
+      // settlement shows immediately, without dropping the active filter.
+      await loadJournal(customer.id, 1, userFilter);
     } catch {
       setFormError("Impossible d'enregistrer le règlement.");
     } finally {
@@ -162,35 +171,34 @@ export function CustomerSettlementsView() {
   }
 
   const pagination = journal?.pagination;
+  const journalUsers = journal?.users ?? [];
 
   return (
     <div className="space-y-6">
-      {/* --- Code client --- */}
+      {/* --- Filtres : Client + Utilisateurs --- */}
       <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-6">
-        <div className="max-w-sm space-y-1.5">
-          <Label htmlFor="rc-code">Code client</Label>
-          <Input
-            id="rc-code"
-            value={code}
-            placeholder="ex : CLI-0002 ou 15"
-            disabled={lookingUp}
-            aria-invalid={Boolean(lookupError)}
-            className="h-11"
-            onChange={(event) => {
-              setCode(event.target.value);
-              if (lookupError) setLookupError(null);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void lookupCustomer();
-              }
-            }}
-            onBlur={() => {
-              if (code.trim() && !customer) void lookupCustomer();
-            }}
-          />
-          {lookupError ? <p className="text-xs text-destructive">{lookupError}</p> : null}
+        <div className="grid gap-4 sm:grid-cols-2 lg:max-w-2xl">
+          <div className="min-w-0">
+            <CustomerCombobox
+              value={customer}
+              onChange={handleSelectCustomer}
+              initialSuggestions={[]}
+              label="Client"
+              placeholder="Rechercher par nom, code ou téléphone"
+            />
+          </div>
+          <div className="min-w-0 space-y-2">
+            <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <Users aria-hidden="true" className="h-3.5 w-3.5" />
+              Utilisateurs
+            </Label>
+            <UserMultiSelect
+              users={journalUsers}
+              selected={userFilter}
+              onChange={handleUserFilterChange}
+              disabled={!customer}
+            />
+          </div>
         </div>
 
         {customer ? (
@@ -210,12 +218,16 @@ export function CustomerSettlementsView() {
               <p className="font-medium text-foreground">{customer.phone || "—"}</p>
             </div>
           </div>
-        ) : null}
+        ) : (
+          <p className="mt-4 text-sm text-muted-foreground">
+            Veuillez sélectionner un client.
+          </p>
+        )}
       </div>
 
       {customer ? (
         <>
-          {/* --- Solde à régler --- */}
+          {/* --- Solde à régler (dette métier, jamais affectée par le filtre) --- */}
           <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-6">
             <p className="text-sm font-medium text-muted-foreground">Solde à régler</p>
             <p className="mt-1 text-3xl font-semibold tabular-nums text-foreground">
@@ -223,6 +235,7 @@ export function CustomerSettlementsView() {
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               Dette métier fiable (ventes à crédit − avoirs − règlements validés).
+              Non affectée par le filtre utilisateur.
             </p>
           </div>
 
@@ -231,6 +244,19 @@ export function CustomerSettlementsView() {
             <h2 className="font-heading text-lg font-semibold text-foreground">
               Nouveau règlement
             </h2>
+
+            <div className="mt-3 grid gap-1 text-sm sm:grid-cols-2 sm:max-w-md">
+              <div>
+                <span className="text-xs text-muted-foreground">Client</span>
+                <p className="font-medium text-foreground">{customer.name}</p>
+              </div>
+              <div>
+                <span className="text-xs text-muted-foreground">Solde actuel</span>
+                <p className="font-medium tabular-nums text-foreground">
+                  {debt === null ? "…" : formatCurrency(debt)}
+                </p>
+              </div>
+            </div>
 
             {noDebt ? (
               <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
@@ -370,14 +396,24 @@ export function CustomerSettlementsView() {
                   </p>
                 ) : null}
 
+                {userFilter.length > 0 ? (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Filtre utilisateur actif — {journal.operations.length} opération
+                    {journal.operations.length > 1 ? "s" : ""} affichée
+                    {journal.operations.length > 1 ? "s" : ""} sur cette page. La colonne
+                    « Solde » et les totaux restent calculés sur le journal complet.
+                  </p>
+                ) : null}
+
                 <div className="mt-4 overflow-x-auto rounded-xl border border-border">
-                  <Table className="min-w-[820px]">
+                  <Table className="min-w-[900px]">
                     <TableHeader>
                       <TableRow>
                         <TableHead>Date</TableHead>
                         <TableHead>N° opération</TableHead>
                         <TableHead>N° compte</TableHead>
                         <TableHead>Désignation</TableHead>
+                        <TableHead>Utilisateur</TableHead>
                         <TableHead className="text-right">Débit</TableHead>
                         <TableHead className="text-right">Crédit</TableHead>
                         <TableHead className="text-right">Solde</TableHead>
@@ -394,6 +430,11 @@ export function CustomerSettlementsView() {
                           <TableCell className="whitespace-normal">
                             {op.label.trim() || (
                               <span className="text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap">
+                            {op.createdByUserName ?? (
+                              <span className="text-muted-foreground">-</span>
                             )}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
@@ -424,7 +465,7 @@ export function CustomerSettlementsView() {
                       size="sm"
                       disabled={loadingJournal || pagination.page <= 1}
                       onClick={() =>
-                        void loadJournal(customer.id, pagination.page - 1)
+                        void loadJournal(customer.id, pagination.page - 1, userFilter)
                       }
                     >
                       ← Précédent
@@ -438,7 +479,7 @@ export function CustomerSettlementsView() {
                       size="sm"
                       disabled={loadingJournal || pagination.page >= pagination.pageCount}
                       onClick={() =>
-                        void loadJournal(customer.id, pagination.page + 1)
+                        void loadJournal(customer.id, pagination.page + 1, userFilter)
                       }
                     >
                       Suivant →
@@ -450,12 +491,86 @@ export function CustomerSettlementsView() {
               <p className="mt-4 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                 {loadingJournal
                   ? "Chargement…"
-                  : "Aucune opération comptable pour ce client."}
+                  : userFilter.length > 0
+                    ? "Aucune opération pour les utilisateurs sélectionnés."
+                    : "Aucune opération comptable pour ce client."}
               </p>
             )}
           </div>
         </>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Multi-select "Utilisateur" filter. Empty selection = "Tous les
+ * utilisateurs" (default). Options are only the users who authored an
+ * operation of the current client (already organisation-scoped server-side).
+ */
+function UserMultiSelect({
+  users,
+  selected,
+  onChange,
+  disabled,
+}: {
+  users: Array<{ id: string; name: string }>;
+  selected: string[];
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+}) {
+  const selectedSet = new Set(selected);
+  const selectedNames = users
+    .filter((user) => selectedSet.has(user.id))
+    .map((user) => user.name);
+
+  const label =
+    selectedNames.length === 0
+      ? "Tous les utilisateurs"
+      : selectedNames.length <= 2
+        ? selectedNames.join(", ")
+        : `${selectedNames.length} utilisateurs sélectionnés`;
+
+  function toggle(id: string) {
+    onChange(
+      selectedSet.has(id) ? selected.filter((value) => value !== id) : [...selected, id],
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        disabled={disabled}
+        className="flex h-11 w-full items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-72 w-[min(20rem,calc(100vw-2rem))] overflow-y-auto">
+        <DropdownMenuCheckboxItem
+          checked={selected.length === 0}
+          onCheckedChange={() => onChange([])}
+          closeOnClick={false}
+        >
+          Tous les utilisateurs
+        </DropdownMenuCheckboxItem>
+        {users.length > 0 ? <DropdownMenuSeparator /> : null}
+        {users.map((user) => (
+          <DropdownMenuCheckboxItem
+            key={user.id}
+            checked={selectedSet.has(user.id)}
+            onCheckedChange={() => toggle(user.id)}
+            closeOnClick={false}
+          >
+            {user.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+        {users.length === 0 ? (
+          <p className="px-2 py-1.5 text-xs text-muted-foreground">
+            Aucune opération à filtrer.
+          </p>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

@@ -67,9 +67,21 @@ export type CustomerJournalOperationDto = {
   /** Cumulative balance (Σ debit − Σ credit) over the attributed operations,
    * from the oldest up to and including this one, in chronological order -
    * NOT the visual (DESC) order of `operations[]`. Can be negative. The last
-   * chronological line's balance equals `totals.balance`. */
+   * chronological line's balance equals `totals.balance`. ALWAYS computed
+   * over the full attributed journal, never over a user-filtered subset. */
   balance: number;
+  /** AccountingEntry.createdByUserId of the entry this line belongs to
+   * (a SALE / CUSTOMER_PAYMENT / CUSTOMER_CREDIT_NOTE / settlement entry, or
+   * the entry its contra-passation reverses). null for pre-ledger / manual
+   * entries with no recorded author, or a since-deleted user. */
+  createdByUserId: string | null;
+  createdByUserName: string | null;
 };
+
+/** One selectable value for the journal's "Utilisateur" multi-select filter -
+ *  only users who actually authored at least one attributed operation of this
+ *  customer, always scoped to the current organisation. */
+export type CustomerJournalUserDto = { id: string; name: string };
 
 export type CustomerJournalDto = {
   debt: CustomerDebtDto;
@@ -85,6 +97,10 @@ export type CustomerJournalDto = {
   /** Debit / credit summed over the ATTRIBUTED lines only (all pages), not
    * the whole auxiliary account; balance = debit - credit. */
   totals: { debit: number; credit: number; balance: number };
+  /** Distinct authors across this customer's FULL attributed journal (never
+   * narrowed by the current user filter) - the option list for the
+   * "Utilisateur" multi-select above the table. */
+  users: CustomerJournalUserDto[];
   pagination: { page: number; pageSize: number; total: number; pageCount: number };
   /** How many POSTED/REVERSED lines sit on the same auxiliary account but
    * could NOT be tied with certainty to this customer (they belong to

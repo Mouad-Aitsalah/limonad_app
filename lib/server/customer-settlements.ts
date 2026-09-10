@@ -201,7 +201,18 @@ const JOURNAL_LINE_STATUSES: AccountingEntryStatus[] = ["POSTED", "REVERSED"];
  */
 export async function getCustomerJournal(
   customerId: string,
-  opts?: { page?: number; pageSize?: number },
+  opts?: {
+    page?: number;
+    pageSize?: number;
+    /**
+     * Display-only filter: when non-empty, only operations whose owning
+     * AccountingEntry was created by one of these users are LISTED (OR
+     * semantics). It never touches `debt`, the chronological running
+     * `balance`, `totals`, `users`, or `notAttributable` - those always
+     * describe the full attributed journal.
+     */
+    createdByUserIds?: string[];
+  },
 ): Promise<CustomerJournalDto> {
   const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const customer = await prisma.customer.findFirst({
@@ -231,10 +242,17 @@ export async function getCustomerJournal(
       account: null,
       operations: [],
       totals: { debit: 0, credit: 0, balance: 0 },
+      users: [],
       pagination: { page: 1, pageSize, total: 0, pageCount: 0 },
       notAttributable: { count: 0 },
     };
   }
+
+  // Display-only "Utilisateur" filter - de-duplicated, kept as-is for OR
+  // semantics. Empty / absent = no filter.
+  const userFilterIds = [
+    ...new Set((opts?.createdByUserIds ?? []).filter((id) => id.trim().length > 0)),
+  ];
 
   // --- the business documents that belong to this exact customer (read-only) ---
   const [sales, payments, creditNotes, settlementEntries] = await Promise.all([
@@ -304,19 +322,40 @@ export async function getCustomerJournal(
     entry: { organizationId: org, status: { in: JOURNAL_LINE_STATUSES } },
   };
 
-  const [attributedTotal, sums, onAccountTotal, balanceRows] = await Promise.all([
+  // Same perimeter as `attributedWhere`, additionally narrowed to the chosen
+  // authors when a user filter is active. Only the LISTED rows and their
+  // pagination use this - never the running balance or the account totals.
+  const listedWhere: Prisma.AccountingEntryLineWhereInput =
+    userFilterIds.length === 0
+      ? attributedWhere
+      : {
+          ...attributedWhere,
+          entry: {
+            ...(attributedWhere.entry as Prisma.AccountingEntryWhereInput),
+            createdByUserId: { in: userFilterIds },
+          },
+        };
+
+  const [attributedTotal, listedTotal, sums, onAccountTotal, balanceRows] = await Promise.all([
     prisma.accountingEntryLine.count({ where: attributedWhere }),
+    prisma.accountingEntryLine.count({ where: listedWhere }),
     prisma.accountingEntryLine.aggregate({
       where: attributedWhere,
       _sum: { debit: true, credit: true },
     }),
     prisma.accountingEntryLine.count({ where: onAccountWhere }),
-    // ALL attributed lines, oldest -> newest, for the running balance below.
-    // operationNumber is @unique, so [date, operationNumber] is a total,
-    // deterministic order and the exact reverse of the page's display order.
+    // ALL attributed lines (never user-filtered), oldest -> newest, for the
+    // running balance below AND the distinct-authors list. operationNumber
+    // is @unique, so [date, operationNumber] is a total, deterministic order
+    // and the exact reverse of the page's display order.
     prisma.accountingEntryLine.findMany({
       where: attributedWhere,
-      select: { id: true, debit: true, credit: true },
+      select: {
+        id: true,
+        debit: true,
+        credit: true,
+        entry: { select: { createdByUserId: true } },
+      },
       orderBy: [{ entry: { date: "asc" } }, { operationNumber: "asc" }],
     }),
   ]);
@@ -328,20 +367,35 @@ export async function getCustomerJournal(
   // never floating-point accumulation; negatives are kept as-is.
   const balanceByLineId = new Map<string, number>();
   let runningBalance = 0;
+  const authorIds = new Set<string>();
   for (const line of balanceRows) {
     runningBalance = subtractMoney(
       addMoney(runningBalance, line.debit.toNumber()),
       line.credit.toNumber(),
     );
     balanceByLineId.set(line.id, runningBalance);
+    if (line.entry.createdByUserId) authorIds.add(line.entry.createdByUserId);
   }
 
-  const pageCount = attributedTotal ? Math.max(1, Math.ceil(attributedTotal / pageSize)) : 0;
+  // Filter option list: every author of an attributed operation, resolved
+  // once and scoped to the current organisation (a since-deleted user simply
+  // drops out here -> its rows show "-").
+  const journalUsers = authorIds.size
+    ? (
+        await prisma.user.findMany({
+          where: { id: { in: [...authorIds] }, organizationId: org },
+          select: { id: true, fullName: true, email: true },
+          orderBy: { fullName: "asc" },
+        })
+      ).map((u) => ({ id: u.id, name: u.fullName?.trim() || u.email }))
+    : [];
+
+  const pageCount = listedTotal ? Math.max(1, Math.ceil(listedTotal / pageSize)) : 0;
   const page = pageCount ? Math.min(requestedPage, pageCount) : 1;
 
-  const rows = attributedTotal
+  const rows = listedTotal
     ? await prisma.accountingEntryLine.findMany({
-        where: attributedWhere,
+        where: listedWhere,
         select: {
           id: true,
           operationNumber: true,
@@ -349,7 +403,14 @@ export async function getCustomerJournal(
           debit: true,
           credit: true,
           entry: {
-            select: { entryNumber: true, date: true, sourceType: true, sourceId: true },
+            select: {
+              entryNumber: true,
+              date: true,
+              sourceType: true,
+              sourceId: true,
+              createdByUserId: true,
+              createdBy: { select: { fullName: true } },
+            },
           },
         },
         orderBy: [{ entry: { date: "desc" } }, { operationNumber: "desc" }],
@@ -373,7 +434,11 @@ export async function getCustomerJournal(
       label: saleDisplay ?? row.label,
       debit: row.debit.toNumber(),
       credit: row.credit.toNumber(),
+      // Always from the FULL-journal running balance, so hiding rows with the
+      // user filter never renumbers the visible ones.
       balance: balanceByLineId.get(row.id) ?? 0,
+      createdByUserId: row.entry.createdByUserId ?? null,
+      createdByUserName: row.entry.createdBy?.fullName ?? null,
     };
   });
 
@@ -384,12 +449,17 @@ export async function getCustomerJournal(
     debt,
     account: { code: account.code, name: account.name },
     operations,
+    // Totals stay over the FULL attributed perimeter - the user filter is
+    // display-only and must not move the account's debit/credit/balance.
     totals: {
       debit: totalDebit,
       credit: totalCredit,
       balance: roundMoney(totalDebit - totalCredit),
     },
-    pagination: { page, pageSize, total: attributedTotal, pageCount },
+    users: journalUsers,
+    // `total` = rows actually listed (filtered), so pagination is coherent;
+    // `notAttributable` stays on the unfiltered attributed vs on-account gap.
+    pagination: { page, pageSize, total: listedTotal, pageCount },
     notAttributable: { count: Math.max(0, onAccountTotal - attributedTotal) },
   };
 }
