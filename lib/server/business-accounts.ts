@@ -252,7 +252,7 @@ function customerBranch(organizationId: string): Prisma.Sql {
            latitude::float8 AS latitude, longitude::float8 AS longitude,
            "creditLimit"::float8 AS "creditLimit",
            "creditLimitEnabled"::boolean AS "creditLimitEnabled",
-           status::text AS status, "createdAt"
+           status::text AS status, "createdByUserId", "createdAt"
     FROM "Customer"
     WHERE "organizationId" = ${organizationId}
   `;
@@ -265,7 +265,8 @@ function supplierBranch(organizationId: string): Prisma.Sql {
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
            NULL::boolean AS "creditLimitEnabled",
-           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
+           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status,
+           "createdByUserId", "createdAt"
     FROM "Supplier"
     WHERE "organizationId" = ${organizationId}
   `;
@@ -279,7 +280,8 @@ function expenseBranch(organizationId: string): Prisma.Sql {
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
            NULL::boolean AS "creditLimitEnabled",
-           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
+           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status,
+           "createdByUserId", "createdAt"
     FROM "ExpenseAccount"
     WHERE "organizationId" = ${organizationId}
   `;
@@ -293,7 +295,8 @@ function treasuryBranch(organizationId: string): Prisma.Sql {
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
            NULL::boolean AS "creditLimitEnabled",
-           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status, "createdAt"
+           (CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status,
+           "createdByUserId", "createdAt"
     FROM "TreasuryAccount"
     WHERE "organizationId" = ${organizationId}
   `;
@@ -308,6 +311,7 @@ function employeeBranch(organizationId: string): Prisma.Sql {
            NULL::float8 AS "creditLimit",
            NULL::boolean AS "creditLimitEnabled",
            (CASE WHEN acc."isActive" THEN 'ACTIVE' ELSE 'INACTIVE' END)::text AS status,
+           NULL::text AS "createdByUserId",
            acc."createdAt"
     FROM "AccountingAccount" acc
     WHERE ${employeeAccountFilter(organizationId)}
@@ -329,10 +333,14 @@ type RawAccountRow = {
   creditLimit: number | null;
   creditLimitEnabled: boolean | null;
   status: BusinessAccountStatus;
+  createdByUserId: string | null;
   createdAt: Date;
 };
 
-function mapRawRowToListItem(row: RawAccountRow): BusinessAccountListItem {
+function mapRawRowToListItem(
+  row: RawAccountRow,
+  creatorNameById: Map<string, string>,
+): BusinessAccountListItem {
   return {
     id: row.id,
     sourceId: row.sourceId,
@@ -349,6 +357,9 @@ function mapRawRowToListItem(row: RawAccountRow): BusinessAccountListItem {
     latitude: row.latitude,
     longitude: row.longitude,
     status: row.status,
+    createdByName: row.createdByUserId
+      ? creatorNameById.get(row.createdByUserId) ?? null
+      : null,
   };
 }
 
@@ -424,8 +435,28 @@ export async function getBusinessAccountsPage(
   const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
   const lastRow = pageRows[pageRows.length - 1];
 
+  // Resolve every "Créé par" name in one query, always scoped to the current
+  // organisation - a creator can only ever be a user of the same org, and a
+  // deleted user simply drops out here (-> "-" in the UI).
+  const creatorIds = [
+    ...new Set(
+      pageRows
+        .map((row) => row.createdByUserId)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const creators = creatorIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: creatorIds }, organizationId },
+        select: { id: true, fullName: true, email: true },
+      })
+    : [];
+  const creatorNameById = new Map(
+    creators.map((user) => [user.id, user.fullName?.trim() || user.email]),
+  );
+
   return {
-    items: pageRows.map(mapRawRowToListItem),
+    items: pageRows.map((row) => mapRawRowToListItem(row, creatorNameById)),
     nextCursor: hasMore && lastRow ? encodeAccountsCursor(lastRow.createdAt, lastRow.id) : null,
     hasMore,
     summary,
@@ -500,6 +531,9 @@ export async function createBusinessAccount(
   }
 
   const data = parsed.data;
+  // The account is being created right now by this authenticated user - the
+  // "Créé par" name is simply theirs, no extra query needed.
+  const createdByName = user.nom?.trim() || user.email;
   if (data.accountingAccountId) {
     const accountingAccount = await prisma.accountingAccount.findFirst({
       where: {
@@ -586,6 +620,7 @@ export async function createBusinessAccount(
       latitude: customer.latitude?.toNumber() ?? null,
       longitude: customer.longitude?.toNumber() ?? null,
       status: customer.status as BusinessAccountStatus,
+      createdByName,
     };
   }
 
@@ -606,6 +641,7 @@ export async function createBusinessAccount(
               ice: data.ice,
               taxId: data.taxId,
               active: data.status !== "INACTIVE",
+              createdByUserId: user.id,
             },
           });
           // Pre-warm the auxiliary accounting-plan account (e.g. 44111) so
@@ -637,6 +673,7 @@ export async function createBusinessAccount(
       city: supplier.city,
       address: supplier.address,
       status: (supplier.active ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
+      createdByName,
     };
   }
 
@@ -668,6 +705,7 @@ export async function createBusinessAccount(
           balance: data.balance ?? 0,
           accountingAccountId,
           active: data.status !== "INACTIVE",
+          createdByUserId: user.id,
         },
         include: { accountingAccount: true },
       });
@@ -685,6 +723,7 @@ export async function createBusinessAccount(
       createdAt: expense.createdAt.toISOString(),
       city: null,
       status: (expense.active ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
+      createdByName,
     };
   }
 
@@ -714,6 +753,7 @@ export async function createBusinessAccount(
         balance: data.balance ?? 0,
         accountingAccountId,
         active: data.status !== "INACTIVE",
+        createdByUserId: user.id,
       },
       include: { accountingAccount: true },
     });
@@ -731,6 +771,7 @@ export async function createBusinessAccount(
     createdAt: treasury.createdAt.toISOString(),
     city: null,
     status: (treasury.active ? "ACTIVE" : "INACTIVE") as BusinessAccountStatus,
+    createdByName,
   };
 }
 
@@ -792,6 +833,7 @@ export async function updateBusinessAccount(
       latitude: customer.latitude ?? null,
       longitude: customer.longitude ?? null,
       status: customer.status as BusinessAccountStatus,
+      createdByName: customer.createdByUserName ?? null,
     };
   }
 

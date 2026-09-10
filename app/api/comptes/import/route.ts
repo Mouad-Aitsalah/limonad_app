@@ -183,6 +183,7 @@ async function createAccount(
           name: row.name,
           phone: row.phone,
           active: true,
+          createdByUserId: userId,
         },
       });
       await resolveAuxiliaryAccountId(tx, organizationId, {
@@ -209,6 +210,7 @@ async function createAccount(
         balance: 0,
         accountingAccountId,
         active: true,
+        createdByUserId: userId,
       },
     });
   });

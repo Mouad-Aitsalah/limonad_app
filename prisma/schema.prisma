@@ -355,6 +355,9 @@ model User {
   validatedDiscrepancies       Discrepancy[]         @relation("DiscrepancyValidatedBy")
   auditLogs                    AuditLog[]
   createdExpenses              Expense[]             @relation("ExpenseCreatedBy")
+  createdSuppliers             Supplier[]            @relation("SupplierCreatedBy")
+  createdExpenseAccounts       ExpenseAccount[]      @relation("ExpenseAccountCreatedBy")
+  createdTreasuryAccounts      TreasuryAccount[]     @relation("TreasuryAccountCreatedBy")
   validatedExpenses            Expense[]             @relation("ExpenseValidatedBy")
   cancelledExpenses            Expense[]             @relation("ExpenseCancelledBy")
   createdCustomerSettlements   CustomerSettlement[]  @relation("CustomerSettlementCreatedBy")
@@ -577,6 +580,11 @@ model Supplier {
   ice            String?
   taxId          String?
   active         Boolean      @default(true)
+  // Who created this account. Nullable: pre-existing rows stay NULL (no
+  // backfill), and a deleted user leaves the account intact with "-" shown.
+  // Display only (/comptes "Créé par") - never a filter, never client-supplied.
+  createdByUserId String?
+  createdBy       User?        @relation("SupplierCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   products       Product[]
   purchases      Purchase[]
   creditNotes    CreditNote[]
@@ -587,6 +595,7 @@ model Supplier {
 
   @@unique([organizationId, code])
   @@index([organizationId])
+  @@index([createdByUserId])
 }
 
 enum ContactStatus {
@@ -635,6 +644,10 @@ model ExpenseAccount {
   accountingAccountId String?
   accountingAccount   AccountingAccount? @relation("ExpenseAccountLinkedAccountingAccount", fields: [accountingAccountId], references: [id], onDelete: SetNull)
   active              Boolean            @default(true)
+  // See Supplier.createdByUserId - same rules (nullable, no backfill,
+  // onDelete: SetNull, display only).
+  createdByUserId     String?
+  createdBy           User?              @relation("ExpenseAccountCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   expenses            Expense[]
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
@@ -643,6 +656,7 @@ model ExpenseAccount {
   @@index([organizationId])
   @@index([accountingAccountId])
   @@index([active])
+  @@index([createdByUserId])
 }
 
 // BI Phase 2A - a single operating-expense transaction (loyer, carburant,
@@ -706,6 +720,10 @@ model TreasuryAccount {
   accountingAccountId String?
   accountingAccount   AccountingAccount?  @relation("TreasuryAccountLinkedAccountingAccount", fields: [accountingAccountId], references: [id], onDelete: SetNull)
   active              Boolean             @default(true)
+  // See Supplier.createdByUserId - same rules (nullable, no backfill,
+  // onDelete: SetNull, display only).
+  createdByUserId     String?
+  createdBy           User?               @relation("TreasuryAccountCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -714,6 +732,7 @@ model TreasuryAccount {
   @@index([accountingAccountId])
   @@index([active])
   @@index([kind])
+  @@index([createdByUserId])
 }
 
 model Product {

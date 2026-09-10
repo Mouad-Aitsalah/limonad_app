@@ -28,6 +28,9 @@ export type BusinessAccountListItem = {
   latitude?: number | null;
   longitude?: number | null;
   status: BusinessAccountStatus;
+  /** fullName (or email fallback) of the user who created this account, or
+   *  null for a pre-existing account / a deleted creator. Display only. */
+  createdByName: string | null;
 };
 
 export type BusinessAccountsSummaryDto = {

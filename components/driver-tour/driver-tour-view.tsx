@@ -3,13 +3,14 @@
 import * as React from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Clock3, MapPin, PackageCheck, ShoppingCart } from "lucide-react";
+import { Clock3, MapPin, PackageCheck, ShoppingCart, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { DriverTourHeader } from "@/components/driver-tour/driver-tour-header";
 import { SelectedCustomerCard } from "@/components/driver-tour/selected-customer-card";
 import { TourMapActions } from "@/components/driver-tour/tour-map-actions";
 import { TourCustomersSheet } from "@/components/driver-tour/tour-customers-sheet";
+import { QuickAddCustomerDialog } from "@/components/driver-tour/quick-add-customer-dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -78,6 +79,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
   );
   const [startingTour, setStartingTour] = React.useState(false);
   const [endingTour, setEndingTour] = React.useState(false);
+  const [quickAddOpen, setQuickAddOpen] = React.useState(false);
   const [recommendedRouteState, setRecommendedRouteState] = React.useState<{
     customerId: string;
     route: GoogleRouteDto;
@@ -511,7 +513,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
 
             <div className="pointer-events-none absolute inset-x-4 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[650] flex flex-col-reverse gap-2 sm:bottom-[max(1rem,env(safe-area-inset-bottom))] lg:bottom-4">
               <div className="pointer-events-auto flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-                <div className="order-2 md:order-1">
+                <div className="order-2 flex flex-wrap gap-2 md:order-1">
                   {!selectedCustomer ? (
                     <Button
                       type="button"
@@ -521,6 +523,15 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
                       Choisir un client
                     </Button>
                   ) : null}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 rounded-2xl bg-background/94 shadow-[0_14px_34px_rgba(15,23,42,0.14)] backdrop-blur"
+                    onClick={() => setQuickAddOpen(true)}
+                  >
+                    <UserPlus className="h-4 w-4" />
+                    Ajouter un client
+                  </Button>
                 </div>
 
                 <div className="order-1 self-end md:order-2">
@@ -777,6 +788,28 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
           // already used when a customer is created/edited from
           // /driver/clients) so it renders/selects exactly like any other
           // tour customer from here on.
+          upsertCustomer(customer);
+          setUserSelectedCustomerId(customer.id);
+        }}
+      />
+
+      <QuickAddCustomerDialog
+        open={quickAddOpen}
+        onOpenChange={setQuickAddOpen}
+        gps={gps}
+        fallbackPosition={
+          state.latestPosition
+            ? {
+                latitude: state.latestPosition.latitude,
+                longitude: state.latestPosition.longitude,
+              }
+            : null
+        }
+        onCreated={(customer) => {
+          // Same merge-into-runtime path as a remotely-found customer: it
+          // renders on the map and is selectable immediately, and is now
+          // visible to this driver everywhere (POS included) via the standard
+          // "creationOrigin DRIVER / createdByDriverId = me" access rule.
           upsertCustomer(customer);
           setUserSelectedCustomerId(customer.id);
         }}

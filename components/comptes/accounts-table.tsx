@@ -113,6 +113,7 @@ export function AccountsTable({
               <SortIcon active={sort.key === "createdAt"} direction={sort.direction} />
             </button>
           </TableHead>
+          <TableHead>Cree par</TableHead>
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
@@ -149,6 +150,9 @@ export function AccountsTable({
                 {account.creditLimit === null ? "-" : formatCurrency(account.creditLimit)}
               </TableCell>
               <TableCell>{formatBusinessAccountDate(account.createdAt)}</TableCell>
+              <TableCell className="text-muted-foreground">
+                {account.createdByName ?? "-"}
+              </TableCell>
               <TableCell>
                 <div className="flex justify-end">
                   {canEdit ? (

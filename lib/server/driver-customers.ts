@@ -1,5 +1,7 @@
 import "server-only";
 
+import { z } from "zod";
+
 import { boundingBoxAround } from "@/lib/gps/gps-utils";
 import { prisma } from "@/lib/prisma";
 import {
@@ -221,6 +223,84 @@ export async function getDriverProximityCustomers(): Promise<CustomerDto[]> {
     take: PROXIMITY_FEED_HARD_CAP,
   });
   return customers.map(mapCustomerToDto);
+}
+
+/**
+ * Partie B: "Ajout rapide client" from the driver GPS/tournée screen.
+ *
+ * The driver types ONLY a name; the location comes from the map pin (seeded
+ * from their live GPS). Everything else is derived server-side from the
+ * authenticated driver session - organizationId, driverId, truckId,
+ * createdByUserId, creationOrigin: "DRIVER" - and the code from the existing
+ * Customer.code sequence. address/city/type get neutral defaults ("" / OTHER):
+ * the full customer form on /driver/clients can fill them in later. Never
+ * creates a sale, a visit, a stock or accounting movement.
+ */
+const quickDriverCustomerSchema = z.object({
+  name: z.string().trim().min(1, "Le nom est obligatoire."),
+  latitude: z.coerce
+    .number({ error: "La position est obligatoire." })
+    .refine((v) => Number.isFinite(v), "La position est obligatoire.")
+    .min(-90, "Latitude invalide.")
+    .max(90, "Latitude invalide."),
+  longitude: z.coerce
+    .number({ error: "La position est obligatoire." })
+    .refine((v) => Number.isFinite(v), "La position est obligatoire.")
+    .min(-180, "Longitude invalide.")
+    .max(180, "Longitude invalide."),
+  locationAccuracy: z.coerce.number().min(0).nullable().optional(),
+});
+
+export type QuickDriverCustomerInput = z.input<typeof quickDriverCustomerSchema>;
+
+export async function createQuickCustomerForCurrentDriver(
+  input: QuickDriverCustomerInput,
+): Promise<CustomerDto> {
+  const user = await requireOrganizationUser(["driver"]);
+  if (!user.driverId) throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
+
+  const parsed = quickDriverCustomerSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new OperationsServiceError(
+      "Certains champs sont invalides.",
+      422,
+      Object.fromEntries(
+        parsed.error.issues.map((issue) => [issue.path.join(".") || "form", issue.message]),
+      ),
+    );
+  }
+  const data = parsed.data;
+
+  const customer = await withSerializableRetry(() =>
+    prisma.$transaction(
+      async (tx) =>
+        tx.customer.create({
+          data: {
+            organizationId: user.organizationId,
+            code: await nextCustomerCode(tx, user.organizationId),
+            name: data.name,
+            address: "",
+            city: "",
+            type: "OTHER",
+            status: "ACTIVE",
+            creditLimit: 0,
+            currentBalance: 0,
+            latitude: data.latitude,
+            longitude: data.longitude,
+            locationAccuracy: data.locationAccuracy ?? null,
+            locationUpdatedAt: resolveLocationUpdatedAt(data.latitude, data.longitude),
+            createdByUserId: user.id,
+            createdByDriverId: user.driverId,
+            createdFromTruckId: user.truckId ?? null,
+            creationOrigin: "DRIVER",
+          },
+          include: customerInclude,
+        }),
+      { isolationLevel: "Serializable" },
+    ),
+  );
+
+  return mapCustomerToDto(customer);
 }
 
 export async function createCustomerForCurrentDriver(
