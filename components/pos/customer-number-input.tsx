@@ -19,6 +19,14 @@ type CustomerNumberInputProps = {
   customer: CustomerDto | null;
   /** Called with the resolved customer once a typed number is found. */
   onResolved: (customer: CustomerDto) => void;
+  /**
+   * Optional: called when a typed number resolves to NOTHING. When provided,
+   * the box KEEPS the wrong number and the "Client introuvable" error on
+   * screen even if the parent reacts by clearing its `customer` to null - so
+   * the operator can see and fix their mistake. Not passed by the POS, whose
+   * behaviour is unchanged.
+   */
+  onNotFound?: () => void;
   /** Optional: where to send focus after a successful lookup (e.g. product search). */
   focusAfterResolve?: React.RefObject<HTMLInputElement | null>;
   disabled?: boolean;
@@ -41,6 +49,7 @@ type CustomerNumberInputProps = {
 export function CustomerNumberInput({
   customer,
   onResolved,
+  onNotFound,
   focusAfterResolve,
   disabled,
 }: CustomerNumberInputProps) {
@@ -48,6 +57,11 @@ export function CustomerNumberInput({
   const [value, setValue] = React.useState(syncedNumber);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // Set right before a not-found lookup asks the parent to clear its
+  // customer, so the sync effect below knows the incoming `null` is our own
+  // doing and must NOT wipe the wrong number / error off the screen.
+  const selfClearedRef = React.useRef(false);
 
   // Re-mirror the box whenever the selected customer *identity* changes
   // (combobox pick, X clear, a number lookup landing a different customer).
@@ -58,6 +72,11 @@ export function CustomerNumberInput({
     const id = customer?.id ?? null;
     if (id === lastSyncedId.current) return;
     lastSyncedId.current = id;
+    const wasSelfCleared = selfClearedRef.current;
+    selfClearedRef.current = false;
+    // Our own not-found just cleared the parent's selection: keep what the
+    // operator typed and the "Client introuvable" message visible.
+    if (wasSelfCleared && customer === null) return;
     setValue(customer ? customerAccountNumber(customer.code) : "");
     setError(null);
   }, [customer]);
@@ -80,6 +99,10 @@ export function CustomerNumberInput({
       const body = (await response.json()) as { customer?: CustomerDto; message?: string };
       if (!response.ok || !body.customer) {
         setError(body.message ?? "Client introuvable.");
+        if (onNotFound) {
+          selfClearedRef.current = true;
+          onNotFound();
+        }
         return;
       }
       onResolved(body.customer);

@@ -1,18 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
+import { CustomerNumberInput } from "@/components/pos/customer-number-input";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -48,12 +41,12 @@ function formatDate(iso: string) {
 }
 
 export function CustomerSettlementsView() {
+  // Single source of truth for the selected client - fed identically by the
+  // "Client" combobox (search) and the "N° client" box (GET
+  // /api/customers/by-number, org-scoped). No parallel state.
   const [customer, setCustomer] = React.useState<CustomerDto | null>(null);
   const [journal, setJournal] = React.useState<CustomerJournalDto | null>(null);
   const [loadingJournal, setLoadingJournal] = React.useState(false);
-
-  // Display-only multi-select filter (empty = "Tous les utilisateurs").
-  const [userFilter, setUserFilter] = React.useState<string[]>([]);
 
   const [amount, setAmount] = React.useState("");
   const [method, setMethod] = React.useState<SettlementMethod>("CASH");
@@ -65,14 +58,13 @@ export function CustomerSettlementsView() {
   const debt = journal?.debt.debt ?? null;
 
   const loadJournal = React.useCallback(
-    async (customerId: string, page: number, userIds: string[]) => {
+    async (customerId: string, page: number) => {
       setLoadingJournal(true);
       try {
         const params = new URLSearchParams({
           page: String(page),
           pageSize: "20",
         });
-        if (userIds.length > 0) params.set("userIds", userIds.join(","));
         const response = await fetch(
           `/api/customers/${customerId}/journal?${params.toString()}`,
           { cache: "no-store" },
@@ -92,20 +84,17 @@ export function CustomerSettlementsView() {
     [],
   );
 
+  // The one entry point both fields use to change the selected client, so
+  // "Client" and "N° client" can never drift apart. `null` = X / reset.
   function handleSelectCustomer(next: CustomerDto | null) {
+    if ((customer?.id ?? null) === (next?.id ?? null)) return;
     setCustomer(next);
     // Nothing of the previous client must linger.
     setJournal(null);
-    setUserFilter([]);
     setAmount("");
     setFormError(null);
     idempotencyKeyRef.current = crypto.randomUUID();
-    if (next) void loadJournal(next.id, 1, []);
-  }
-
-  function handleUserFilterChange(next: string[]) {
-    setUserFilter(next);
-    if (customer) void loadJournal(customer.id, 1, next);
+    if (next) void loadJournal(next.id, 1);
   }
 
   const parsedAmount = Number(amount.replace(",", "."));
@@ -160,9 +149,8 @@ export function CustomerSettlementsView() {
       toast.success(`Règlement de ${formatCurrency(parsedAmount)} enregistré.`);
       setAmount("");
       idempotencyKeyRef.current = crypto.randomUUID();
-      // The filter is display-only: reload the current selection so the new
-      // settlement shows immediately, without dropping the active filter.
-      await loadJournal(customer.id, 1, userFilter);
+      // Reload the client's journal so the new settlement shows immediately.
+      await loadJournal(customer.id, 1);
     } catch {
       setFormError("Impossible d'enregistrer le règlement.");
     } finally {
@@ -171,14 +159,13 @@ export function CustomerSettlementsView() {
   }
 
   const pagination = journal?.pagination;
-  const journalUsers = journal?.users ?? [];
 
   return (
     <div className="space-y-6">
-      {/* --- Filtres : Client + Utilisateurs --- */}
+      {/* --- Sélection du client : par nom OU par N° - même Customer --- */}
       <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:max-w-2xl">
-          <div className="min-w-0">
+        <div className="grid gap-4 sm:grid-cols-3 lg:max-w-2xl">
+          <div className="min-w-0 sm:col-span-2">
             <CustomerCombobox
               value={customer}
               onChange={handleSelectCustomer}
@@ -187,16 +174,11 @@ export function CustomerSettlementsView() {
               placeholder="Rechercher par nom, code ou téléphone"
             />
           </div>
-          <div className="min-w-0 space-y-2">
-            <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <Users aria-hidden="true" className="h-3.5 w-3.5" />
-              Utilisateurs
-            </Label>
-            <UserMultiSelect
-              users={journalUsers}
-              selected={userFilter}
-              onChange={handleUserFilterChange}
-              disabled={!customer}
+          <div className="min-w-0">
+            <CustomerNumberInput
+              customer={customer}
+              onResolved={handleSelectCustomer}
+              onNotFound={() => handleSelectCustomer(null)}
             />
           </div>
         </div>
@@ -396,15 +378,6 @@ export function CustomerSettlementsView() {
                   </p>
                 ) : null}
 
-                {userFilter.length > 0 ? (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Filtre utilisateur actif — {journal.operations.length} opération
-                    {journal.operations.length > 1 ? "s" : ""} affichée
-                    {journal.operations.length > 1 ? "s" : ""} sur cette page. La colonne
-                    « Solde » et les totaux restent calculés sur le journal complet.
-                  </p>
-                ) : null}
-
                 <div className="mt-4 overflow-x-auto rounded-xl border border-border">
                   <Table className="min-w-[900px]">
                     <TableHeader>
@@ -464,9 +437,7 @@ export function CustomerSettlementsView() {
                       variant="outline"
                       size="sm"
                       disabled={loadingJournal || pagination.page <= 1}
-                      onClick={() =>
-                        void loadJournal(customer.id, pagination.page - 1, userFilter)
-                      }
+                      onClick={() => void loadJournal(customer.id, pagination.page - 1)}
                     >
                       ← Précédent
                     </Button>
@@ -478,9 +449,7 @@ export function CustomerSettlementsView() {
                       variant="outline"
                       size="sm"
                       disabled={loadingJournal || pagination.page >= pagination.pageCount}
-                      onClick={() =>
-                        void loadJournal(customer.id, pagination.page + 1, userFilter)
-                      }
+                      onClick={() => void loadJournal(customer.id, pagination.page + 1)}
                     >
                       Suivant →
                     </Button>
@@ -489,88 +458,12 @@ export function CustomerSettlementsView() {
               </>
             ) : (
               <p className="mt-4 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                {loadingJournal
-                  ? "Chargement…"
-                  : userFilter.length > 0
-                    ? "Aucune opération pour les utilisateurs sélectionnés."
-                    : "Aucune opération comptable pour ce client."}
+                {loadingJournal ? "Chargement…" : "Aucune opération comptable pour ce client."}
               </p>
             )}
           </div>
         </>
       ) : null}
     </div>
-  );
-}
-
-/**
- * Multi-select "Utilisateur" filter. Empty selection = "Tous les
- * utilisateurs" (default). Options are only the users who authored an
- * operation of the current client (already organisation-scoped server-side).
- */
-function UserMultiSelect({
-  users,
-  selected,
-  onChange,
-  disabled,
-}: {
-  users: Array<{ id: string; name: string }>;
-  selected: string[];
-  onChange: (next: string[]) => void;
-  disabled?: boolean;
-}) {
-  const selectedSet = new Set(selected);
-  const selectedNames = users
-    .filter((user) => selectedSet.has(user.id))
-    .map((user) => user.name);
-
-  const label =
-    selectedNames.length === 0
-      ? "Tous les utilisateurs"
-      : selectedNames.length <= 2
-        ? selectedNames.join(", ")
-        : `${selectedNames.length} utilisateurs sélectionnés`;
-
-  function toggle(id: string) {
-    onChange(
-      selectedSet.has(id) ? selected.filter((value) => value !== id) : [...selected, id],
-    );
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        disabled={disabled}
-        className="flex h-11 w-full items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <span className="truncate">{label}</span>
-        <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-72 w-[min(20rem,calc(100vw-2rem))] overflow-y-auto">
-        <DropdownMenuCheckboxItem
-          checked={selected.length === 0}
-          onCheckedChange={() => onChange([])}
-          closeOnClick={false}
-        >
-          Tous les utilisateurs
-        </DropdownMenuCheckboxItem>
-        {users.length > 0 ? <DropdownMenuSeparator /> : null}
-        {users.map((user) => (
-          <DropdownMenuCheckboxItem
-            key={user.id}
-            checked={selectedSet.has(user.id)}
-            onCheckedChange={() => toggle(user.id)}
-            closeOnClick={false}
-          >
-            {user.name}
-          </DropdownMenuCheckboxItem>
-        ))}
-        {users.length === 0 ? (
-          <p className="px-2 py-1.5 text-xs text-muted-foreground">
-            Aucune opération à filtrer.
-          </p>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
