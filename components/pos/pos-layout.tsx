@@ -38,11 +38,13 @@ import { InvoiceActions } from "@/components/pos/invoice-actions";
 import { CheckoutDialog } from "@/components/pos/checkout-dialog";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
+import { computeDiscountedLineTotals, reconstructDiscountUnitAmount } from "@/lib/pos-discount";
 
 export type CartLine = {
   productId: string;
   quantity: number;
-  discountPercent: number;
+  /** DH taken off the unit's TTC price - see lib/pos-discount.ts. */
+  discountUnitAmount: number;
   /**
    * Per-line manual unit price HT, INDEPENDENT of the catalogue. Undefined =
    * use the product's catalogue price (the initial source). When set it is
@@ -57,7 +59,8 @@ export type CartLineComputed = {
   designation: string;
   reference: string;
   quantity: number;
-  discountPercent: number;
+  /** DH taken off the unit's TTC price - see lib/pos-discount.ts. */
+  discountUnitAmount: number;
   unitPriceHT: number;
   unitPriceTTC: number;
   /** True when unitPriceHT comes from a manual per-line override, not the catalogue. */
@@ -94,7 +97,17 @@ function normalizeSearch(value: string) {
 }
 
 function resolveDefaultCustomer(customers: CustomerDto[]): CustomerDto | null {
-  return customers.find((customer) => customer.type === "COUNTER") ?? customers[0] ?? null;
+  // AITSALAH STORE's dedicated "Autre" walk-in customer (see
+  // scripts/provision-aitsalah-default-customer.ts) takes priority when
+  // present - it only ever appears in that organization's preload (the
+  // server guarantees it there), so every other organization's default
+  // (its "COUNTER" customer, unchanged) is untouched.
+  return (
+    customers.find((customer) => customer.name === "Autre") ??
+    customers.find((customer) => customer.type === "COUNTER") ??
+    customers[0] ??
+    null
+  );
 }
 
 function mapContextProductsToPosProducts(
@@ -285,7 +298,16 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         designation: line.productName,
         reference: line.productReference,
         quantity: line.quantity,
-        discountPercent: line.discountRate,
+        // Reconstructed from the persisted totals rather than read off
+        // discountRate - exact for a line this feature created, and a
+        // faithful DH reading of an older percentage-discounted line. See
+        // lib/pos-discount.ts.
+        discountUnitAmount: reconstructDiscountUnitAmount({
+          unitPriceHT: line.unitPriceHT,
+          taxRate: line.taxRate,
+          quantity: line.quantity,
+          totalTTC: line.totalTTC,
+        }),
         unitPriceHT: line.unitPriceHT,
         unitPriceTTC: line.quantity > 0 ? line.totalTTC / line.quantity : 0,
         priceOverridden: false,
@@ -312,19 +334,26 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       const priceOverridden = line.priceOverrideHT != null;
       const unitPriceHT = priceOverridden ? line.priceOverrideHT! : catalogueHT;
       const unitPriceTTC = roundCurrency(unitPriceHT * (1 + tauxTVA / 100));
-      const discountPercent = line.discountPercent;
+      const {
+        discountUnitAmount,
+        discountAmount,
+        totalHT: netHT,
+        taxAmount: tvaAmount,
+        totalTTC,
+      } = computeDiscountedLineTotals({
+        unitPriceHT,
+        taxRate: tauxTVA,
+        quantity: line.quantity,
+        discountUnitAmount: line.discountUnitAmount,
+      });
       const baseHT = unitPriceHT * line.quantity;
-      const discountAmount = baseHT * (discountPercent / 100);
-      const netHT = baseHT - discountAmount;
-      const tvaAmount = netHT * (tauxTVA / 100);
-      const totalTTC = netHT + tvaAmount;
 
       return {
         productId: line.productId,
         designation: product?.designation ?? frozen!.designation,
         reference: product?.reference ?? frozen!.reference,
         quantity: line.quantity,
-        discountPercent,
+        discountUnitAmount,
         unitPriceHT,
         unitPriceTTC,
         priceOverridden,
@@ -420,7 +449,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             : line,
         );
       }
-      return [...prev, { productId, quantity: 1, discountPercent: 0 }];
+      return [...prev, { productId, quantity: 1, discountUnitAmount: 0 }];
     });
     setLastAddedProductId(productId);
 
@@ -491,10 +520,21 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     });
   }
 
-  function updateDiscount(productId: string, discountPercent: number) {
+  // The "Rem." input is a DH amount off the unit's TTC price - never more
+  // than the unit is worth (see lib/pos-discount.ts). Clamped here (not
+  // just in cart-table.tsx) because this is where the current unitPriceTTC
+  // for that line is known, with a clear message instead of a silent cap.
+  function updateDiscount(productId: string, discountUnitAmount: number) {
+    const currentLine = cartLines.find((line) => line.productId === productId);
+    const maxDiscount = currentLine?.unitPriceTTC ?? Infinity;
+    const safeValue = Number.isFinite(discountUnitAmount) ? Math.max(0, discountUnitAmount) : 0;
+    if (safeValue > maxDiscount) {
+      toast.error("La remise ne peut pas dépasser le prix unitaire.");
+    }
+    const clamped = Math.min(safeValue, maxDiscount);
     setCart((prev) =>
       prev.map((line) =>
-        line.productId === productId ? { ...line, discountPercent } : line,
+        line.productId === productId ? { ...line, discountUnitAmount: clamped } : line,
       ),
     );
   }
@@ -655,7 +695,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       lines: cartLines.map((line) => ({
         productId: line.productId,
         quantity: line.quantity,
-        discountRate: line.discountPercent,
+        discountUnitAmount: line.discountUnitAmount,
         // Only sent when the operator set a manual price - otherwise the
         // server keeps using the catalogue price.
         ...(line.priceOverridden ? { unitPriceHT: line.unitPriceHT } : {}),
@@ -713,7 +753,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           lines: cartLines.map((line) => ({
             productId: line.productId,
             quantity: line.quantity,
-            discountRate: line.discountPercent,
+            discountUnitAmount: line.discountUnitAmount,
             ...(line.priceOverridden ? { unitPriceHT: line.unitPriceHT } : {}),
           })),
           expectedUpdatedAt: editSale.updatedAt ?? null,
@@ -810,7 +850,15 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           sale.lines.map((line) => ({
             productId: line.productId,
             quantity: line.quantity,
-            discountPercent: line.discountRate,
+            // Reconstructed from the persisted totals, not discountRate -
+            // exact for a line this feature created, a faithful DH reading
+            // of an older percentage-discounted line. See lib/pos-discount.ts.
+            discountUnitAmount: reconstructDiscountUnitAmount({
+              unitPriceHT: line.unitPriceHT,
+              taxRate: line.taxRate,
+              quantity: line.quantity,
+              totalTTC: line.totalTTC,
+            }),
           })),
         );
         setLastAddedProductId(null);
@@ -1019,7 +1067,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         productName: line.designation,
         quantity: line.quantity,
         unitPriceHT: line.unitPriceHT,
-        discountRate: line.discountPercent,
+        discountUnitAmount: line.discountUnitAmount,
         taxRate: line.tauxTVA,
       })),
     });

@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
+import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
 import {
   computeCashSaleStampAmount,
@@ -75,7 +76,14 @@ const reviseSchema = z.object({
       z.object({
         productId: z.string().trim().min(1),
         quantity: z.coerce.number().int().positive().max(1_000_000),
+        // Legacy percentage field - the counter POS no longer sends this;
+        // still accepted for schema compatibility, but reviseSale ignores it
+        // in favour of discountUnitAmount below.
         discountRate: z.coerce.number().min(0).max(100).optional(),
+        // DH taken off the unit's TTC price (the POS "Rem." field) - see
+        // lib/pos-discount.ts. Re-clamped server-side regardless of what the
+        // client sends.
+        discountUnitAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
         // Optional per-line manual unit price HT from the POS edit cart.
         // Absent = keep the line's historical price (existing product) or the
         // catalogue price (product added during the edit).
@@ -444,14 +452,16 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
             ? original.unitCostHT.toNumber()
             : product.purchasePrice.toNumber();
           const taxRate = original ? original.taxRate.toNumber() : product.taxRate.toNumber();
-          const discountRate = line.discountRate ?? 0;
           const grossHT = unitPriceHT * line.quantity;
           assertMoneyRange(unitPriceHT, "line.unitPriceHT");
           assertMoneyRange(grossHT, "line.grossHT");
-          const discountAmount = roundMoney(grossHT * (discountRate / 100));
-          const totalHT = roundMoney(grossHT - discountAmount);
-          const taxAmount = roundMoney(totalHT * (taxRate / 100));
-          const totalTTC = roundMoney(totalHT + taxAmount);
+          const { discountRate, discountAmount, totalHT, taxAmount, totalTTC } =
+            computeDiscountedLineTotals({
+              unitPriceHT,
+              taxRate,
+              quantity: line.quantity,
+              discountUnitAmount: line.discountUnitAmount ?? 0,
+            });
           assertMoneyRange(discountAmount, "line.discountAmount");
           assertMoneyRange(totalHT, "line.totalHT");
           assertMoneyRange(taxAmount, "line.taxAmount");

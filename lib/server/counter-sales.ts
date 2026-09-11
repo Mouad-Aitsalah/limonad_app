@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
+import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
@@ -79,7 +80,14 @@ const counterSaleSchema = z.object({
         // price to overflow Decimal(12,2) (that overflow is caught on the
         // computed amount by assertMoneyRange below regardless).
         quantity: z.coerce.number().int().positive().max(1_000_000),
+        // Legacy percentage field - the counter POS no longer sends this;
+        // still accepted for schema compatibility, but ignored by
+        // createCounterSale in favour of discountUnitAmount below.
         discountRate: z.coerce.number().min(0).max(100).optional(),
+        // DH taken off the unit's TTC price (the POS "Rem." field) - see
+        // lib/pos-discount.ts. Re-clamped server-side to the unit's own TTC
+        // price regardless of what the client sends.
+        discountUnitAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
         // Optional per-line manual unit price HT (POS cart price edit).
         // Honoured ONLY for an admin session - see createCounterSale.
         // Absent = the product's catalogue price is used (the default source).
@@ -104,6 +112,12 @@ const counterSaleSchema = z.object({
 // silently hiding products the cap couldn't fit. See the Phase 3 report:
 // unbounded, this query took 76s/82MB at 100000 stocked products.
 const POS_PRODUCT_LIST_LIMIT = 500;
+
+// The stable business code of AITSALAH STORE's organization - never its
+// (environment-specific) row id, never its display name/logo. See
+// scripts/provision-aitsalah-default-customer.ts, which resolves the same
+// organization the same way.
+const AITSALAH_STORE_ORGANIZATION_CODE = "COMDIS-PRINCIPAL";
 
 export async function getCounterPosContext(): Promise<CounterPosContextDto> {
   const sessionUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
@@ -130,6 +144,26 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
   if (!stockLocation || stockLocation.type !== "DEPOT" || !stockLocation.active) {
     throw new OperationsServiceError("Emplacement depot introuvable.", 404);
   }
+
+  // AITSALAH STORE provisioned a dedicated "Autre" walk-in customer as the
+  // counter POS's default - see
+  // scripts/provision-aitsalah-default-customer.ts. Restricted to that one
+  // organization by its stable Organization.code ("COMDIS-PRINCIPAL"),
+  // resolved server-side from the authenticated session's organizationId -
+  // never a client-supplied id, never a name match alone (a customer
+  // named "Autre" existing in some OTHER organization must never trigger
+  // this default there - see the "DERNIERE CORRECTION AVANT PUSH" report).
+  const sessionOrganization = await prisma.organization.findUnique({
+    where: { id: sessionUser.organizationId },
+    select: { code: true },
+  });
+  const defaultCustomer =
+    sessionOrganization?.code === AITSALAH_STORE_ORGANIZATION_CODE
+      ? await prisma.customer.findFirst({
+          where: { organizationId: sessionUser.organizationId, name: { equals: "Autre", mode: "insensitive" }, status: "ACTIVE" },
+          select: { id: true },
+        })
+      : null;
 
   const [productRows, customers, bankAccounts] = await Promise.all([
     // Source of truth for POS visibility = every ACTIVE product of the
@@ -161,7 +195,11 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     // organization - see getPosCustomerPreload's doc comment and the
     // Phase 3 report. Anything beyond this small set is reached through
     // the customer combobox's GET /api/customers/search fallback.
-    getPosCustomerPreload({ organizationId: sessionUser.organizationId, guaranteeType: "COUNTER" }),
+    getPosCustomerPreload({
+      organizationId: sessionUser.organizationId,
+      guaranteeType: "COUNTER",
+      guaranteeCustomerId: defaultCustomer?.id ?? null,
+    }),
     listActiveBankAccountOptions(prisma, sessionUser.organizationId),
   ]);
 
@@ -367,7 +405,6 @@ export async function createCounterSale(
         // again by collectSaleCore (DRAFT -> PAID/CREDIT only updates the
         // Sale row, never SaleLine).
         const unitCostHT = product.purchasePrice.toNumber();
-        const discountRate = line.discountRate ?? 0;
         // F8-D: grossHT is a raw multiplication (unitPriceHT x quantity),
         // checked before rounding/further use - a large-but-otherwise-valid
         // quantity times a large unit price is exactly the case a bound on
@@ -375,11 +412,14 @@ export async function createCounterSale(
         const grossHT = unitPriceHT * line.quantity;
         assertMoneyRange(unitPriceHT, "line.unitPriceHT");
         assertMoneyRange(grossHT, "line.grossHT");
-        const discountAmount = roundMoney(grossHT * (discountRate / 100));
-        const totalHT = roundMoney(grossHT - discountAmount);
         const taxRate = product.taxRate.toNumber();
-        const taxAmount = roundMoney(totalHT * (taxRate / 100));
-        const totalTTC = roundMoney(totalHT + taxAmount);
+        const { discountUnitAmount, discountRate, discountAmount, totalHT, taxAmount, totalTTC } =
+          computeDiscountedLineTotals({
+            unitPriceHT,
+            taxRate,
+            quantity: line.quantity,
+            discountUnitAmount: line.discountUnitAmount ?? 0,
+          });
         assertMoneyRange(discountAmount, "line.discountAmount");
         assertMoneyRange(totalHT, "line.totalHT");
         assertMoneyRange(taxAmount, "line.taxAmount");
@@ -389,6 +429,7 @@ export async function createCounterSale(
           unitPriceHT,
           unitCostHT,
           discountRate,
+          discountUnitAmount,
           discountAmount,
           taxRate,
           taxAmount,

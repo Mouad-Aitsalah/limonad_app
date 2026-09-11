@@ -485,16 +485,110 @@ export async function ensureUniquePhone(
   }
 }
 
+// F11: some organizations were bootstrapped with a bulk AccountingAccount
+// import (opening balances from a legacy ledger) that used the exact same
+// "3421" + N textual convention as this sequence, but was never reserved
+// through it - those rows and this sequence are two independent,
+// unrelated numbering series that only coincidentally share a prefix. A
+// freshly reserved value can therefore already be taken by one of those
+// imported accounts (or, in principle, by a Customer.code set explicitly
+// via the optional `code` input on createCustomer/business-accounts,
+// bypassing this generator entirely) even though this sequence itself
+// never produced it before. Reserving blindly would let a brand new
+// customer's future auxiliary account (ensureAccountingAccountByCode,
+// looked up by code) silently attach to that unrelated, differently-named
+// existing account. So: keep drawing fresh values from the atomic counter
+// and skip any that are already taken in EITHER namespace, in the same
+// transaction as the eventual Customer.create - see the "SUITE POS
+// FINALISATION" report for the audit that found this.
+//
+// The occupied-code snapshot is fetched ONCE (two indexed prefix scans)
+// before the retry loop, not re-queried on every attempt: an org whose
+// import left dozens of consecutive codes occupied (the audited case had
+// 36) needs that many reservations, and checking two tables per attempt
+// blew past Prisma's default 5s interactive-transaction timeout against
+// the real (remote) database. A snapshot means every retry after the
+// first costs only the atomic counter round trip, not three. Bounded so a
+// pathological, fully-saturated namespace fails loudly instead of hanging.
+//
+// GUARANTEE, PRECISELY (audited for the "DERNIERE REVUE" report - do not
+// weaken this comment without re-reading that audit): two concurrent
+// nextCustomerCode calls can never both return the same code - each draws
+// its own value from the atomic DocumentSequence counter, so they are
+// never comparing against a code the other is also about to use. That
+// part is an absolute guarantee.
+// It is NOT an absolute guarantee against every possible source of a
+// "3421"+digits AccountingAccount row: two other live, admin-only paths
+// create such rows without going through this function or its snapshot -
+// app/api/comptes/import/route.ts's CUSTOMER-row bulk import (sets
+// Customer.code from the uploaded file directly, bypassing this generator
+// entirely, then creates its matching auxiliary account in its own
+// transaction) and the free-text "Comptes comptables" creation form
+// (lib/server/accounting.ts#createAccountingAccount, no code-pattern
+// restriction). Neither coordinates with this function's snapshot, so an
+// admin action on either of those screens landing in the same instant as
+// a customer being created here could in principle still produce a
+// collision - the final re-check below closes that window from
+// "snapshot-to-commit" (potentially many round trips, if the snapshot was
+// stale) down to "one fresh read immediately before this transaction
+// writes the Customer row", but does not eliminate it: Postgres offers no
+// unique constraint spanning two unrelated tables, and a true fix would
+// need an advisory lock taken by all three call sites - deliberately not
+// done here (see the "ne pas sur-engineer" instruction in that report):
+// both other paths are deliberate, infrequent admin actions, not routine
+// traffic, so the residual window is a real but very low-probability risk,
+// not a routine collision - it should not be marked as fully closed.
+const MAX_CUSTOMER_CODE_ATTEMPTS = 10_000;
+// Comfortably above any real organization's 3421-prefixed row count (the
+// audited case had 112) - just a sanity cap on the snapshot scan itself.
+const CUSTOMER_CODE_SNAPSHOT_LIMIT = 20_000;
+
 export async function nextCustomerCode(
-  tx: Pick<typeof prisma, "customer" | "$queryRaw">,
+  tx: Pick<typeof prisma, "customer" | "accountingAccount" | "$queryRaw">,
   organizationId: string,
 ) {
-  const number = await reserveDocumentSequence(
-    tx,
-    organizationId,
-    DocumentType.CustomerCode,
+  const [occupiedCustomerCodes, occupiedAccountCodes] = await Promise.all([
+    tx.customer.findMany({
+      where: { organizationId, code: { startsWith: customerAccountPrefix } },
+      select: { code: true },
+      take: CUSTOMER_CODE_SNAPSHOT_LIMIT,
+    }),
+    tx.accountingAccount.findMany({
+      where: { organizationId, code: { startsWith: customerAccountPrefix } },
+      select: { code: true },
+      take: CUSTOMER_CODE_SNAPSHOT_LIMIT,
+    }),
+  ]);
+  const occupiedCodes = new Set([
+    ...occupiedCustomerCodes.map((row) => row.code),
+    ...occupiedAccountCodes.map((row) => row.code),
+  ]);
+
+  for (let attempt = 0; attempt < MAX_CUSTOMER_CODE_ATTEMPTS; attempt++) {
+    const number = await reserveDocumentSequence(
+      tx,
+      organizationId,
+      DocumentType.CustomerCode,
+    );
+    const code = `${customerAccountPrefix}${number}`;
+    if (occupiedCodes.has(code)) continue;
+
+    // Final fresh re-check, right before this code is handed to the
+    // caller's Customer.create - narrows (does not eliminate, see the
+    // guarantee comment above) the race window against the two live
+    // admin paths that can create a colliding AccountingAccount outside
+    // this function's snapshot.
+    const [collidingCustomer, collidingAccount] = await Promise.all([
+      tx.customer.findFirst({ where: { organizationId, code }, select: { id: true } }),
+      tx.accountingAccount.findFirst({ where: { organizationId, code }, select: { id: true } }),
+    ]);
+    if (!collidingCustomer && !collidingAccount) return code;
+    occupiedCodes.add(code);
+  }
+  throw new OperationsServiceError(
+    "Impossible de generer un code client libre pour cette organisation.",
+    500,
   );
-  return `${customerAccountPrefix}${number}`;
 }
 
 function optionalString() {

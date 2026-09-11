@@ -21,6 +21,18 @@ type CreditNoteCartLine = {
   taxRate: number;
   taxAmount: number;
   totalTTC: number;
+  /** Small "N°123/2026" badge shown under the product name for a line
+   * linked to an original sale - absent for a manual/unlinked line. */
+  invoiceNumber?: string | null;
+  /** Linked line: price/remise came from the real original sale and the
+   * server ignores whatever is sent here (see computeLinkedReturnTotals) -
+   * editing them client-side would be misleading, so those two inputs are
+   * disabled. */
+  readOnlyPricing?: boolean;
+  /** Linked line: caps the quantity input so the UI can't even suggest
+   * returning more than what's actually still returnable (the server
+   * enforces this regardless - this is just the fast, friendly feedback). */
+  maxQuantity?: number;
 };
 
 type CreditNoteCartProps = {
@@ -74,6 +86,11 @@ export function CreditNoteCart({
             <TableCell className="max-w-[160px]">
               <p className="truncate font-medium text-foreground">{line.productName}</p>
               <p className="text-xs text-muted-foreground">{line.productReference}</p>
+              {line.invoiceNumber ? (
+                <p className="mt-0.5 text-xs font-medium text-emerald-700">
+                  Facture {line.invoiceNumber}
+                </p>
+              ) : null}
             </TableCell>
             <TableCell>
               <div className="flex items-center justify-center gap-1">
@@ -89,6 +106,7 @@ export function CreditNoteCart({
                 <input
                   type="number"
                   min={1}
+                  max={line.maxQuantity}
                   value={line.quantityReturned}
                   disabled={disabled}
                   onChange={(event) =>
@@ -103,12 +121,17 @@ export function CreditNoteCart({
                   type="button"
                   variant="outline"
                   size="icon-xs"
-                  disabled={disabled}
+                  disabled={disabled || (line.maxQuantity != null && line.quantityReturned >= line.maxQuantity)}
                   onClick={() => onIncrement(line.productId)}
                 >
                   <Plus className="h-3 w-3" />
                 </Button>
               </div>
+              {line.maxQuantity != null ? (
+                <p className="mt-1 text-center text-[11px] text-muted-foreground">
+                  max {line.maxQuantity}
+                </p>
+              ) : null}
             </TableCell>
             <TableCell className="text-right">
               <input
@@ -116,11 +139,12 @@ export function CreditNoteCart({
                 min={0}
                 step="0.01"
                 value={line.unitPrice}
-                disabled={disabled}
+                disabled={disabled || line.readOnlyPricing}
+                title={line.readOnlyPricing ? "Prix reel de la vente d'origine - non modifiable" : undefined}
                 onChange={(event) =>
                   onUnitPriceChange(line.productId, Math.max(0, Number(event.target.value) || 0))
                 }
-                className="h-7 w-20 rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
+                className="h-7 w-20 rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 disabled:opacity-60"
               />
             </TableCell>
             <TableCell className="text-right">
@@ -129,14 +153,15 @@ export function CreditNoteCart({
                 min={0}
                 max={100}
                 value={line.discountPercent}
-                disabled={disabled}
+                disabled={disabled || line.readOnlyPricing}
+                title={line.readOnlyPricing ? "Remise reelle de la vente d'origine - non modifiable" : undefined}
                 onChange={(event) =>
                   onDiscountChange(
                     line.productId,
                     Math.min(100, Math.max(0, Number(event.target.value) || 0)),
                   )
                 }
-                className="h-7 w-16 rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
+                className="h-7 w-16 rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 disabled:opacity-60"
               />
             </TableCell>
             <TableCell className="text-right tabular-nums text-muted-foreground">

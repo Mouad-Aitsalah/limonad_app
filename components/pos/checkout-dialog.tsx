@@ -55,8 +55,17 @@ function CheckoutForm({
   onCancel,
   onConfirm,
 }: CheckoutFormProps) {
-  const [montantRecu, setMontantRecu] = React.useState(netAPayer);
-  const monnaieARendre = Math.max(0, montantRecu - netAPayer);
+  // Starts genuinely empty ("") - not pre-filled with netAPayer/0 - so the
+  // cashier always types the real amount handed over. Purely a display/UX
+  // helper: paidAmount sent to onConfirm is always undefined here (see
+  // handleSubmit below), the sale is settled for the full netAPayer
+  // regardless of what is typed.
+  const [montantRecu, setMontantRecu] = React.useState("");
+  const montantRecuValue = montantRecu.trim() === "" ? 0 : Number(montantRecu);
+  const monnaieARendre = Math.max(
+    0,
+    (Number.isFinite(montantRecuValue) ? montantRecuValue : 0) - netAPayer,
+  );
   const isTransfer = operationType === "transfer";
   const isMixed = paymentMethod === "MIXED";
 
@@ -154,9 +163,10 @@ function CheckoutForm({
               type="number"
               min={0}
               step="0.01"
+              placeholder="0,00"
               autoFocus
               value={montantRecu}
-              onChange={(event) => setMontantRecu(Number(event.target.value))}
+              onChange={(event) => setMontantRecu(event.target.value)}
             />
           </div>
 

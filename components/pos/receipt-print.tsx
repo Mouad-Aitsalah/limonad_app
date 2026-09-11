@@ -2,6 +2,7 @@
 
 import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { formatCustomerCode } from "@/lib/customer-code";
+import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto } from "@/types/operations-dto";
 
@@ -126,6 +127,16 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
         <div className="receipt-print-lines">
           {sale.lines.map((line) => {
             const unitPriceTTC = line.unitPriceHT * (1 + line.taxRate / 100);
+            // Reconstructed from the totals actually charged, never printed
+            // from discountRate - exact for a line entered as a DH amount,
+            // and a faithful DH reading of an older percentage-discounted
+            // line. Never "1 %" when the operator typed "1 DH".
+            const discountUnitAmount = reconstructDiscountUnitAmount({
+              unitPriceHT: line.unitPriceHT,
+              taxRate: line.taxRate,
+              quantity: line.quantity,
+              totalTTC: line.totalTTC,
+            });
 
             return (
               <div key={line.id} className="receipt-print-line">
@@ -139,8 +150,10 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
                     {formatReceiptAmount(line.totalTTC)}
                   </span>
                 </div>
-                {line.discountRate > 0 ? (
-                  <p className="receipt-print-discount">Remise : {line.discountRate} %</p>
+                {discountUnitAmount > 0 ? (
+                  <p className="receipt-print-discount">
+                    Remise : {formatReceiptAmount(discountUnitAmount)} DH/u
+                  </p>
                 ) : null}
               </div>
             );

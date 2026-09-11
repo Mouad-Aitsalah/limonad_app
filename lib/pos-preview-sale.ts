@@ -1,4 +1,5 @@
 import { roundMoney } from "@/lib/money";
+import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import type { SaleDto, SaleLineDto } from "@/types/operations-dto";
 
 /**
@@ -21,8 +22,8 @@ export type PreviewSaleLineInput = {
   quantity: number;
   /** Unit price excl. tax, after any per-line manual override. */
   unitPriceHT: number;
-  /** Percentage, 0-100. */
-  discountRate: number;
+  /** DH taken off the unit's TTC price - see lib/pos-discount.ts. */
+  discountUnitAmount: number;
   /** VAT percentage, e.g. 20. */
   taxRate: number;
 };
@@ -45,11 +46,13 @@ export function buildPreviewSale(input: PreviewSaleInput): SaleDto {
   const now = new Date().toISOString();
 
   const lines: SaleLineDto[] = input.lines.map((line, index) => {
-    const grossHT = roundMoney(line.unitPriceHT * line.quantity);
-    const discountAmount = roundMoney(grossHT * (line.discountRate / 100));
-    const totalHT = roundMoney(grossHT - discountAmount);
-    const taxAmount = roundMoney(totalHT * (line.taxRate / 100));
-    const totalTTC = roundMoney(totalHT + taxAmount);
+    const { discountRate, discountAmount, totalHT, taxAmount, totalTTC } =
+      computeDiscountedLineTotals({
+        unitPriceHT: line.unitPriceHT,
+        taxRate: line.taxRate,
+        quantity: line.quantity,
+        discountUnitAmount: line.discountUnitAmount,
+      });
     return {
       id: `preview-${index}`,
       productId: line.productId,
@@ -57,7 +60,7 @@ export function buildPreviewSale(input: PreviewSaleInput): SaleDto {
       productName: line.productName,
       quantity: line.quantity,
       unitPriceHT: line.unitPriceHT,
-      discountRate: line.discountRate,
+      discountRate,
       discountAmount,
       taxRate: line.taxRate,
       taxAmount,

@@ -496,7 +496,10 @@ export function DriverPosView({
           productName: row.product.name,
           quantity: row.quantity,
           unitPriceHT: row.product.salePriceHT,
-          discountRate: row.discountRate,
+          // Driver POS has no discount input yet (discountRate is always 0
+          // here) - renamed only for lib/pos-preview-sale.ts's shared type,
+          // no behaviour change. See lib/pos-discount.ts.
+          discountUnitAmount: row.discountRate,
           taxRate: row.product.taxRate,
         })),
       }),

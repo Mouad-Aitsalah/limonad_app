@@ -40,7 +40,8 @@ type CartTableProps = {
   onIncrement: (productId: string) => void;
   onDecrement: (productId: string) => void;
   onQuantityChange: (productId: string, quantity: number) => void;
-  onDiscountChange: (productId: string, discountPercent: number) => void;
+  /** DH taken off the unit's TTC price - see lib/pos-discount.ts. */
+  onDiscountChange: (productId: string, discountUnitAmount: number) => void;
   onPriceChange?: (productId: string, unitPriceTTC: number | null) => void;
   onRemove: (productId: string) => void;
 };
@@ -115,7 +116,11 @@ export function CartTable({
           </TableHead>
           {!isTransfer && (
             <TableHead className={cn(COL.rem, "text-center", H_MOBILE)}>
-              Rem.
+              {/* Compact "Rem." on mobile (column too narrow for more);
+                  "Rem. DH" on desktop so the unit is explicit - this field
+                  is a DH amount per unit, never a percentage. */}
+              <span className="lg:hidden">Rem.</span>
+              <span className="hidden lg:inline">Rem. DH</span>
             </TableHead>
           )}
           <TableHead className={cn(COL.total, "text-right", H_MOBILE)}>
@@ -232,17 +237,15 @@ export function CartTable({
                 <input
                   type="number"
                   min={0}
-                  max={100}
-                  value={line.discountPercent}
+                  max={line.unitPriceTTC}
+                  step="0.01"
+                  value={line.discountUnitAmount}
                   disabled={readOnly}
                   onFocus={selectAllOnFocus}
                   onChange={(event) =>
-                    onDiscountChange(
-                      line.productId,
-                      Math.min(100, Math.max(0, Number(event.target.value))),
-                    )
+                    onDiscountChange(line.productId, Math.max(0, Number(event.target.value)))
                   }
-                  aria-label="Remise en pourcentage"
+                  aria-label={`Remise en DH par unité de ${line.designation}`}
                   className="h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-14"
                 />
               </TableCell>

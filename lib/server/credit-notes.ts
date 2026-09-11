@@ -2,7 +2,8 @@ import "server-only";
 
 import { z } from "zod";
 
-import { addMoney, MONEY_RANGE_MAX_NUMBER, multiplyMoney, subtractMoney } from "@/lib/money";
+import { addMoney, MONEY_RANGE_MAX_NUMBER, multiplyMoney, roundMoney, subtractMoney } from "@/lib/money";
+import { computeLinkedReturnTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
 import type {
   CreditNoteOrigin as PrismaCreditNoteOrigin,
@@ -1543,12 +1544,24 @@ type ResolvedSaleLineForReturn = {
   productId: string;
   quantity: number;
   customerId: string | null;
+  /** Original catalogue/override unit price HT, for display only (see
+   * computeLinkedReturnTotals - the money computation itself never re-derives
+   * from this x a rate, only from totalTTC below). */
+  unitPriceHT: number;
+  taxRate: number;
+  /** The exact amount this line was actually sold for, DH-per-unit discount
+   * or legacy percentage alike - the sole source of truth for a linked
+   * return's amount. See computeLinkedReturnTotals. */
+  totalTTC: number;
 };
 
 /**
  * F4: server-side authority for "which SaleLine does this return line
  * point at" - org-scoped lookup, never trusts anything beyond the id
- * itself from the client.
+ * itself from the client. Also the source of the line's real money figures
+ * (unitPriceHT/taxRate/totalTTC) - resolveReturnLines uses these instead of
+ * ever trusting a client-supplied unitPrice/discountPercent for a linked
+ * return (see the "remise DH - avoirs exacts" chantier).
  */
 async function resolveSaleLineForReturn(
   tx: Pick<typeof prisma, "saleLine">,
@@ -1562,6 +1575,9 @@ async function resolveSaleLineForReturn(
       productId: true,
       quantity: true,
       saleId: true,
+      unitPriceHT: true,
+      taxRate: true,
+      totalTTC: true,
       sale: { select: { customerId: true } },
     },
   });
@@ -1572,9 +1588,30 @@ async function resolveSaleLineForReturn(
     productId: saleLine.productId,
     quantity: saleLine.quantity,
     customerId: saleLine.sale.customerId,
+    unitPriceHT: saleLine.unitPriceHT.toNumber(),
+    taxRate: saleLine.taxRate.toNumber(),
+    totalTTC: saleLine.totalTTC.toNumber(),
   };
 }
 
+/**
+ * The exact return amount for a return LINKED to a real SaleLine, derived
+ * from that line's own persisted totalTTC/quantity - never from
+ * discountRate (a 2-decimal-percent approximation, see
+ * lib/pos-discount.ts's doc comment on why it can drift by a fraction of a
+ * centime). Exact for every line the DH-per-unit POS discount created
+ * (totalTTC is already, by construction, an exact multiple of a 2-decimal
+ * net unit price - see computeDiscountedLineTotals); for an older
+ * percentage-discounted line this is still the closest possible
+ * reconstruction, strictly more precise than re-deriving via discountRate.
+ *
+ * A return of the ENTIRE originally-sold quantity reuses totalTTC verbatim
+ * - zero division, zero rounding risk, by construction (and the only way
+ * quantityReturned can equal originalQuantity here: the returnable-quantity
+ * guard above already forces quantityReturned <= originalQuantity -
+ * alreadyReturned, so equality with originalQuantity means no prior partial
+ * return exists to double-count).
+ */
 /**
  * F4: quantity already returned and VALIDATED (never DRAFT, never
  * REVERSED - see the comment on computeReturnableProducts's own filter,
@@ -1669,6 +1706,7 @@ async function resolveReturnLines(
     }
 
     let saleLineId: string | null = null;
+    let saleLineSnapshot: ResolvedSaleLineForReturn | null = null;
     if (line.saleLineId) {
       const saleLine = await resolveSaleLineForReturn(tx, params.organizationId, line.saleLineId);
       if (!saleLine) {
@@ -1698,21 +1736,48 @@ async function resolveReturnLines(
       }
 
       saleLineId = saleLine.saleLineId;
+      saleLineSnapshot = saleLine;
       saleIdsSeen.add(saleLine.saleId);
     }
 
-    const unitPrice =
-      line.unitPrice ??
-      (params.partyType === "SUPPLIER" ? product.purchasePrice.toNumber() : product.salePrice.toNumber());
-    const discountPercent = line.discountPercent ?? 0;
-    const taxRate = line.taxRate ?? product.taxRate.toNumber();
-    const totals = computeLineTotals({
-      productId: line.productId,
-      quantityReturned: line.quantityReturned,
-      unitPrice,
-      discountPercent,
-      taxRate,
-    });
+    let unitPrice: number;
+    let discountPercent: number;
+    let taxRate: number;
+    let totals: { totalHT: number; taxAmount: number; totalTTC: number };
+
+    if (saleLineSnapshot) {
+      // Linked return: the exact amount always comes from what this line
+      // was ACTUALLY sold for (totalTTC / quantity), never from a
+      // client-sent unitPrice/discountPercent and never from discountRate's
+      // rounded percent - see computeLinkedReturnTotals.
+      unitPrice = saleLineSnapshot.unitPriceHT;
+      taxRate = saleLineSnapshot.taxRate;
+      totals = computeLinkedReturnTotals({
+        taxRate,
+        originalQuantity: saleLineSnapshot.quantity,
+        originalTotalTTC: saleLineSnapshot.totalTTC,
+        quantityReturned: line.quantityReturned,
+      });
+      // Informational only - persisted on CreditNoteLine.discountRate for
+      // continuity with any older/other reader of that column. totals above
+      // never derive from this value.
+      const grossHT = unitPrice * line.quantityReturned;
+      discountPercent =
+        grossHT > 0 ? Math.min(100, roundMoney(((grossHT - totals.totalHT) / grossHT) * 100)) : 0;
+    } else {
+      unitPrice =
+        line.unitPrice ??
+        (params.partyType === "SUPPLIER" ? product.purchasePrice.toNumber() : product.salePrice.toNumber());
+      discountPercent = line.discountPercent ?? 0;
+      taxRate = line.taxRate ?? product.taxRate.toNumber();
+      totals = computeLineTotals({
+        productId: line.productId,
+        quantityReturned: line.quantityReturned,
+        unitPrice,
+        discountPercent,
+        taxRate,
+      });
+    }
 
     resolvedLines.push({
       productId: line.productId,
@@ -1812,6 +1877,7 @@ async function computeReturnableProducts(
           unitPriceHT: true,
           discountRate: true,
           taxRate: true,
+          totalTTC: true,
           product: { select: { reference: true, name: true } },
           // F4: only VALIDATED returns consume the returnable quantity - a
           // still-open DRAFT has no real effect yet (no stock moved, no
@@ -1870,6 +1936,7 @@ async function computeReturnableProducts(
         unitPrice,
         discountPercent: line.discountRate.toNumber(),
         taxRate: line.taxRate.toNumber(),
+        originalTotalTTC: line.totalTTC.toNumber(),
       });
       current.invoicesCount = new Set(current.origins.map((origin) => origin.saleId)).size;
       grouped.set(line.productId, current);

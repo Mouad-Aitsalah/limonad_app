@@ -5,6 +5,7 @@ import { products } from "@/lib/mock-data/products";
 import { saleInvoices } from "@/lib/mock-data/sales";
 import { stockLocations, truckStock } from "@/lib/mock-data/stock";
 import { trucks } from "@/lib/mock-data/trucks";
+import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import { computeInvoiceTotals } from "@/lib/sales-calculations";
 import { roundCurrency } from "@/lib/utils";
 import type { PaymentMethodValue } from "@/lib/mock-data/payment-methods";
@@ -89,17 +90,24 @@ export function computeDriverCartLines(
     const unitPriceTTC = product.prixVenteDetail;
     const unitPriceHT = roundCurrency(unitPriceTTC / (1 + product.tauxTVA / 100));
     const baseHT = unitPriceHT * line.quantity;
-    const discountAmount = baseHT * (line.discountPercent / 100);
-    const netHT = baseHT - discountAmount;
-    const tvaAmount = netHT * (product.tauxTVA / 100);
-    const totalTTC = netHT + tvaAmount;
+    // Mock-data-era helper - never imported by the real driver POS (only
+    // getCustomerName from this file is). Kept type-compatible with the
+    // shared CartLine/CartLineComputed shape via the same shared discount
+    // math as the real POS - see lib/pos-discount.ts.
+    const { discountAmount, totalHT: netHT, taxAmount: tvaAmount, totalTTC } =
+      computeDiscountedLineTotals({
+        unitPriceHT,
+        taxRate: product.tauxTVA,
+        quantity: line.quantity,
+        discountUnitAmount: line.discountUnitAmount,
+      });
 
     return {
       productId: line.productId,
       designation: product.designation,
       reference: product.reference,
       quantity: line.quantity,
-      discountPercent: line.discountPercent,
+      discountUnitAmount: line.discountUnitAmount,
       unitPriceHT,
       unitPriceTTC,
       tauxTVA: product.tauxTVA,
@@ -155,7 +163,10 @@ export function createDriverSaleInvoice({
     productId: line.productId,
     quantite: line.quantity,
     prixUnitaire: line.unitPriceHT,
-    remisePercent: line.discountPercent,
+    // createDriverSaleInvoice/getDriverSales below are mock-data-era code,
+    // never called by the real driver POS - kept type-compatible only, not
+    // a real percent anymore (see discountUnitAmount on CartLineComputed).
+    remisePercent: line.discountUnitAmount,
     tauxTVA: line.tauxTVA,
   }));
 

@@ -98,6 +98,12 @@ export type ReturnableProductOrigin = {
   unitPrice: number;
   discountPercent: number;
   taxRate: number;
+  // The original SaleLine's real totalTTC - together with quantityBought,
+  // lets a caller derive the EXACT prorated return amount (see
+  // computeLinkedReturnTotals in lib/pos-discount.ts) instead of
+  // recomputing from discountPercent, which is only a rounded-to-the-
+  // centime approximation for display/compatibility.
+  originalTotalTTC: number;
 };
 
 export type ReturnableProduct = {

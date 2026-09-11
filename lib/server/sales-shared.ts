@@ -31,7 +31,12 @@ type SaleWithRelations = SaleGetPayload<{ include: typeof saleInclude }>;
 export type RawSaleLineInput = {
   productId: string;
   quantity: number;
+  /** Legacy percentage field - no longer sent by the counter POS (see
+   * discountUnitAmount below); still accepted/normalized so nothing throws
+   * if it shows up, but createCounterSale/reviseSale no longer read it. */
   discountRate?: number;
+  /** DH taken off the unit's TTC price - see lib/pos-discount.ts. */
+  discountUnitAmount?: number;
 };
 
 export function mapSaleToDto(sale: SaleWithRelations): SaleDto {
@@ -104,7 +109,11 @@ export function normalizeSaleLines<T extends RawSaleLineInput>(lines: T[]) {
       throw new OperationsServiceError("Un produit ne peut apparaitre qu'une fois.", 422);
     }
     seen.add(line.productId);
-    return { ...line, discountRate: line.discountRate ?? 0 };
+    return {
+      ...line,
+      discountRate: line.discountRate ?? 0,
+      discountUnitAmount: line.discountUnitAmount ?? 0,
+    };
   });
 }
 

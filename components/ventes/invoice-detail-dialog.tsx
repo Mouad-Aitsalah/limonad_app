@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/table";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
+import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
 
@@ -174,23 +175,36 @@ export function InvoiceDetailDialog({ listItem, open, onOpenChange }: InvoiceDet
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sale.lines.map((line) => (
-                      <TableRow key={line.id}>
-                        <TableCell className="font-medium text-foreground">
-                          {line.productName}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{line.quantity}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatCurrency(line.unitPriceHT)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {line.discountRate > 0 ? `${line.discountRate}%` : "-"}
-                        </TableCell>
-                        <TableCell className="text-right font-medium tabular-nums">
-                          {formatCurrency(line.totalTTC)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {sale.lines.map((line) => {
+                      // Reconstructed from the totals actually charged,
+                      // never read off discountRate - exact for a line
+                      // entered as a DH amount, a faithful DH reading of an
+                      // older percentage-discounted line. Never "1 %" when
+                      // the operator typed "1 DH".
+                      const discountUnitAmount = reconstructDiscountUnitAmount({
+                        unitPriceHT: line.unitPriceHT,
+                        taxRate: line.taxRate,
+                        quantity: line.quantity,
+                        totalTTC: line.totalTTC,
+                      });
+                      return (
+                        <TableRow key={line.id}>
+                          <TableCell className="font-medium text-foreground">
+                            {line.productName}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{line.quantity}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatCurrency(line.unitPriceHT)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {discountUnitAmount > 0 ? `${formatCurrency(discountUnitAmount)}/u` : "-"}
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            {formatCurrency(line.totalTTC)}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
 
