@@ -10,7 +10,12 @@ import {
 } from "lucide-react";
 
 import { getNavigationLinks } from "@/components/layout/navigation";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/hooks/use-auth";
 import { DESKTOP_MEDIA_QUERY } from "@/lib/auth/browser-home-route";
 import { getDefaultRouteForRole } from "@/lib/auth/default-route";
@@ -126,7 +131,6 @@ export function MobileLauncher() {
   const featured = links.filter((item) => appearance[item.href]?.order !== undefined)
     .sort((a, b) => appearance[a.href].order! - appearance[b.href].order!);
   const additional = links.filter((item) => appearance[item.href]?.order === undefined);
-  const firstName = currentUser.firstName || currentUser.nom.trim().split(/\s+/)[0];
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -147,29 +151,29 @@ export function MobileLauncher() {
           <span className="flex size-10 shrink-0 items-center justify-center rounded-[14px] bg-linear-to-br from-[#173156] to-[#0f7a5d] text-lg font-bold text-white shadow-sm" aria-hidden="true">C</span>
           <p className="text-[11px] font-bold tracking-[0.16em] text-[#173156]">COMDIS MANAGER</p>
         </div>
-        <Dialog>
-          <DialogTrigger className="flex size-11 shrink-0 items-center justify-center rounded-full border border-white bg-white/80 text-[#173156] shadow-sm focus-visible:outline-2 focus-visible:outline-primary" aria-label="Mon profil">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className="flex size-11 shrink-0 items-center justify-center rounded-full border border-white bg-white/80 text-[#173156] shadow-sm focus-visible:outline-2 focus-visible:outline-primary"
+            aria-label="Profil"
+          >
             <UserRound aria-hidden="true" className="size-5" />
-          </DialogTrigger>
-          <DialogContent className="mobile-workspace max-w-[calc(100%-2rem)] sm:max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Mon profil</DialogTitle>
-              <DialogDescription>Votre compte COMDIS</DialogDescription>
-            </DialogHeader>
-            <dl className="space-y-4 text-sm">
-              <div><dt className="text-muted-foreground">Nom</dt><dd className="mt-1 font-medium">{currentUser.nom}</dd></div>
-              <div><dt className="text-muted-foreground">Email</dt><dd className="mt-1 break-all font-medium">{currentUser.email}</dd></div>
-              <div><dt className="text-muted-foreground">Rôle</dt><dd className="mt-1 font-medium">{roleLabels[currentUser.role]}</dd></div>
-            </dl>
-          </DialogContent>
-        </Dialog>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-44">
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => void handleLogout()}
+              disabled={loggingOut}
+            >
+              <LogOut aria-hidden="true" />
+              {loggingOut ? "Déconnexion…" : "Se déconnecter"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
 
-      <section className="pb-7" aria-labelledby="mobile-greeting">
+      <div className="pb-4">
         <span className="inline-flex rounded-full border border-emerald-200/70 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-800">{roleLabels[currentUser.role]}</span>
-        <h1 id="mobile-greeting" className="mt-3 break-words text-[1.8rem] font-semibold leading-tight tracking-[-0.04em]">Bonjour {firstName}</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Votre espace de travail, à portée de main.</p>
-      </section>
+      </div>
 
       <nav aria-label="Applications" className="pb-8">
         <div className="mb-4 flex items-center justify-between">
