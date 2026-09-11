@@ -48,13 +48,6 @@ export const navItems: NavItem[] = [
     description: "Vue business et alertes",
   },
   {
-    label: "Assistant IA",
-    href: "/assistant-ia",
-    icon: Bot,
-    description: "Questions sur les données de votre organisation",
-    roles: ["admin"],
-  },
-  {
     label: "Ventes & Caisse",
     icon: ShoppingCart,
     description: "Encaissement, versements et avoirs",
@@ -151,5 +144,12 @@ export const navItems: NavItem[] = [
       { label: "Utilisateurs", href: "/utilisateurs", roles: ["admin"] },
       { label: "Paramètres", href: "/parametres/identite", roles: ["admin"] },
     ],
+  },
+  {
+    label: "Assistant IA",
+    href: "/assistant-ia",
+    icon: Bot,
+    description: "Questions sur les données de votre organisation",
+    roles: ["admin"],
   },
 ];
