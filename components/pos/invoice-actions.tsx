@@ -12,6 +12,10 @@ type InvoiceActionsProps = {
   /** "Préparer la facture" - persist as a pending "Facture du jour", pay later. */
   onHold?: () => void;
   holdLoading?: boolean;
+  /** CREDIT never opens the "Encaisser" dialog (no money collected now) -
+   * the main button reads "Valider" instead, since nothing is actually
+   * being encaissé. See pos-layout.tsx's onCheckout. */
+  isCredit?: boolean;
 };
 
 export function InvoiceActions({
@@ -22,6 +26,7 @@ export function InvoiceActions({
   onPrint,
   onHold,
   holdLoading = false,
+  isCredit = false,
 }: InvoiceActionsProps) {
   const isTransfer = operationType === "transfer";
   const Icon = isTransfer ? Send : Wallet;
@@ -40,7 +45,13 @@ export function InvoiceActions({
         }
       >
         <Icon aria-hidden="true" className="h-4 w-4" />
-        {loading ? "Validation..." : isTransfer ? "Transferer le stock" : "Encaisser"}
+        {loading
+          ? "Validation..."
+          : isTransfer
+            ? "Transferer le stock"
+            : isCredit
+              ? "Valider"
+              : "Encaisser"}
       </Button>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

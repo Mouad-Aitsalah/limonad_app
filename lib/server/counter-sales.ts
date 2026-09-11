@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { customerAccountNumber } from "@/lib/customer-code";
 import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
@@ -113,11 +114,56 @@ const counterSaleSchema = z.object({
 // unbounded, this query took 76s/82MB at 100000 stocked products.
 const POS_PRODUCT_LIST_LIMIT = 500;
 
-// The stable business code of AITSALAH STORE's organization - never its
-// (environment-specific) row id, never its display name/logo. See
-// scripts/provision-aitsalah-default-customer.ts, which resolves the same
-// organization the same way.
-const AITSALAH_STORE_ORGANIZATION_CODE = "COMDIS-PRINCIPAL";
+// F12: the counter POS's "new invoice" default customer - the ACTIVE
+// customer of THIS organization with the numerically smallest displayed
+// "N° client". Replaces the earlier name-based "Autre" default entirely
+// (see the "CORRECTION POS - CLIENT PAR DEFAUT" report): a single rule,
+// generic across every organization, never a hardcoded name or org id.
+//
+// The displayed number comes from customerAccountNumber (lib/customer-
+// code.ts) - the exact function every other screen already uses to show
+// a customer's "N° client" - never a re-derived convention. For a
+// "3421"+digits code that is the digits with the prefix stripped
+// ("34212" -> "2"); for anything else (a legacy/hand-imported code like a
+// bare "2" or "CLI-0002") customerAccountNumber returns it unchanged, and
+// only a pure-digit result is comparable numerically here - a
+// non-numeric display (kept, never excluded, since it may still be the
+// only eligible customer) sorts after every numeric one rather than
+// crashing or coercing NaN into the comparison.
+//
+// Two different customers can display the identical number by pure
+// coincidence (a "3421"+N sequence-generated code and an unrelated
+// bulk-imported bare-digit code can both reduce to, say, "2" - audited
+// for org-comdis-principal: "34212"/Lahcen Ait Salah vs "2"/Yassine
+// Naimi). The tie-break is the earliest createdAt: the customer who has
+// held that displayed number the longest is the deterministic winner,
+// never an arbitrary id/array order.
+function resolveSmallestNumberedCustomer<T extends { id: string; code: string; createdAt: Date }>(
+  customers: T[],
+): T | null {
+  let best: { customer: T; numeric: number | null; display: string } | null = null;
+  for (const customer of customers) {
+    const display = customerAccountNumber(customer.code);
+    const numeric = /^\d+$/.test(display) ? Number(display) : null;
+    if (!best) {
+      best = { customer, numeric, display };
+      continue;
+    }
+    const better =
+      // A numeric display always outranks a non-numeric one.
+      (numeric !== null && best.numeric === null) ||
+      (numeric !== null &&
+        best.numeric !== null &&
+        (numeric < best.numeric ||
+          (numeric === best.numeric && customer.createdAt < best.customer.createdAt))) ||
+      (numeric === null &&
+        best.numeric === null &&
+        (display < best.display ||
+          (display === best.display && customer.createdAt < best.customer.createdAt)));
+    if (better) best = { customer, numeric, display };
+  }
+  return best?.customer ?? null;
+}
 
 export async function getCounterPosContext(): Promise<CounterPosContextDto> {
   const sessionUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
@@ -145,25 +191,21 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     throw new OperationsServiceError("Emplacement depot introuvable.", 404);
   }
 
-  // AITSALAH STORE provisioned a dedicated "Autre" walk-in customer as the
-  // counter POS's default - see
-  // scripts/provision-aitsalah-default-customer.ts. Restricted to that one
-  // organization by its stable Organization.code ("COMDIS-PRINCIPAL"),
-  // resolved server-side from the authenticated session's organizationId -
-  // never a client-supplied id, never a name match alone (a customer
-  // named "Autre" existing in some OTHER organization must never trigger
-  // this default there - see the "DERNIERE CORRECTION AVANT PUSH" report).
-  const sessionOrganization = await prisma.organization.findUnique({
-    where: { id: sessionUser.organizationId },
-    select: { code: true },
+  // F12: "new invoice" default = this organization's own ACTIVE customer
+  // with the smallest displayed N° client - see
+  // resolveSmallestNumberedCustomer's doc comment above. organizationId
+  // always comes from the authenticated session, never the client, so
+  // this can never leak another organization's customer. A small
+  // projection (id/code/createdAt only) even though it scans every
+  // ACTIVE customer of the org - a few hundred rows at most in practice,
+  // and this must consider all of them (not just the small "recent"
+  // preload below) to find the true minimum.
+  const eligibleCustomersForDefault = await prisma.customer.findMany({
+    where: { organizationId: sessionUser.organizationId, status: "ACTIVE" },
+    select: { id: true, code: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
   });
-  const defaultCustomer =
-    sessionOrganization?.code === AITSALAH_STORE_ORGANIZATION_CODE
-      ? await prisma.customer.findFirst({
-          where: { organizationId: sessionUser.organizationId, name: { equals: "Autre", mode: "insensitive" }, status: "ACTIVE" },
-          select: { id: true },
-        })
-      : null;
+  const defaultCustomer = resolveSmallestNumberedCustomer(eligibleCustomersForDefault);
 
   const [productRows, customers, bankAccounts] = await Promise.all([
     // Source of truth for POS visibility = every ACTIVE product of the
@@ -248,6 +290,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     depot: { id: user.depot.id, code: user.depot.code, name: user.depot.name },
     stockLocation: { id: stockLocation.id, code: stockLocation.code, name: stockLocation.name },
     customers,
+    defaultCustomerId: defaultCustomer?.id ?? null,
     products,
     productsTruncated,
     bankAccounts,

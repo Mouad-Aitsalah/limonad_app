@@ -681,6 +681,13 @@ export interface CounterPosContextDto {
   depot: { id: string; code: string; name: string };
   stockLocation: { id: string; code: string; name: string };
   customers: CustomerDto[];
+  /** The ACTIVE customer of this organization with the numerically smallest
+   * displayed "N° client" (see lib/customer-code.ts#customerAccountNumber) -
+   * always present in `customers` above (guaranteed there server-side).
+   * `null` only when the organization has no eligible ACTIVE customer at
+   * all. This is the counter POS's sole "new invoice" default - see
+   * lib/server/counter-sales.ts#getCounterPosContext. */
+  defaultCustomerId: string | null;
   products: DriverPosProductDto[];
   /** See DriverPosContextDto.productsTruncated. */
   productsTruncated: boolean;

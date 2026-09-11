@@ -96,18 +96,21 @@ function normalizeSearch(value: string) {
     .replace(/\s+/g, " ");
 }
 
-function resolveDefaultCustomer(customers: CustomerDto[]): CustomerDto | null {
-  // AITSALAH STORE's dedicated "Autre" walk-in customer (see
-  // scripts/provision-aitsalah-default-customer.ts) takes priority when
-  // present - it only ever appears in that organization's preload (the
-  // server guarantees it there), so every other organization's default
-  // (its "COUNTER" customer, unchanged) is untouched.
-  return (
-    customers.find((customer) => customer.name === "Autre") ??
-    customers.find((customer) => customer.type === "COUNTER") ??
-    customers[0] ??
-    null
-  );
+// F12: single rule now - whichever customer the server flagged as
+// defaultCustomerId (the org's own ACTIVE customer with the smallest
+// displayed N°, see getCounterPosContext's doc comment). No name-based
+// "Autre" special case, no "COUNTER"-type fallback, no "first in list"
+// fallback: if defaultCustomerId is null (no eligible customer at all),
+// nothing is pre-selected, matching the server's own contract exactly.
+// getCounterPosContext always guarantees this id is present in
+// `customers` (guaranteeCustomerId), so the find() below should never
+// miss - the `?? null` only guards a genuinely empty/stale preload.
+function resolveDefaultCustomer(
+  customers: CustomerDto[],
+  defaultCustomerId: string | null,
+): CustomerDto | null {
+  if (!defaultCustomerId) return null;
+  return customers.find((customer) => customer.id === defaultCustomerId) ?? null;
 }
 
 function mapContextProductsToPosProducts(
@@ -164,7 +167,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   // fallback must stay selected/resolvable even though it was never in
   // that preloaded list.
   const [selectedCustomer, setSelectedCustomer] = React.useState<CustomerDto | null>(
-    resolveDefaultCustomer(initialContext.customers),
+    resolveDefaultCustomer(initialContext.customers, initialContext.defaultCustomerId),
   );
   const [paymentMethod, setPaymentMethod] =
     React.useState<PosPaymentMethodValue>(defaultPaymentMethod);
@@ -618,7 +621,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   function resetOperation() {
     setCart([]);
     setLastAddedProductId(null);
-    setSelectedCustomer(resolveDefaultCustomer(context.customers));
+    setSelectedCustomer(resolveDefaultCustomer(context.customers, context.defaultCustomerId));
     setPaymentMethod(defaultPaymentMethod);
     setChequeNumber("");
     setBanque("");
@@ -671,7 +674,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     // selectedCustomer's declaration) - a refresh must never silently drop
     // it just because it isn't in the new context's small preload. Only
     // fall back to the default when nothing was selected at all.
-    setSelectedCustomer((current) => current ?? resolveDefaultCustomer(nextContext.customers));
+    setSelectedCustomer(
+      (current) => current ?? resolveDefaultCustomer(nextContext.customers, nextContext.defaultCustomerId),
+    );
   }
 
   function buildSaleBody(extra: Record<string, unknown>) {
@@ -1130,7 +1135,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
 
     const customer = sale.customer
       ? context.customers.find((item) => item.id === sale.customer?.id) ?? (sale.customer as CustomerDto)
-      : resolveDefaultCustomer(context.customers);
+      : resolveDefaultCustomer(context.customers, context.defaultCustomerId);
     setCheckoutOpen(false);
     setSelectedCustomer(customer);
     setPaymentMethod(defaultPaymentMethod);
@@ -1418,6 +1423,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         ) : (
         <InvoiceActions
           operationType={operationType}
+          isCredit={paymentMethod === "CREDIT"}
           disabled={cartLines.length === 0}
           loading={submitting || collecting}
           onCheckout={() => {
@@ -1443,6 +1449,20 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
                 );
                 return;
               }
+            }
+            if (paymentMethod === "CREDIT") {
+              // A credit sale never collects money now, so the "Encaisser"
+              // dialog (Montant reçu / Monnaie à rendre) makes no sense
+              // here - go straight through the existing CREDIT flow
+              // instead. paidAmount stays undefined: resolvePaymentAmounts
+              // (lib/server/sales-shared.ts) already forces
+              // {paidAmount: 0, creditAmount: totalTTC} for CREDIT
+              // regardless of what is sent, and confirmOperation itself
+              // still requires selectedCustomer and still routes an
+              // already-held pending sale through collectOpenPendingSale -
+              // no server logic is bypassed by skipping this dialog.
+              void confirmOperation();
+              return;
             }
             setCheckoutOpen(true);
           }}
