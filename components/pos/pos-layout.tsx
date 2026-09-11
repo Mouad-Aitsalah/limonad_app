@@ -18,7 +18,9 @@ import {
 } from "@/types/pos";
 import { ProductSearch } from "@/components/pos/product-search";
 import { ProductGrid } from "@/components/pos/product-grid";
-import { SupplierFilter, type SupplierOption } from "@/components/pos/supplier-filter";
+import { type SupplierOption } from "@/components/pos/supplier-filter";
+import { MobileCustomerPicker } from "@/components/pos/mobile-customer-picker";
+import { MobileSupplierPicker } from "@/components/pos/mobile-supplier-picker";
 import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
@@ -1253,7 +1255,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4 lg:overflow-hidden`}
       >
         <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
-        <SupplierFilter
+        <MobileSupplierPicker
           className="lg:hidden"
           suppliers={supplierOptions}
           value={supplierFilter}
@@ -1285,13 +1287,28 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           invoiceLabel={activeInvoiceLabel}
         />
 
-        <div className="grid gap-3 max-lg:grid-cols-[3fr_1fr] max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr]">
-          <CustomerCombobox
-            value={selectedCustomer}
-            onChange={setSelectedCustomer}
-            initialSuggestions={context.customers}
+        <div className="grid gap-3 max-lg:grid-cols-[7fr_3fr] max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr]">
+          <div className="min-w-0">
+            <div className="hidden lg:block">
+              <CustomerCombobox
+                value={selectedCustomer}
+                onChange={setSelectedCustomer}
+                initialSuggestions={context.customers}
+              />
+            </div>
+            <MobileCustomerPicker
+              className="lg:hidden"
+              value={selectedCustomer}
+              onChange={setSelectedCustomer}
+              initialSuggestions={context.customers}
+            />
+          </div>
+          <CustomerNumberInput
+            customer={selectedCustomer}
+            onResolved={setSelectedCustomer}
+            placeholder="N° Client"
+            hideLabelOnMobile="lg"
           />
-          <CustomerNumberInput customer={selectedCustomer} onResolved={setSelectedCustomer} />
           <PaymentSelector
             paymentMethod={paymentMethod}
             onPaymentMethodChange={setPaymentMethod}

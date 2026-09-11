@@ -20,11 +20,13 @@ import { BankAccountCombobox } from "@/components/pos/bank-account-combobox";
 import { CollectDialog } from "@/components/pos/collect-dialog";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { CustomerNumberInput } from "@/components/pos/customer-number-input";
+import { MobileCustomerPicker } from "@/components/pos/mobile-customer-picker";
+import { MobileSupplierPicker } from "@/components/pos/mobile-supplier-picker";
 import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
 import { ProductGrid } from "@/components/pos/product-grid";
 import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
 import { ProductSearch } from "@/components/pos/product-search";
-import { SupplierFilter, type SupplierOption } from "@/components/pos/supplier-filter";
+import { type SupplierOption } from "@/components/pos/supplier-filter";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
@@ -580,7 +582,7 @@ export function DriverPosView({
         >
           <div className="space-y-3 xl:hidden">
             <ProductSearch value={search} onChange={setSearch} />
-            <SupplierFilter
+            <MobileSupplierPicker
               suppliers={supplierOptions}
               value={supplierFilter}
               onChange={setSupplierFilter}
@@ -672,17 +674,30 @@ export function DriverPosView({
                 <Badge variant="outline">{formatCurrency(totals.ttc)}</Badge>
               </div>
 
-              <div className="grid gap-3 max-lg:grid-cols-2 max-lg:[&>*:last-child]:col-span-2">
-                <CustomerCombobox
-                  value={selectedCustomer}
-                  onChange={setSelectedCustomer}
-                  initialSuggestions={context.customers}
-                  placeholder="Client comptoir"
-                />
+              <div className="grid gap-3 max-lg:grid-cols-[7fr_3fr] max-lg:[&>*]:min-w-0 max-lg:[&>*:last-child]:col-span-2">
+                <div className="min-w-0">
+                  <div className="hidden xl:block">
+                    <CustomerCombobox
+                      value={selectedCustomer}
+                      onChange={setSelectedCustomer}
+                      initialSuggestions={context.customers}
+                      placeholder="Client comptoir"
+                    />
+                  </div>
+                  <MobileCustomerPicker
+                    className="xl:hidden"
+                    value={selectedCustomer}
+                    onChange={setSelectedCustomer}
+                    initialSuggestions={context.customers}
+                    placeholder="Client comptoir"
+                  />
+                </div>
 
                 <CustomerNumberInput
                   customer={selectedCustomer}
                   onResolved={setSelectedCustomer}
+                  placeholder="N° Client"
+                  hideLabelOnMobile="xl"
                 />
 
                 <Field label="Paiement">
@@ -922,10 +937,15 @@ function DriverInvoiceHeader({
 
   return (
     <section className="space-y-3">
+      {/* The round back button in the mobile header already returns to
+          /mobile, so this second link is desktop-only (>= lg, where that
+          header is hidden) - never a double back affordance on the phone.
+          With the link hidden and no "Imprimer" button, this flex row has no
+          in-flow children and collapses to zero height (no blank gap). */}
       <div className="flex items-center gap-2">
         <Link
           href="/mobile"
-          className="-ml-2 inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          className="-ml-2 hidden h-9 items-center gap-2 rounded-md px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent lg:inline-flex"
         >
           <ArrowLeft aria-hidden="true" className="h-4 w-4" />
           Point de vente

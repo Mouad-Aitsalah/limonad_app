@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { customerAccountNumber } from "@/lib/customer-code";
+import { cn } from "@/lib/utils";
 import type { CustomerDto } from "@/types/operations-dto";
 
 type CustomerNumberInputProps = {
@@ -30,6 +31,16 @@ type CustomerNumberInputProps = {
   /** Optional: where to send focus after a successful lookup (e.g. product search). */
   focusAfterResolve?: React.RefObject<HTMLInputElement | null>;
   disabled?: boolean;
+  /** Empty-field hint. Defaults to the historical "ex : 15". */
+  placeholder?: string;
+  /**
+   * POS mobile only: hide the visible "N° client" label below the given
+   * breakpoint (`lg` counter, `xl` driver) while keeping it for screen
+   * readers, and collapse the label gap so the field lines up with the
+   * Client field beside it. Other callers omit this and keep the label
+   * fully visible.
+   */
+  hideLabelOnMobile?: "lg" | "xl";
 };
 
 /**
@@ -52,7 +63,24 @@ export function CustomerNumberInput({
   onNotFound,
   focusAfterResolve,
   disabled,
+  placeholder = "ex : 15",
+  hideLabelOnMobile,
 }: CustomerNumberInputProps) {
+  // Below the POS mobile breakpoint the label is present for assistive tech
+  // (sr-only) but visually gone, and the label gap is removed so the input
+  // top-aligns with the Client field. At/above it, everything is as before.
+  const labelClassName =
+    hideLabelOnMobile === "lg"
+      ? "sr-only lg:not-sr-only"
+      : hideLabelOnMobile === "xl"
+        ? "sr-only xl:not-sr-only"
+        : undefined;
+  const wrapperClassName =
+    hideLabelOnMobile === "lg"
+      ? "space-y-2 max-lg:space-y-0"
+      : hideLabelOnMobile === "xl"
+        ? "space-y-2 max-xl:space-y-0"
+        : "space-y-2";
   const syncedNumber = customer ? customerAccountNumber(customer.code) : "";
   const [value, setValue] = React.useState(syncedNumber);
   const [loading, setLoading] = React.useState(false);
@@ -117,15 +145,21 @@ export function CustomerNumberInput({
   }
 
   return (
-    <div className="space-y-2">
-      <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+    <div className={wrapperClassName}>
+      <Label
+        className={cn(
+          "flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
+          labelClassName,
+        )}
+      >
         <Hash aria-hidden="true" className="h-3.5 w-3.5" />
         N° client
       </Label>
       <Input
         value={value}
         inputMode="numeric"
-        placeholder="ex : 15"
+        aria-label="N° client"
+        placeholder={placeholder}
         disabled={disabled || loading}
         aria-invalid={Boolean(error)}
         onChange={(event) => {
