@@ -1,4 +1,5 @@
 import {
+  Bot,
   Calculator,
   LayoutDashboard,
   Package,
@@ -47,13 +48,21 @@ export const navItems: NavItem[] = [
     description: "Vue business et alertes",
   },
   {
+    label: "Assistant IA",
+    href: "/assistant-ia",
+    icon: Bot,
+    description: "Questions sur les données de votre organisation",
+    roles: ["admin"],
+  },
+  {
     label: "Ventes & Caisse",
     icon: ShoppingCart,
     description: "Encaissement, versements et avoirs",
     children: [
       { label: "Point de vente", href: "/pos" },
       { label: "Versements", href: "/pos/versements" },
-      { label: "Archives des factures", href: "/ventes" },
+      { label: "Archives des factures", href: "/ventes", exact: true },
+      { label: "Factures journalières", href: "/ventes/journalieres" },
       { label: "Avoir client / fournisseur", href: "/avoirs", roles: ["admin", "cashier"] },
     ],
   },
@@ -118,6 +127,11 @@ export const navItems: NavItem[] = [
       {
         label: "Règlements clients",
         href: "/comptabilite/reglements-clients",
+        roles: ACCOUNTING_ROLES,
+      },
+      {
+        label: "Solde clients",
+        href: "/comptabilite/solde-clients",
         roles: ACCOUNTING_ROLES,
       },
       { label: "Comptes comptables", href: "/comptabilite/comptes", roles: ACCOUNTING_ROLES },
