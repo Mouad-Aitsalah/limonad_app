@@ -3,29 +3,17 @@
 import { usePathname } from "next/navigation";
 
 import { useAuth } from "@/hooks/use-auth";
-import { navItems } from "@/components/layout/nav-items";
+import { getNavigationPageLabel } from "@/components/layout/navigation";
 import { UserMenu } from "@/components/layout/user-menu";
-
-function findPageLabel(pathname: string) {
-  for (const item of navItems) {
-    if (item.href && (pathname === item.href || pathname.startsWith(`${item.href}/`))) {
-      return item.label;
-    }
-
-    for (const child of item.children ?? []) {
-      if (pathname === child.href || pathname.startsWith(`${child.href}/`)) {
-        return child.label;
-      }
-    }
-  }
-
-  return "COMDIS";
-}
 
 export function Header() {
   const pathname = usePathname();
   const { currentUser } = useAuth();
-  const currentLabel = findPageLabel(pathname);
+  // Shared with MobileHeader's title resolution - picks the most specific
+  // href match (respecting a child's `exact`) instead of the first
+  // prefix match, so a route nested under a sibling's href (e.g.
+  // /ventes/journalieres under /ventes) never borrows that sibling's label.
+  const currentLabel = getNavigationPageLabel(pathname, currentUser?.role);
   const today = new Date().toLocaleDateString("fr-FR", {
     weekday: "long",
     day: "numeric",

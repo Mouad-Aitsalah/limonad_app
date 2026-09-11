@@ -49,7 +49,10 @@ function endOfDay(dateOnly: string): Date {
   return date;
 }
 
-const orderListSelect = {
+// Exported for reuse by lib/server/daily-invoices.ts (Factures journalières),
+// which renders the same InvoicesTable and so needs the exact same row shape
+// and DTO mapping - never a parallel copy that could drift.
+export const orderListSelect = {
   id: true,
   invoiceNumber: true,
   saleYear: true,
@@ -123,7 +126,7 @@ function buildOrdersWhere(
   return where;
 }
 
-function mapOrderRowToListItemDto(
+export function mapOrderRowToListItemDto(
   row: Prisma.SaleGetPayload<{ select: typeof orderListSelect }>,
   net: number,
 ): SaleHistoryListItemDto {
