@@ -8,6 +8,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -59,7 +60,13 @@ export function DailyInvoicesUserFilter({ options, value, onChange }: DailyInvoi
         <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-80 w-64 overflow-y-auto">
-        <DropdownMenuLabel>Utilisateur</DropdownMenuLabel>
+        {/* Base UI's Menu.GroupLabel (DropdownMenuLabel) reads its id from
+            MenuGroupContext and throws "MenuGroupContext is missing" if
+            rendered outside <Menu.Group> - it must always be wrapped, even
+            though a plain DropdownMenuItem (below) needs no such wrapper. */}
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Utilisateur</DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuItem
           onClick={() => onChange([])}
           disabled={value.length === 0}
