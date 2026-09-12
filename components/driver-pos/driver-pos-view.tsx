@@ -34,6 +34,7 @@ import { CustomerNumberInput } from "@/components/pos/customer-number-input";
 import { InvoiceActions } from "@/components/pos/invoice-actions";
 import { MobileCustomerPicker } from "@/components/pos/mobile-customer-picker";
 import { MobileSupplierPicker } from "@/components/pos/mobile-supplier-picker";
+import { NetworkStatusBadge } from "@/components/driver-pos/network-status-badge";
 import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
 import { ProductGrid } from "@/components/pos/product-grid";
 import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
@@ -44,8 +45,10 @@ import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
+import { useAuth } from "@/hooks/use-auth";
 import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
+import { hydrateDriverOfflineCache } from "@/lib/offline/driver-pos";
 import { roundMoney } from "@/lib/money";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
@@ -83,6 +86,7 @@ export function DriverPosView({
   initialCustomerId?: string | null;
 }) {
   const driverRuntime = useDriverRuntime();
+  const { currentUser } = useAuth();
   const [context, setContext] = React.useState(initialContext);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
@@ -126,6 +130,23 @@ export function DriverPosView({
   const [collectOpen, setCollectOpen] = React.useState(false);
   const [collecting, setCollecting] = React.useState(false);
   const flyToCart = useFlyToCart();
+
+  // Phase 1 offline foundation: mirror every successful online context (the
+  // initial server-rendered load, then every refreshContext()) into SQLite.
+  // Cache-only - `context` state above (still fed straight from the server)
+  // is what the POS actually renders; this never changes that. A failed or
+  // unavailable local cache is caught internally and never surfaces here -
+  // see lib/offline/driver-pos/database.ts's own doc comment.
+  React.useEffect(() => {
+    if (!currentUser?.organizationId) return;
+    void hydrateDriverOfflineCache({
+      organizationId: currentUser.organizationId,
+      organizationName: identity?.tradeName ?? identity?.name ?? null,
+      userId: currentUser.id,
+      userName: currentUser.nom,
+      context,
+    });
+  }, [context, currentUser, identity]);
 
   React.useEffect(() => {
     return () => {
@@ -934,8 +955,9 @@ function DriverInvoiceHeader({
       {/* The round back button in the mobile header already returns to
           /mobile, so this second link is desktop-only (>= lg, where that
           header is hidden) - never a double back affordance on the phone.
-          With the link hidden and no "Imprimer" button, this flex row has no
-          in-flow children and collapses to zero height (no blank gap). */}
+          The network badge always keeps this row non-empty now, on both
+          mobile and desktop (Phase 1 offline foundation - display only, see
+          components/driver-pos/network-status-badge.tsx). */}
       <div className="flex items-center gap-2">
         <Link
           href="/mobile"
@@ -944,6 +966,7 @@ function DriverInvoiceHeader({
           <ArrowLeft aria-hidden="true" className="h-4 w-4" />
           Point de vente
         </Link>
+        <NetworkStatusBadge />
         {lastSale ? (
           <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={onPrintLastSale}>
             <Printer aria-hidden="true" className="h-4 w-4" />
