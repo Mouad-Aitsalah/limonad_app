@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   CreditCard,
+  LoaderCircle,
   MessageCircle,
   Printer,
   ShoppingCart,
@@ -46,12 +47,8 @@ import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
 import { roundMoney } from "@/lib/money";
+import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
-import {
-  buildWhatsAppInvoiceMessage,
-  buildWhatsAppUrl,
-  normalizeWhatsAppPhone,
-} from "@/lib/whatsapp-invoice";
 import type {
   CustomerDto,
   DriverPosContextDto,
@@ -120,6 +117,7 @@ export function DriverPosView({
   // already-shared invoice.
   const [lastSalePhone, setLastSalePhone] = React.useState<string | null>(null);
   const { identity } = useCompanyIdentity();
+  const [sharingInvoice, setSharingInvoice] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   // "Factures du jour" - server-persisted DRAFT truck sales awaiting collection.
   const [pendingSales, setPendingSales] = React.useState<SaleDto[]>([]);
@@ -610,20 +608,32 @@ export function DriverPosView({
     window.setTimeout(() => window.print(), 0);
   }
 
-  // WhatsApp = share only, never validates/creates/prices anything. Only
-  // enabled once lastSale is a real persisted, non-draft sale (never the
-  // "preview" ticket buildPreviewSale hands to printCurrentCart, and never a
-  // still-DRAFT "Facture du jour" that has no definitive commercial number
-  // yet) - see lib/sale-display-number.ts / driverSaleSchema's status rules.
+  // Sharing is available only for an already-persisted, non-draft invoice;
+  // the preview ticket never becomes a PDF attachment.
   const canShareWhatsApp = Boolean(
     lastSale && lastSale.id !== "preview" && lastSale.status !== "DRAFT" && lastSale.status !== "CANCELLED",
   );
 
-  function shareLastSaleOnWhatsApp() {
+  async function shareLastSaleOnWhatsApp() {
     if (!lastSale || !canShareWhatsApp) return;
-    const phone = normalizeWhatsAppPhone(lastSalePhone);
-    const message = buildWhatsAppInvoiceMessage(lastSale, identity?.tradeName ?? identity?.name);
-    window.open(buildWhatsAppUrl(phone, message), "_blank", "noopener,noreferrer");
+    setSharingInvoice(true);
+    try {
+      const result = await shareInvoicePdf({
+        sale: lastSale,
+        identity,
+        customerPhone: lastSalePhone,
+      });
+      if (result.method === "download") {
+        toast.success("Facture PDF téléchargée. Joignez-la dans WhatsApp.");
+      } else {
+        toast.success("Facture PDF prête à être partagée.");
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      toast.error(error instanceof Error ? error.message : "Impossible de générer la facture PDF.");
+    } finally {
+      setSharingInvoice(false);
+    }
   }
 
   if (!context.canSell) {
@@ -856,12 +866,16 @@ export function DriverPosView({
               <Button
                 type="button"
                 variant="outline"
-                disabled={!canShareWhatsApp}
-                onClick={shareLastSaleOnWhatsApp}
+                disabled={!canShareWhatsApp || sharingInvoice}
+                onClick={() => void shareLastSaleOnWhatsApp()}
                 className="h-12 w-full rounded-2xl border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
               >
-                <MessageCircle aria-hidden="true" className="h-4 w-4" />
-                WhatsApp
+                {sharingInvoice ? (
+                  <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+                ) : (
+                  <MessageCircle aria-hidden="true" className="h-4 w-4" />
+                )}
+                {sharingInvoice ? "Préparation du PDF..." : "WhatsApp"}
               </Button>
             </CardContent>
           </Card>

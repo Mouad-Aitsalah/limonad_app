@@ -32,6 +32,14 @@ type InvoiceDetailDialogProps = {
   listItem: SaleHistoryListItemDto | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Base path the full record is fetched from, as `${fetchBase}/${id}`.
+   * Defaults to the admin/cashier-scoped "/api/sales" (getSaleById). The
+   * driver sales history passes the driver-scoped "/api/driver/sales"
+   * (getDriverSaleById) instead - same dialog, same fields, just an
+   * endpoint a driver session is actually allowed to call.
+   */
+  fetchBase?: string;
 };
 
 /**
@@ -44,14 +52,19 @@ type InvoiceDetailDialogProps = {
  * rather than recomputed here, since it is a sales-history-specific
  * aggregation getSaleById never computes.
  */
-export function InvoiceDetailDialog({ listItem, open, onOpenChange }: InvoiceDetailDialogProps) {
+export function InvoiceDetailDialog({
+  listItem,
+  open,
+  onOpenChange,
+  fetchBase = "/api/sales",
+}: InvoiceDetailDialogProps) {
   const [sale, setSale] = React.useState<SaleDto | null>(null);
   const [errorFor, setErrorFor] = React.useState<{ id: string; message: string } | null>(null);
 
   React.useEffect(() => {
     if (!open || !listItem) return;
     let cancelled = false;
-    fetch(`/api/sales/${listItem.id}`)
+    fetch(`${fetchBase}/${listItem.id}`)
       .then(async (response) => {
         const body = (await response.json()) as { sale?: SaleDto; message?: string };
         if (cancelled) return;
@@ -72,7 +85,7 @@ export function InvoiceDetailDialog({ listItem, open, onOpenChange }: InvoiceDet
     return () => {
       cancelled = true;
     };
-  }, [open, listItem]);
+  }, [open, listItem, fetchBase]);
 
   // Never render a previous invoice's data under a new/closed listItem -
   // derived directly instead of resetting state from the effect above (see

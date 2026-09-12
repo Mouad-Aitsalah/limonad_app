@@ -844,6 +844,26 @@ export interface DriverTourSalesSummaryDto {
   sales: SaleDto[];
 }
 
+/**
+ * "/driver/ventes" - the current driver's own sold (non-DRAFT, non-CANCELLED
+ * - see SOLD_STATUS in lib/server/daily-invoices.ts) sales for the current
+ * business day only (see lib/business-day.ts: 02:00->02:00 Africa/Casablanca,
+ * `day` is that "YYYY-MM-DD"). Not grouped by tour - `sale.tour` is still on
+ * each SaleDto for an optional small badge only.
+ */
+export interface DriverTodaySalesDto {
+  day: string;
+  sales: SaleDto[];
+  stats: {
+    count: number;
+    totalTTC: number;
+    /** SUM(paidAmount) - money actually collected today, credit excluded. */
+    paidAmount: number;
+    /** SUM(creditAmount) - never counted as encaisse. */
+    creditAmount: number;
+  };
+}
+
 export type DriverSaleInput = {
   customerId?: string | null;
   paymentMethod: string;

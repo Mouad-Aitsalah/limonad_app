@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { businessDayRangeUtc, getCurrentBusinessDayParam } from "@/lib/business-day";
 import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
@@ -32,6 +33,7 @@ import {
 import type {
   DriverPosContextDto,
   DriverSaleInput,
+  DriverTodaySalesDto,
   DriverTourSalesSummaryDto,
   SaleDto,
 } from "@/types/operations-dto";
@@ -698,6 +700,45 @@ export async function getSalesForCurrentDriver(): Promise<SaleDto[]> {
     orderBy: { createdAt: "desc" },
   });
   return sales.map(mapSaleToDto);
+}
+
+/**
+ * "/driver/ventes" - today's own sold sales only, scoped server-side to the
+ * authenticated driver (never a client-supplied driverId) and organisation.
+ * "Today" is the current COMDIS business day (see lib/business-day.ts:
+ * 02:00 -> 02:00 next day, Africa/Casablanca) - not the calendar day, so a
+ * 00:30 sale still counts as "yesterday" until the 02:00 cutoff, matching
+ * every other "journée" page in the app (Factures journalières, etc).
+ * DRAFT (not yet collected) and CANCELLED are excluded, same SOLD_STATUS
+ * rule as lib/server/daily-invoices.ts.
+ */
+export async function getTodaySalesForCurrentDriver(): Promise<DriverTodaySalesDto> {
+  const user = await requireOrganizationUser(["driver"]);
+  if (!user.driverId) throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
+
+  const { start, end, day } = businessDayRangeUtc(getCurrentBusinessDayParam());
+  const rows = await prisma.sale.findMany({
+    where: {
+      driverId: user.driverId,
+      organizationId: user.organizationId,
+      createdAt: { gte: start, lt: end },
+      status: { notIn: ["DRAFT", "CANCELLED"] },
+    },
+    include: saleInclude,
+    orderBy: { createdAt: "desc" },
+  });
+
+  const sales = rows.map(mapSaleToDto);
+  return {
+    day,
+    sales,
+    stats: {
+      count: sales.length,
+      totalTTC: roundMoney(sales.reduce((sum, sale) => sum + sale.totalTTC, 0)),
+      paidAmount: roundMoney(sales.reduce((sum, sale) => sum + sale.paidAmount, 0)),
+      creditAmount: roundMoney(sales.reduce((sum, sale) => sum + sale.creditAmount, 0)),
+    },
+  };
 }
 
 export async function getSalesForDriverByTour(tourId: string): Promise<SaleDto[]> {
