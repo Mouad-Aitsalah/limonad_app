@@ -5,7 +5,7 @@ import {
   type SQLiteDBConnection,
 } from "@capacitor-community/sqlite";
 
-import { SCHEMA_STATEMENTS, SCHEMA_VERSION } from "./schema";
+import { EXPECTED_TABLES, SCHEMA_MIGRATIONS, SCHEMA_VERSION } from "./schema";
 
 /**
  * Connection bootstrap for the offline POS chauffeur database.
@@ -110,6 +110,82 @@ async function ensureWebStore(): Promise<void> {
   return webStoreReady;
 }
 
+/**
+ * BUG ANDROID CONFIRMÉ (Phase 3 bug hunt) - "no such table: offline_sales":
+ * versioned, transactional schema migration gated by SQLite's own
+ * `PRAGMA user_version`. Replaces the previous single
+ * `db.execute(SCHEMA_STATEMENTS.join(";"))` call, whose giant joined
+ * multi-statement string apparently stopped applying partway through on at
+ * least one real device - cached_products/cached_customers/cached_truck_stock
+ * (earlier in that batch) got created, offline_sales/offline_sale_lines/
+ * sync_outbox/offline_metadata (later in the same batch) never did. Every
+ * statement is now executed individually and awaited on its own, inside an
+ * explicit transaction per migration version, so a failure can never again
+ * silently skip the rest of a batch.
+ *
+ * `PRAGMA user_version` was never actually being set by the old code (it
+ * only ever passed a "version" to the plugin's own `createConnection`,
+ * which is a different, inert concept here - see this function's own
+ * caller). So an already-provisioned device's `user_version` is expected to
+ * still read 0 today regardless of which tables it actually has - migrations
+ * are version-gated on `> currentVersion`, not skipped by "must already be
+ * fully applied", and every statement is `CREATE ... IF NOT EXISTS` (see
+ * schema.ts), so re-applying an already-applied version's statements again
+ * is always a safe no-op (this is what keeps "TEST 8. MIGRATION
+ * IDEMPOTENTE" true) and NEVER drops or rewrites existing cache data.
+ */
+async function migrateDatabase(db: SQLiteDBConnection): Promise<void> {
+  const beforeRows = await db.query("PRAGMA user_version");
+  const currentVersion = Number((beforeRows.values ?? [])[0]?.user_version ?? 0);
+  console.log("[OFFLINE DB] user_version (before):", currentVersion);
+
+  const pending = SCHEMA_MIGRATIONS.filter((migration) => migration.version > currentVersion);
+  if (pending.length === 0) {
+    console.log("[OFFLINE DB] schema already up to date at version", currentVersion);
+  }
+
+  for (const migration of pending) {
+    console.log(`[OFFLINE DB] applying migration to version ${migration.version}`);
+    try {
+      await db.beginTransaction();
+      for (const statement of migration.statements) {
+        await db.execute(statement, false);
+      }
+      await db.execute(`PRAGMA user_version = ${migration.version}`, false);
+      await db.commitTransaction();
+      console.log(`[OFFLINE DB] migration to version ${migration.version} committed`);
+    } catch (error) {
+      console.error(`[OFFLINE DB] migration to version ${migration.version} failed`, error);
+      try {
+        await db.rollbackTransaction();
+      } catch (rollbackError) {
+        warnOnce("Rollback of a failed schema migration itself failed.", rollbackError);
+      }
+      // Never leave the caller believing this device has a usable schema -
+      // openDatabase()/getDatabase() must treat this exactly like any other
+      // "SQLite unavailable" failure (see getDatabase()'s own doc comment).
+      throw error;
+    }
+  }
+
+  const afterRows = await db.query("PRAGMA user_version");
+  const afterVersion = Number((afterRows.values ?? [])[0]?.user_version ?? 0);
+  console.log("[OFFLINE DB] user_version (after):", afterVersion);
+
+  await logInstalledTables(db);
+}
+
+/** TEMPORARY (Phase 3 bug hunt) - "11. VÉRIFIER LES TABLES RÉELLES": logs
+ *  OK/MISSING for every table this schema is supposed to define, read
+ *  straight from sqlite_master so it reflects reality, not assumptions. */
+async function logInstalledTables(db: SQLiteDBConnection): Promise<void> {
+  const result = await db.query(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`);
+  const installed = new Set((result.values ?? []).map((row) => String(row.name)));
+  for (const table of EXPECTED_TABLES) {
+    console.log(`[OFFLINE DB] table ${table}: ${installed.has(table) ? "OK" : "MISSING"}`);
+  }
+}
+
 async function openDatabase(): Promise<SQLiteDBConnection> {
   const plugin = getPlugin();
   await ensureWebStore();
@@ -125,7 +201,12 @@ async function openDatabase(): Promise<SQLiteDBConnection> {
     : await plugin.createConnection(DB_NAME, false, "no-encryption", SCHEMA_VERSION, false);
 
   await db.open();
-  await db.execute(SCHEMA_STATEMENTS.join(";"));
+  // "9. ENSURE DATABASE READY": migrations run and fully commit here, BEFORE
+  // openDatabase() (and therefore getDatabase()) ever resolves with this
+  // connection - no caller can reach withDatabase()/withTransaction() and
+  // touch a partially-migrated schema, since they can only get a `db`
+  // handle back once this whole promise chain has settled.
+  await migrateDatabase(db);
   return db;
 }
 
@@ -240,6 +321,30 @@ export async function withTransaction<T>(
     warnOnce("SQLite transaction rolled back.", error);
     return { ok: false, error };
   }
+}
+
+export type OfflineDbDiagnostic = {
+  userVersion: number;
+  tables: Record<string, boolean>;
+};
+
+/**
+ * TEMPORARY (Phase 3 bug hunt) - "10. DIAGNOSTIC TEMPORAIRE": on-demand
+ * snapshot of the migrated schema's actual state, for driver-pos-view.tsx
+ * to optionally show next to its existing (also temporary) cache-counts
+ * diagnostic. Read-only, safe to call any time; `null` only when SQLite
+ * itself is unavailable (same meaning as everywhere else in this module).
+ */
+export async function getOfflineDbDiagnostic(): Promise<OfflineDbDiagnostic | null> {
+  const db = await getDatabase();
+  if (!db) return null;
+  const versionRows = await db.query("PRAGMA user_version");
+  const userVersion = Number((versionRows.values ?? [])[0]?.user_version ?? 0);
+  const tableRows = await db.query(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`);
+  const installed = new Set((tableRows.values ?? []).map((row) => String(row.name)));
+  const tables: Record<string, boolean> = {};
+  for (const table of EXPECTED_TABLES) tables[table] = installed.has(table);
+  return { userVersion, tables };
 }
 
 export function nowIso(): string {

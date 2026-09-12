@@ -33,7 +33,8 @@ export { enqueueSyncOperation, getPendingOutboxEntries } from "./outbox-store";
 export { getNetworkState, isNetworkAvailable, isServerReachable } from "./network-status";
 export type { NetworkState } from "./network-status";
 
-export { isDatabaseAvailable } from "./database";
+export { getOfflineDbDiagnostic, isDatabaseAvailable } from "./database";
+export type { OfflineDbDiagnostic } from "./database";
 
 export { loadCachedDriverPosContext } from "./pos-context";
 export type { CachedDriverPosContext, CachedDriverPosContextResult } from "./pos-context";
