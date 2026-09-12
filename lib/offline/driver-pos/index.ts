@@ -27,6 +27,16 @@ export { enqueueSyncOperation, getPendingOutboxEntries } from "./outbox-store";
 export { getNetworkState, isNetworkAvailable, isServerReachable } from "./network-status";
 export type { NetworkState } from "./network-status";
 
+export { loadCachedDriverPosContext } from "./pos-context";
+export type { CachedDriverPosContext } from "./pos-context";
+
+export { loadDriverPosContext } from "./pos-data-source";
+export type {
+  DriverPosContextResult,
+  DriverPosContextSource,
+  LoadDriverPosContextParams,
+} from "./pos-data-source";
+
 export type {
   CachedCustomer,
   CachedProduct,

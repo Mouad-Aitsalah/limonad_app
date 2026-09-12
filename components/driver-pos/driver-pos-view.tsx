@@ -48,7 +48,8 @@ import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { useAuth } from "@/hooks/use-auth";
 import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
-import { hydrateDriverOfflineCache } from "@/lib/offline/driver-pos";
+import { useNetworkState } from "@/hooks/use-network-status";
+import { hydrateDriverOfflineCache, loadDriverPosContext } from "@/lib/offline/driver-pos";
 import { roundMoney } from "@/lib/money";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
@@ -70,6 +71,9 @@ type CartLine = {
   discountRate: number;
 };
 
+// Phase 2 - "9. VALIDATION / ENCAISSEMENT OFFLINE".
+const OFFLINE_SALE_MESSAGE = "Les ventes hors connexion seront disponibles à l'étape suivante.";
+
 function normalize(value: string) {
   return value
     .normalize("NFD")
@@ -87,7 +91,22 @@ export function DriverPosView({
 }) {
   const driverRuntime = useDriverRuntime();
   const { currentUser } = useAuth();
+  const networkState = useNetworkState();
   const [context, setContext] = React.useState(initialContext);
+  // Phase 2: which side the current `context` actually came from - "server"
+  // right after the initial load (always true - see app/driver/pos/page.tsx,
+  // a Server Component that itself needs a working connection to render at
+  // all), or "cache" once a drop in connectivity made loadDriverPosContext
+  // fall back to SQLite. `context` itself is unchanged either way - same
+  // DriverPosContextDto shape, same UI below (see this task's own "3. NE PAS
+  // DUPLIQUER L'UI").
+  const [contextSource, setContextSource] = React.useState<"server" | "cache">("server");
+  const [cacheSyncedAt, setCacheSyncedAt] = React.useState<string | null>(null);
+  // Only ever set when we truly have nothing to show (offline AND no cache
+  // - see this task's "14. CACHE ABSENT"). Checked at render time together
+  // with `context.products.length === 0` so a perfectly good, already-
+  // loaded POS is never yanked away by a later failed refresh attempt.
+  const [contextUnavailable, setContextUnavailable] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
   // Last product tapped in the mobile "Produits" launcher - drives the
@@ -401,15 +420,46 @@ export function DriverPosView({
     return context.customers.find((customer) => customer.id === customerId)?.phone ?? null;
   }
 
+  // Phase 2 data-source switch: tries the server first (and re-hydrates the
+  // SQLite cache on success, same as before), falls back to the cache when
+  // offline or when the server is unreachable despite `navigator.onLine`
+  // (see lib/offline/driver-pos/pos-data-source.ts). Passing the current
+  // selection keeps the same "a refresh must never silently drop who's
+  // selected" guarantee the online-only version already had.
   async function refreshContext() {
-    // Pass the current selection so the server-bounded preload guarantees
-    // it stays present (same reasoning as the initial load) - a refresh
-    // must never silently drop who's selected.
-    const query = selectedCustomer ? `?customerId=${encodeURIComponent(selectedCustomer.id)}` : "";
-    const refreshed = await fetch(`/api/driver/pos${query}`, { cache: "no-store" });
-    const refreshedPayload = (await refreshed.json()) as { context?: DriverPosContextDto };
-    if (refreshedPayload.context) setContext(refreshedPayload.context);
+    if (!currentUser?.organizationId) return;
+    const result = await loadDriverPosContext({
+      organizationId: currentUser.organizationId,
+      organizationName: identity?.tradeName ?? identity?.name ?? null,
+      userId: currentUser.id,
+      userName: currentUser.nom,
+      driverId: context.driver.id,
+      customerId: selectedCustomer?.id ?? null,
+    });
+    if (!result.ok) {
+      setContextUnavailable(true);
+      return;
+    }
+    setContextUnavailable(false);
+    setContext(result.context);
+    setContextSource(result.source);
+    setCacheSyncedAt(result.cacheSyncedAt);
   }
+
+  // Whenever connectivity and the context's own source disagree, resync:
+  // just went offline (context still "server") -> fall back to cache;
+  // just came back online (context still "cache") -> refresh from the
+  // server. Naturally idempotent - once refreshContext() reconciles
+  // `contextSource`, this stops firing until the next real transition.
+  React.useEffect(() => {
+    const needsCacheFallback = networkState !== "ONLINE" && contextSource === "server";
+    const needsServerRefresh = networkState === "ONLINE" && contextSource === "cache";
+    if (!needsCacheFallback && !needsServerRefresh) return;
+    // Deferred to a microtask so the effect body itself never synchronously
+    // triggers refreshContext's own setContext/setContextSource calls.
+    queueMicrotask(() => void refreshContext());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [networkState, contextSource]);
 
   function buildSaleBody(extra: Record<string, unknown>) {
     return JSON.stringify({
@@ -458,7 +508,18 @@ export function DriverPosView({
     };
   }, []);
 
+  // Phase 2: "9. VALIDATION / ENCAISSEMENT OFFLINE" - no silent server
+  // attempt, no local sale, no touched cart. Checked at the moment of the
+  // click (matches what NetworkStatusBadge is currently showing) rather
+  // than trusting a stale closure - true offline sale creation is Phase 3.
+  function blockIfOffline(): boolean {
+    if (networkState === "ONLINE") return false;
+    toast.error(OFFLINE_SALE_MESSAGE);
+    return true;
+  }
+
   async function validateSale() {
+    if (blockIfOffline()) return;
     if (paymentMethod === "BANK_TRANSFER" && !bankAccountId) {
       toast.error(
         "Veuillez sélectionner le compte bancaire qui a reçu le virement.",
@@ -496,6 +557,7 @@ export function DriverPosView({
   }
 
   async function prepareInvoice() {
+    if (blockIfOffline()) return;
     setPreparing(true);
     try {
       const response = await fetch("/api/driver/sales", {
@@ -524,6 +586,7 @@ export function DriverPosView({
     bankAccountingAccountId?: string,
   ) {
     if (!collectTarget) return;
+    if (blockIfOffline()) return;
     setCollecting(true);
     try {
       const response = await fetch(`/api/driver/sales/${collectTarget.id}/collect`, {
@@ -661,6 +724,17 @@ export function DriverPosView({
     return <StateCard message={context.message ?? "La vente est impossible."} />;
   }
 
+  // "14. CACHE ABSENT" - only when there is truly nothing to show (offline
+  // AND no cache). Gated on `context.products.length === 0` too so a
+  // perfectly good, already-loaded POS is never replaced by this message
+  // just because a later background refresh attempt found no cache - see
+  // refreshContext's own doc comment.
+  if (contextUnavailable && context.products.length === 0) {
+    return (
+      <StateCard message="Les données hors connexion ne sont pas encore disponibles. Connectez-vous une première fois à Internet pour initialiser le POS." />
+    );
+  }
+
   return (
     <div className="space-y-4 pb-6">
       <div
@@ -692,6 +766,7 @@ export function DriverPosView({
         invoiceLabel={lastSale?.displayNumber ?? "—"}
         lastSale={lastSale}
         onPrintLastSale={printLastSale}
+        cacheSyncedAt={contextSource === "cache" ? cacheSyncedAt : null}
       />
 
       <div
@@ -930,6 +1005,7 @@ function DriverInvoiceHeader({
   invoiceLabel,
   lastSale,
   onPrintLastSale,
+  cacheSyncedAt,
 }: {
   driverName: string;
   truckCode: string;
@@ -938,6 +1014,9 @@ function DriverInvoiceHeader({
   invoiceLabel: string;
   lastSale: SaleDto | null;
   onPrintLastSale: () => void;
+  /** Set only while the POS is reading from the offline cache (see "11.
+   *  ÉTAT DU CACHE") - the real offline_context.syncedAt, never a guess. */
+  cacheSyncedAt?: string | null;
 }) {
   const now = new Date();
   const date = now.toLocaleDateString("fr-FR", {
@@ -967,6 +1046,11 @@ function DriverInvoiceHeader({
           Point de vente
         </Link>
         <NetworkStatusBadge />
+        {cacheSyncedAt ? (
+          <span className="truncate text-[11px] text-muted-foreground">
+            Dernière synchro : {formatSyncTime(cacheSyncedAt)}
+          </span>
+        ) : null}
         {lastSale ? (
           <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={onPrintLastSale}>
             <Printer aria-hidden="true" className="h-4 w-4" />
@@ -1060,4 +1144,8 @@ function resolveInitialCustomer(
 // every call site in this file needed zero changes.
 function round(value: number) {
   return roundMoney(value);
+}
+
+function formatSyncTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 }
