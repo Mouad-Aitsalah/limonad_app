@@ -9,6 +9,13 @@ import type { SaleDto } from "@/types/operations-dto";
 type ReceiptPrintProps = {
   sale: SaleDto | null;
   paperWidth?: "58" | "80";
+  /**
+   * Set only for a confirmed offline (driver POS) sale - see Phase 3's own
+   * "16. IMPRESSION OFFLINE". Never derived from `sale` itself: an offline
+   * ticket must say so explicitly and must never look like an official
+   * invoice, regardless of what `sale.displayNumber` happens to hold.
+   */
+  offlineReference?: string | null;
 };
 
 // Nom affiché sous le logo sur le ticket / la facture imprimée du POS.
@@ -46,7 +53,7 @@ function formatReceiptAmount(value: number) {
   return formatCurrency(value).replace(/\s?DH$/, "");
 }
 
-export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
+export function ReceiptPrint({ sale, paperWidth = "80", offlineReference = null }: ReceiptPrintProps) {
   const { identity } = useCompanyIdentity();
 
   if (!sale) return null;
@@ -92,8 +99,8 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
 
         <div className="receipt-print-meta">
           <div>
-            <span>N° Facture : </span>
-            <strong>{sale.displayNumber}</strong>
+            <span>{offlineReference ? "Référence : " : "N° Facture : "}</span>
+            <strong>{offlineReference ?? sale.displayNumber}</strong>
           </div>
           <div className="receipt-print-right">{formatReceiptDate(receiptDate)}</div>
           <div>
@@ -109,9 +116,11 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
           ) : null}
         </div>
 
-        {awaitingPayment ? (
-  <div className="receipt-print-pending">EN ATTENTE DE RÈGLEMENT</div>
-) : null}
+        {offlineReference ? (
+          <div className="receipt-print-pending">TICKET HORS CONNEXION</div>
+        ) : awaitingPayment ? (
+          <div className="receipt-print-pending">EN ATTENTE DE RÈGLEMENT</div>
+        ) : null}
 
         <div className="receipt-print-separator" />
 
@@ -206,6 +215,7 @@ export function ReceiptPrint({ sale, paperWidth = "80" }: ReceiptPrintProps) {
           <p>
             {articleCount} Article{articleCount > 1 ? "s" : ""}
           </p>
+          {offlineReference ? <p>Numéro définitif attribué après synchronisation.</p> : null}
         </footer>
       </div>
     </section>

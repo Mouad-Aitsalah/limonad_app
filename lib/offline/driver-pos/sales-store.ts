@@ -17,7 +17,7 @@ import type { OfflineSale, OfflineSaleInput, OfflineSaleWithLines } from "./type
 export async function createOfflineSale(
   input: OfflineSaleInput,
 ): Promise<{ ok: true; localId: string } | { ok: false; error: unknown }> {
-  const localId = generateLocalId("sale");
+  const localId = crypto.randomUUID();
   const createdAtLocal = nowIso();
 
   const result = await withTransaction(async (db) => {
@@ -58,7 +58,7 @@ export async function createOfflineSale(
            totalHT, taxAmount, totalTTC
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          generateLocalId("line"),
+          crypto.randomUUID(),
           localId,
           line.productId,
           line.productNameSnapshot,
@@ -89,8 +89,8 @@ export async function createOfflineSale(
       `INSERT INTO sync_outbox (
          id, entityType, entityLocalId, operation, createdAt,
          attemptCount, nextAttemptAt, lastError, lockedAt
-       ) VALUES (?, 'offline_sale', ?, 'CREATE', ?, 0, NULL, NULL, NULL)`,
-      [generateLocalId("outbox"), localId, createdAtLocal],
+       ) VALUES (?, 'DRIVER_SALE', ?, 'CREATE', ?, 0, NULL, NULL, NULL)`,
+      [crypto.randomUUID(), localId, createdAtLocal],
       false,
     );
 
@@ -113,9 +113,11 @@ export async function getOfflineSales(scope: {
   });
   if (!sales || sales.length === 0) return [];
 
+  const parsedSales = sales.map(mapSaleRow);
+  const localReferenceById = buildLocalReferences(parsedSales);
+
   const withLines: OfflineSaleWithLines[] = [];
-  for (const row of sales) {
-    const sale = mapSaleRow(row);
+  for (const sale of parsedSales) {
     const lineRows = await withDatabase(async (db) => {
       const result = await db.query(`SELECT * FROM offline_sale_lines WHERE offlineSaleId = ?`, [
         sale.localId,
@@ -124,6 +126,7 @@ export async function getOfflineSales(scope: {
     });
     withLines.push({
       ...sale,
+      localReference: localReferenceById.get(sale.localId) ?? sale.localId,
       lines: (lineRows ?? []).map((line) => ({
         id: String(line.id),
         offlineSaleId: String(line.offlineSaleId),
@@ -140,6 +143,67 @@ export async function getOfflineSales(scope: {
     });
   }
   return withLines;
+}
+
+/**
+ * Number of local sales still awaiting a future sync - the "N ventes en
+ * attente" counter (see driver-pos-view.tsx's network badge). Sourced
+ * straight from SQLite, never from in-memory state, so it survives a
+ * remount/app-switch exactly like the sales themselves (see this task's own
+ * "TEST C").
+ */
+export async function countPendingOfflineSales(scope: {
+  organizationId: string;
+  driverId: string;
+}): Promise<number> {
+  const rows = await withDatabase(async (db) => {
+    const result = await db.query(
+      `SELECT COUNT(*) as count FROM offline_sales WHERE organizationId = ? AND driverId = ? AND syncStatus = 'PENDING_SYNC'`,
+      [scope.organizationId, scope.driverId],
+    );
+    return result.values ?? [];
+  });
+  if (!rows || rows.length === 0) return 0;
+  return Number(rows[0].count ?? 0);
+}
+
+/**
+ * "OFF-YYYYMMDD-NNNN" - a local-only display reference, never an official
+ * invoice number (see this task's own "20. NUMÉROTATION"). Derived here at
+ * read time instead of a persisted column: NNNN is just this sale's rank,
+ * ascending, among this device's own offline sales made on the same local
+ * calendar day (from createdAtLocal) - stable as long as sales aren't
+ * deleted, and needs no schema change / ALTER TABLE on already-provisioned
+ * devices.
+ */
+function buildLocalReferences(sales: OfflineSale[]): Map<string, string> {
+  const byDay = new Map<string, OfflineSale[]>();
+  for (const sale of sales) {
+    const day = formatLocalDay(sale.createdAtLocal);
+    const list = byDay.get(day);
+    if (list) list.push(sale);
+    else byDay.set(day, [sale]);
+  }
+
+  const referenceById = new Map<string, string>();
+  for (const [day, daySales] of byDay) {
+    // `sales` (and therefore each `daySales`) comes in from a
+    // `ORDER BY createdAtLocal DESC` query - reverse to assign 0001 to the
+    // earliest sale of the day.
+    const ascending = [...daySales].reverse();
+    ascending.forEach((sale, index) => {
+      referenceById.set(sale.localId, `OFF-${day}-${String(index + 1).padStart(4, "0")}`);
+    });
+  }
+  return referenceById;
+}
+
+function formatLocalDay(iso: string): string {
+  const date = new Date(iso);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
 }
 
 function mapSaleRow(row: Record<string, unknown>): OfflineSale {
@@ -167,11 +231,4 @@ function mapSaleRow(row: Record<string, unknown>): OfflineSale {
     syncAttempts: Number(row.syncAttempts),
     lastSyncError: (row.lastSyncError as string | null) ?? null,
   };
-}
-
-let counter = 0;
-function generateLocalId(prefix: string): string {
-  counter += 1;
-  const random = Math.random().toString(36).slice(2, 10);
-  return `${prefix}_${Date.now()}_${counter}_${random}`;
 }

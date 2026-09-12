@@ -49,7 +49,13 @@ import { useAuth } from "@/hooks/use-auth";
 import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
 import { useNetworkState } from "@/hooks/use-network-status";
-import { hydrateDriverOfflineCache, loadDriverPosContext } from "@/lib/offline/driver-pos";
+import {
+  countPendingOfflineSales,
+  createOfflineSale,
+  getOfflineSales,
+  hydrateDriverOfflineCache,
+  loadDriverPosContext,
+} from "@/lib/offline/driver-pos";
 import { roundMoney } from "@/lib/money";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
@@ -71,8 +77,17 @@ type CartLine = {
   discountRate: number;
 };
 
-// Phase 2 - "9. VALIDATION / ENCAISSEMENT OFFLINE".
+// Phase 2 - "9. VALIDATION / ENCAISSEMENT OFFLINE". Still used, unchanged,
+// by prepareInvoice/collectPending - Phase 3 only carves out a CASH
+// exception inside validateSale (see OFFLINE_PAYMENT_METHOD_MESSAGE below).
 const OFFLINE_SALE_MESSAGE = "Les ventes hors connexion seront disponibles à l'étape suivante.";
+// Phase 3 - "2. AUTRES MODES DE PAIEMENT HORS CONNEXION": every payment
+// method except CASH still requires a connection, but with its own message -
+// this is not "not built yet" (OFFLINE_SALE_MESSAGE above), it is a real,
+// permanent V1 rule.
+const OFFLINE_PAYMENT_METHOD_MESSAGE = "Ce mode de règlement nécessite une connexion Internet.";
+const OFFLINE_SAVE_ERROR_MESSAGE =
+  "Impossible d'enregistrer la vente hors connexion. Réessayez.";
 
 function normalize(value: string) {
   return value
@@ -149,6 +164,16 @@ export function DriverPosView({
   // different customer afterward can never pair the wrong phone with an
   // already-shared invoice.
   const [lastSalePhone, setLastSalePhone] = React.useState<string | null>(null);
+  // Phase 3: set only right after a confirmed OFFLINE sale, holding its
+  // "OFF-..." local reference - lets <ReceiptPrint> show "TICKET HORS
+  // CONNEXION" instead of a real invoice layout (see "16. IMPRESSION
+  // OFFLINE"). Cleared every time `lastSale` is replaced by anything else
+  // (a real server sale, or a live unconfirmed cart preview).
+  const [offlineTicketReference, setOfflineTicketReference] = React.useState<string | null>(null);
+  // Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": always read from SQLite,
+  // never derived from in-memory state, so it stays correct across a remount
+  // (see sales-store.ts's countPendingOfflineSales / this task's "TEST C").
+  const [pendingOfflineCount, setPendingOfflineCount] = React.useState(0);
   const { identity } = useCompanyIdentity();
   const [sharingInvoice, setSharingInvoice] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -182,6 +207,20 @@ export function DriverPosView({
       if (cartPulseTimeoutRef.current) clearTimeout(cartPulseTimeoutRef.current);
     };
   }, []);
+
+  // Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": (re)reads the SQLite
+  // count on mount and whenever the driver identity changes, plus every time
+  // an offline sale is created below (validateOfflineCashSale).
+  const refreshPendingOfflineCount = React.useCallback(async () => {
+    const organizationId = currentUser?.organizationId ?? null;
+    if (!organizationId) return;
+    const count = await countPendingOfflineSales({ organizationId, driverId: context.driver.id });
+    setPendingOfflineCount(count);
+  }, [currentUser, context.driver.id]);
+
+  React.useEffect(() => {
+    queueMicrotask(() => void refreshPendingOfflineCount());
+  }, [refreshPendingOfflineCount]);
   // Stable for one sale attempt (F5): kept identical across a network retry
   // of validateSale, only replaced once a sale has actually gone through and
   // the cart is cleared for the next one. A ref so it is synchronously
@@ -556,8 +595,135 @@ export function DriverPosView({
     return true;
   }
 
+  // Phase 3 - "1. COMPORTEMENT ATTENDU" / "6. TRANSACTION SQLITE
+  // OBLIGATOIRE": the offline-CASH branch of validateSale. Builds the exact
+  // atomic write already implemented in sales-store.ts's createOfflineSale
+  // (sale + lines + truck-stock decrement + outbox entry, one transaction),
+  // using ONLY the driver's own validated/cached context - never a
+  // UI-entered org/driver/truck/tour id (see "21. SÉCURITÉ"). On success the
+  // cart is emptied and a "TICKET HORS CONNEXION" preview replaces `lastSale`
+  // (never a real invoice - see "16. IMPRESSION OFFLINE" / "17. WHATSAPP
+  // OFFLINE"); on failure the cart, stock and payment mode are left exactly
+  // as the driver had them (see "11. EN CAS D'ÉCHEC SQLITE").
+  async function validateOfflineCashSale() {
+    if (cartRows.length === 0) return;
+    const organizationId = currentUser?.organizationId ?? null;
+    const driverId = context.driver.id;
+    if (!organizationId || !driverId) {
+      toast.error(OFFLINE_SAVE_ERROR_MESSAGE);
+      return;
+    }
+
+    const handledCustomerId = selectedCustomer?.id ?? null;
+    const soldAt = new Date().toISOString();
+
+    setBusy(true);
+    try {
+      const result = await createOfflineSale({
+        // Generated fresh here, as a plain local value - never a React
+        // useRef (see "3. IDENTIFIANT LOCAL"), so a later retry after a
+        // failed attempt always gets its own new key.
+        clientMutationId: crypto.randomUUID(),
+        organizationId,
+        driverId,
+        truckId: context.truck?.id ?? null,
+        tourId: context.tour?.id ?? null,
+        stockLocationId: context.stockLocationId ?? null,
+        customerId: handledCustomerId,
+        paymentMethod: "CASH",
+        soldAt,
+        subtotalHT: totals.ht,
+        taxAmount: totals.tax,
+        totalTTC: totals.ttc,
+        // CASH is always paid in full on the spot - never a credit line.
+        paidAmount: totals.ttc,
+        creditAmount: 0,
+        lines: cartRows.map((row) => ({
+          productId: row.productId,
+          productNameSnapshot: row.product.name,
+          quantity: row.quantity,
+          unitPriceSnapshot: row.product.salePriceTTC,
+          taxRateSnapshot: row.product.taxRate,
+          discountSnapshot: 0,
+          totalHT: row.totals.totalHT,
+          taxAmount: row.totals.taxAmount,
+          totalTTC: row.totals.totalTTC,
+        })),
+      });
+
+      if (!result.ok) {
+        console.error("[OFFLINE SALE] creation failed", result.error);
+        toast.error(OFFLINE_SAVE_ERROR_MESSAGE);
+        return;
+      }
+
+      // Re-read from SQLite (rather than guessing) so the ticket's
+      // "OFF-..." reference is exactly the one getOfflineSales/driver-sales-
+      // view.tsx will show later - both derive it the same way, from the
+      // same table.
+      const offlineSales = await getOfflineSales({ organizationId, driverId });
+      const localReference =
+        offlineSales.find((sale) => sale.localId === result.localId)?.localReference ??
+        result.localId;
+
+      const ticket = buildPreviewSale({
+        displayNumber: localReference,
+        createdByUserName: context.driver.name,
+        customer: selectedCustomer
+          ? { id: selectedCustomer.id, code: selectedCustomer.code, name: selectedCustomer.name }
+          : null,
+        driver: { id: context.driver.id, name: context.driver.name },
+        truck: context.truck
+          ? { id: context.truck.id, code: context.truck.code, registration: context.truck.registration }
+          : null,
+        tour: context.tour
+          ? { id: context.tour.id, code: context.tour.code, status: context.tour.status, date: "" }
+          : null,
+        paymentMethod: "CASH",
+        bankAccount: null,
+        lines: cartRows.map((row) => ({
+          productId: row.productId,
+          productReference: row.product.reference,
+          productName: row.product.name,
+          quantity: row.quantity,
+          unitPriceHT: row.product.salePriceHT,
+          discountUnitAmount: row.discountRate,
+          taxRate: row.product.taxRate,
+        })),
+      });
+      setLastSale({
+        ...ticket,
+        // Paid in cash on the spot, unlike buildPreviewSale's own DRAFT/
+        // unpaid default (built for the still-unconfirmed cart preview) -
+        // and never "DRAFT" so the footer never prints "EN ATTENTE DE
+        // RÈGLEMENT" for a sale that already happened.
+        status: "COMPLETED",
+        paidAmount: ticket.totalTTC,
+        creditAmount: 0,
+        createdAt: soldAt,
+      });
+      setLastSalePhone(null);
+      setOfflineTicketReference(localReference);
+      resetForNextSale();
+      if (handledCustomerId) {
+        driverRuntime.markCustomerHandled(handledCustomerId);
+      }
+      toast.success(`Vente enregistrée hors connexion. Référence : ${localReference}`);
+      await Promise.allSettled([refreshContext(), refreshPendingOfflineCount()]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function validateSale() {
-    if (blockIfOffline()) return;
+    if (networkState !== "ONLINE") {
+      if (paymentMethod !== "CASH") {
+        toast.error(OFFLINE_PAYMENT_METHOD_MESSAGE);
+        return;
+      }
+      await validateOfflineCashSale();
+      return;
+    }
     if (paymentMethod === "BANK_TRANSFER" && !bankAccountId) {
       toast.error(
         "Veuillez sélectionner le compte bancaire qui a reçu le virement.",
@@ -580,6 +746,7 @@ export function DriverPosView({
 
       setLastSale(payload.sale);
       setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
+      setOfflineTicketReference(null);
       resetForNextSale();
       if (handledCustomerId) {
         driverRuntime.markCustomerHandled(handledCustomerId);
@@ -610,6 +777,7 @@ export function DriverPosView({
       }
       setLastSale(payload.sale);
       setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
+      setOfflineTicketReference(null);
       resetForNextSale();
       toast.success("Facture preparee. Encaissez-la depuis « Factures du jour ».");
       await Promise.allSettled([refreshContext(), refreshPending()]);
@@ -646,6 +814,7 @@ export function DriverPosView({
       }
       setLastSale(payload.sale);
       setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
+      setOfflineTicketReference(null);
       toast.success(`Facture ${payload.sale.invoiceNumber} encaissee.`);
       setCollectOpen(false);
       setCollectTarget(null);
@@ -678,6 +847,7 @@ export function DriverPosView({
       paymentMethod === "BANK_TRANSFER"
         ? context.bankAccounts.find((account) => account.id === bankAccountId) ?? null
         : null;
+    setOfflineTicketReference(null);
     setLastSale(
       buildPreviewSale({
         displayNumber: lastSale?.displayNumber ?? "—",
@@ -727,6 +897,7 @@ export function DriverPosView({
   function printPending(sale: SaleDto) {
     setLastSale(sale);
     setLastSalePhone(resolveCustomerPhone(sale.customer?.id));
+    setOfflineTicketReference(null);
     window.setTimeout(() => window.print(), 0);
   }
 
@@ -802,10 +973,12 @@ export function DriverPosView({
         truckRegistration={context.truck?.registration ?? "-"}
         tourCode={context.tour?.code ?? null}
         invoiceLabel={lastSale?.displayNumber ?? "—"}
+        offlineTicket={Boolean(offlineTicketReference)}
         lastSale={lastSale}
         onPrintLastSale={printLastSale}
         cacheSyncedAt={contextSource === "cache" ? cacheSyncedAt : null}
         cacheDiagnostic={cacheDiagnostic}
+        pendingOfflineCount={pendingOfflineCount}
       />
 
       <div
@@ -1031,7 +1204,7 @@ export function DriverPosView({
           if (collectTarget) printPending(collectTarget);
         }}
       />
-      <ReceiptPrint sale={lastSale} />
+      <ReceiptPrint sale={lastSale} offlineReference={offlineTicketReference} />
     </div>
   );
 }
@@ -1042,16 +1215,21 @@ function DriverInvoiceHeader({
   truckRegistration,
   tourCode,
   invoiceLabel,
+  offlineTicket,
   lastSale,
   onPrintLastSale,
   cacheSyncedAt,
   cacheDiagnostic,
+  pendingOfflineCount,
 }: {
   driverName: string;
   truckCode: string;
   truckRegistration: string;
   tourCode: string | null;
   invoiceLabel: string;
+  /** True while `invoiceLabel` is an "OFF-..." local reference, not a real
+   *  invoice number - see this file's own "16. IMPRESSION OFFLINE". */
+  offlineTicket: boolean;
   lastSale: SaleDto | null;
   onPrintLastSale: () => void;
   /** Set only while the POS is reading from the offline cache (see "11.
@@ -1059,6 +1237,9 @@ function DriverInvoiceHeader({
   cacheSyncedAt?: string | null;
   /** TEMPORARY dev diagnostic - see driver-pos-view.tsx's own state comment. */
   cacheDiagnostic?: { products: number; customers: number; stock: number } | "unavailable" | null;
+  /** Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": count of local sales
+   *  still PENDING_SYNC, read straight from SQLite. */
+  pendingOfflineCount: number;
 }) {
   const now = new Date();
   const date = now.toLocaleDateString("fr-FR", {
@@ -1088,6 +1269,14 @@ function DriverInvoiceHeader({
           Point de vente
         </Link>
         <NetworkStatusBadge />
+        {pendingOfflineCount > 0 ? (
+          <Badge
+            variant="outline"
+            className="shrink-0 border-amber-200 bg-amber-50 text-amber-700"
+          >
+            {pendingOfflineCount} vente{pendingOfflineCount > 1 ? "s" : ""} en attente
+          </Badge>
+        ) : null}
         {cacheSyncedAt ? (
           <span className="truncate text-[11px] text-muted-foreground">
             Dernière synchro : {formatSyncTime(cacheSyncedAt)}
@@ -1118,7 +1307,7 @@ function DriverInvoiceHeader({
           printed ticket; "Stock source" (which just repeated the truck code)
           was dropped from this strip. */}
       <div className="hidden rounded-2xl border border-border bg-muted/40 p-4 text-xs lg:grid lg:grid-cols-6 lg:gap-3">
-        <HeaderMetric label="N° Facture" value={invoiceLabel} strong />
+        <HeaderMetric label={offlineTicket ? "Réf. locale" : "N° Facture"} value={invoiceLabel} strong />
         <HeaderMetric label="Chauffeur" value={driverName} />
         <HeaderMetric label="Date" value={date} suppressHydrationWarning />
         <HeaderMetric label="Heure" value={heure} suppressHydrationWarning />

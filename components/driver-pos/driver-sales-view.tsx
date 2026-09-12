@@ -8,7 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { InvoiceDetailDialog } from "@/components/ventes/invoice-detail-dialog";
+import { useAuth } from "@/hooks/use-auth";
 import { useCompanyIdentity } from "@/hooks/use-company-identity";
+import { getOfflineSales, type OfflineSaleWithLines } from "@/lib/offline/driver-pos";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
 import type {
@@ -17,6 +19,23 @@ import type {
   SaleDto,
   SaleHistoryListItemDto,
 } from "@/types/operations-dto";
+
+// Phase 3 - "14. MES VENTES": a today's-sales row is either a real,
+// server-persisted sale or a still-local, PENDING_SYNC offline one - never
+// the same shape, so the list merges both instead of forcing an offline
+// sale into SaleDto (which would need a fake id/invoiceNumber it must never
+// have - see this task's own "20. NUMÉROTATION").
+type DisplayRow = { kind: "server"; sale: SaleDto } | { kind: "offline"; sale: OfflineSaleWithLines };
+
+function isToday(iso: string): boolean {
+  const date = new Date(iso);
+  const now = new Date();
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
 
 // Requirement 14's exact wording - not the un-accented set some other pages
 // use (components/ventes/orders-toolbar.tsx's paymentMethodLabels), so the
@@ -72,6 +91,7 @@ function toListItem(sale: SaleDto): SaleHistoryListItemDto {
 export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
   const { day, sales, stats } = data;
   const { identity } = useCompanyIdentity();
+  const { currentUser } = useAuth();
   const [selectedSale, setSelectedSale] = React.useState<SaleHistoryListItemDto | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [sharingSaleId, setSharingSaleId] = React.useState<string | null>(null);
@@ -79,25 +99,57 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
   // WhatsApp sharing only - SaleDto.customer never carries a phone (see
   // saleInclude in lib/server/sales-shared.ts), so it's resolved here from
   // the driver's own customer list (GET /api/driver/customers, already used
-  // elsewhere). No new API, no change to how sales themselves are fetched.
-  const [phoneByCustomerId, setPhoneByCustomerId] = React.useState<Map<string, string | null>>(
-    new Map(),
-  );
+  // elsewhere). Also doubles as the name lookup for offline rows below (an
+  // OfflineSaleWithLines only carries customerId, never a name snapshot).
+  // No new API, no change to how sales themselves are fetched.
+  const [customerById, setCustomerById] = React.useState<Map<string, CustomerDto>>(new Map());
   React.useEffect(() => {
     let active = true;
     fetch("/api/driver/customers", { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : { customers: [] }))
       .then((payload: { customers?: CustomerDto[] }) => {
         if (!active) return;
-        setPhoneByCustomerId(
-          new Map((payload.customers ?? []).map((customer) => [customer.id, customer.phone])),
-        );
+        setCustomerById(new Map((payload.customers ?? []).map((customer) => [customer.id, customer])));
       })
       .catch(() => {});
     return () => {
       active = false;
     };
   }, []);
+
+  // Phase 3 - "14. MES VENTES": today's still-local PENDING_SYNC sales,
+  // read straight from SQLite (see this task's own "TEST C" - they must
+  // still be here after closing and reopening this screen without closing
+  // the app). Never touches `sales`/`stats` above, which stay exactly what
+  // the server returned.
+  const [offlineSales, setOfflineSales] = React.useState<OfflineSaleWithLines[]>([]);
+  React.useEffect(() => {
+    let active = true;
+    const organizationId = currentUser?.organizationId ?? null;
+    const driverId = currentUser?.driverId ?? null;
+    if (!organizationId || !driverId) return;
+    getOfflineSales({ organizationId, driverId })
+      .then((allSales) => {
+        if (!active) return;
+        setOfflineSales(
+          allSales.filter((sale) => sale.syncStatus === "PENDING_SYNC" && isToday(sale.createdAtLocal)),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [currentUser]);
+
+  const rows = React.useMemo<DisplayRow[]>(() => {
+    const serverRows: DisplayRow[] = sales.map((sale) => ({ kind: "server", sale }));
+    const offlineRows: DisplayRow[] = offlineSales.map((sale) => ({ kind: "offline", sale }));
+    return [...serverRows, ...offlineRows].sort((a, b) => {
+      const timeOf = (row: DisplayRow) =>
+        new Date(row.kind === "server" ? row.sale.createdAt : row.sale.createdAtLocal).getTime();
+      return timeOf(b) - timeOf(a);
+    });
+  }, [sales, offlineSales]);
 
   async function shareOnWhatsApp(sale: SaleDto) {
     if (sale.status === "DRAFT" || sale.status === "CANCELLED") return;
@@ -106,7 +158,7 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
       const result = await shareInvoicePdf({
         sale,
         identity,
-        customerPhone: sale.customer ? phoneByCustomerId.get(sale.customer.id) ?? null : null,
+        customerPhone: sale.customer ? customerById.get(sale.customer.id)?.phone ?? null : null,
       });
       if (result.method === "download") {
         toast.success("Facture PDF téléchargée. Joignez-la dans WhatsApp.");
@@ -147,7 +199,7 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
       <div className="space-y-3">
         <h2 className="text-sm font-semibold text-foreground">Factures du jour</h2>
 
-        {sales.length === 0 ? (
+        {rows.length === 0 ? (
           <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
             <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
               <Receipt aria-hidden="true" className="h-8 w-8 text-muted-foreground/40" />
@@ -156,17 +208,28 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
           </Card>
         ) : (
           <div className="space-y-2">
-            {sales.map((sale) => (
+            {rows.map((row) =>
+              row.kind === "offline" ? (
+                <OfflineSaleRow
+                  key={row.sale.localId}
+                  sale={row.sale}
+                  customerName={
+                    row.sale.customerId
+                      ? customerById.get(row.sale.customerId)?.name ?? "Client comptoir"
+                      : "Client comptoir"
+                  }
+                />
+              ) : (
               // A <div role="button"> here, not a real <button> - it wraps
               // the WhatsApp <Button> below, and HTML forbids nesting an
               // interactive control inside another one (a <button> inside a
               // <button> is a hydration error). tabIndex + onKeyDown restore
               // the same keyboard activation a native button gets for free.
               <div
-                key={sale.id}
+                key={row.sale.id}
                 role="button"
                 tabIndex={0}
-                onClick={() => openDetail(sale)}
+                onClick={() => openDetail(row.sale)}
                 onKeyDown={(event) => {
                   // Ignore Enter/Space bubbling up from the nested WhatsApp
                   // button - only the row itself being focused should open
@@ -174,35 +237,35 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
                   if (event.target !== event.currentTarget) return;
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    openDetail(sale);
+                    openDetail(row.sale);
                   }
                 }}
                 className="w-full cursor-pointer rounded-2xl border border-border bg-card p-3 text-left transition hover:border-emerald-200 hover:shadow-[0_6px_18px_rgba(16,185,129,0.08)]"
               >
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-semibold text-foreground tabular-nums">
-                    {sale.displayNumber}
+                    {row.sale.displayNumber}
                   </span>
                   <span className="shrink-0 font-semibold text-foreground tabular-nums">
-                    {formatCurrency(sale.totalTTC)}
+                    {formatCurrency(row.sale.totalTTC)}
                   </span>
                 </div>
                 <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                  {sale.customer?.name ?? "Client comptoir"}
+                  {row.sale.customer?.name ?? "Client comptoir"}
                 </p>
                 <div className="mt-1.5 flex items-center justify-between gap-2">
                   <p className="text-xs text-muted-foreground">
-                    {formatTime(sale.createdAt)}
+                    {formatTime(row.sale.createdAt)}
                     {" · "}
-                    {PAYMENT_LABELS[sale.paymentMethod] ?? sale.paymentMethod}
+                    {PAYMENT_LABELS[row.sale.paymentMethod] ?? row.sale.paymentMethod}
                   </p>
                   <div className="flex shrink-0 items-center gap-1">
-                    {sale.tour?.code ? (
+                    {row.sale.tour?.code ? (
                       <Badge
                         variant="outline"
                         className="px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
                       >
-                        {sale.tour.code}
+                        {row.sale.tour.code}
                       </Badge>
                     ) : null}
                     <Button
@@ -210,18 +273,18 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
                       variant="ghost"
                       size="icon-sm"
                       disabled={
-                        sale.status === "DRAFT" ||
-                        sale.status === "CANCELLED" ||
-                        sharingSaleId === sale.id
+                        row.sale.status === "DRAFT" ||
+                        row.sale.status === "CANCELLED" ||
+                        sharingSaleId === row.sale.id
                       }
-                      aria-label={`Envoyer la facture ${sale.displayNumber} par WhatsApp`}
+                      aria-label={`Envoyer la facture ${row.sale.displayNumber} par WhatsApp`}
                       onClick={(event) => {
                         event.stopPropagation();
-                        void shareOnWhatsApp(sale);
+                        void shareOnWhatsApp(row.sale);
                       }}
                       className="h-7 w-7 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
                     >
-                      {sharingSaleId === sale.id ? (
+                      {sharingSaleId === row.sale.id ? (
                         <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <MessageCircle className="h-3.5 w-3.5" />
@@ -230,7 +293,8 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
                   </div>
                 </div>
               </div>
-            ))}
+              ),
+            )}
           </div>
         )}
       </div>
@@ -241,6 +305,44 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
         onOpenChange={setDetailOpen}
         fetchBase="/api/driver/sales"
       />
+    </div>
+  );
+}
+
+// Phase 3 - "14. MES VENTES": a still-local, PENDING_SYNC sale - no
+// server id, so unlike a real sale row it never opens InvoiceDetailDialog
+// (fetchBase="/api/driver/sales" has nothing to fetch for a local id) and
+// never offers WhatsApp sharing (see "17. WHATSAPP OFFLINE" - the official
+// PDF must stay disabled until this sale is actually SYNCED).
+function OfflineSaleRow({
+  sale,
+  customerName,
+}: {
+  sale: OfflineSaleWithLines;
+  customerName: string;
+}) {
+  return (
+    <div className="w-full rounded-2xl border border-dashed border-amber-200 bg-amber-50/40 p-3 text-left">
+      <div className="flex items-start justify-between gap-2">
+        <span className="font-semibold text-foreground tabular-nums">{sale.localReference}</span>
+        <span className="shrink-0 font-semibold text-foreground tabular-nums">
+          {formatCurrency(sale.totalTTC)}
+        </span>
+      </div>
+      <p className="mt-0.5 truncate text-sm text-muted-foreground">{customerName}</p>
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {formatTime(sale.createdAtLocal)}
+          {" · "}
+          {PAYMENT_LABELS[sale.paymentMethod] ?? sale.paymentMethod}
+        </p>
+        <Badge
+          variant="outline"
+          className="border-amber-300 bg-amber-100 px-1.5 py-0 text-[10px] font-normal text-amber-800"
+        >
+          ⏳ En attente
+        </Badge>
+      </div>
     </div>
   );
 }

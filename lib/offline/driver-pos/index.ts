@@ -20,7 +20,7 @@ export {
   saveCachedTruckStock,
 } from "./cache-store";
 
-export { createOfflineSale, getOfflineSales } from "./sales-store";
+export { countPendingOfflineSales, createOfflineSale, getOfflineSales } from "./sales-store";
 
 export { enqueueSyncOperation, getPendingOutboxEntries } from "./outbox-store";
 

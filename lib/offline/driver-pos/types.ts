@@ -148,6 +148,14 @@ export type OfflineSale = Omit<OfflineSaleInput, "lines"> & {
 
 export type OfflineSaleWithLines = OfflineSale & {
   lines: Array<OfflineSaleLineInput & { id: string; offlineSaleId: string }>;
+  /**
+   * Local-only display reference (e.g. "OFF-20260912-0001") - derived at
+   * read time from createdAtLocal + a per-day sequence, never persisted and
+   * never a stand-in for a real invoice number (officialDisplayNumber stays
+   * null until a future sync actually assigns one - see this type's own
+   * comment on that field).
+   */
+  localReference: string;
 };
 
 export type SyncOutboxEntry = {
