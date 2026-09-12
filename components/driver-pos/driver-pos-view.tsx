@@ -1,7 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, ArrowLeft, CreditCard, Printer, ShoppingCart } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CreditCard,
+  MessageCircle,
+  Printer,
+  ShoppingCart,
+} from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 
@@ -36,9 +43,15 @@ import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
+import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
 import { roundMoney } from "@/lib/money";
 import { formatCurrency } from "@/lib/utils";
+import {
+  buildWhatsAppInvoiceMessage,
+  buildWhatsAppUrl,
+  normalizeWhatsAppPhone,
+} from "@/lib/whatsapp-invoice";
 import type {
   CustomerDto,
   DriverPosContextDto,
@@ -100,6 +113,13 @@ export function DriverPosView({
   const [bankAccountId, setBankAccountId] = React.useState("");
   const [paidAmount, setPaidAmount] = React.useState("");
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
+  // Snapshot of lastSale's own customer phone, captured whenever lastSale is
+  // set from a real server response (see resolveCustomerPhone) - WhatsApp
+  // sharing reads this instead of the live selectedCustomer, so picking a
+  // different customer afterward can never pair the wrong phone with an
+  // already-shared invoice.
+  const [lastSalePhone, setLastSalePhone] = React.useState<string | null>(null);
+  const { identity } = useCompanyIdentity();
   const [busy, setBusy] = React.useState(false);
   // "Factures du jour" - server-persisted DRAFT truck sales awaiting collection.
   const [pendingSales, setPendingSales] = React.useState<SaleDto[]>([]);
@@ -350,6 +370,18 @@ export function DriverPosView({
     setCart((current) => current.filter((line) => line.productId !== productId));
   }
 
+  // WhatsApp sharing only - SaleDto.customer never carries a phone (see
+  // saleInclude in lib/server/sales-shared.ts), so it's resolved from
+  // whichever already-loaded CustomerDto matches: the currently selected
+  // customer first (always the right one right after validateSale), then
+  // the small POS context preload. Returns null (never a guess) otherwise -
+  // callers fall back to an unaddressed wa.me link.
+  function resolveCustomerPhone(customerId: string | null | undefined): string | null {
+    if (!customerId) return null;
+    if (selectedCustomer?.id === customerId) return selectedCustomer.phone;
+    return context.customers.find((customer) => customer.id === customerId)?.phone ?? null;
+  }
+
   async function refreshContext() {
     // Pass the current selection so the server-bounded preload guarantees
     // it stays present (same reasoning as the initial load) - a refresh
@@ -429,6 +461,7 @@ export function DriverPosView({
       }
 
       setLastSale(payload.sale);
+      setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
       resetForNextSale();
       if (handledCustomerId) {
         driverRuntime.markCustomerHandled(handledCustomerId);
@@ -457,6 +490,7 @@ export function DriverPosView({
         return;
       }
       setLastSale(payload.sale);
+      setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
       resetForNextSale();
       toast.success("Facture preparee. Encaissez-la depuis « Factures du jour ».");
       await Promise.allSettled([refreshContext(), refreshPending()]);
@@ -491,6 +525,7 @@ export function DriverPosView({
         return;
       }
       setLastSale(payload.sale);
+      setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
       toast.success(`Facture ${payload.sale.invoiceNumber} encaissee.`);
       setCollectOpen(false);
       setCollectTarget(null);
@@ -571,7 +606,24 @@ export function DriverPosView({
 
   function printPending(sale: SaleDto) {
     setLastSale(sale);
+    setLastSalePhone(resolveCustomerPhone(sale.customer?.id));
     window.setTimeout(() => window.print(), 0);
+  }
+
+  // WhatsApp = share only, never validates/creates/prices anything. Only
+  // enabled once lastSale is a real persisted, non-draft sale (never the
+  // "preview" ticket buildPreviewSale hands to printCurrentCart, and never a
+  // still-DRAFT "Facture du jour" that has no definitive commercial number
+  // yet) - see lib/sale-display-number.ts / driverSaleSchema's status rules.
+  const canShareWhatsApp = Boolean(
+    lastSale && lastSale.id !== "preview" && lastSale.status !== "DRAFT" && lastSale.status !== "CANCELLED",
+  );
+
+  function shareLastSaleOnWhatsApp() {
+    if (!lastSale || !canShareWhatsApp) return;
+    const phone = normalizeWhatsAppPhone(lastSalePhone);
+    const message = buildWhatsAppInvoiceMessage(lastSale, identity?.tradeName ?? identity?.name);
+    window.open(buildWhatsAppUrl(phone, message), "_blank", "noopener,noreferrer");
   }
 
   if (!context.canSell) {
@@ -797,6 +849,20 @@ export function DriverPosView({
                 holdLoading={preparing}
                 isCredit={paymentMethod === "CREDIT"}
               />
+
+              {/* Share-only: sends the already-validated invoice to the
+                  customer, never re-validates or re-prices it. Driver-only -
+                  admin's shared InvoiceActions is untouched. */}
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!canShareWhatsApp}
+                onClick={shareLastSaleOnWhatsApp}
+                className="h-12 w-full rounded-2xl border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+              >
+                <MessageCircle aria-hidden="true" className="h-4 w-4" />
+                WhatsApp
+              </Button>
             </CardContent>
           </Card>
         </div>

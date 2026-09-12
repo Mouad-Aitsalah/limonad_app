@@ -1,8 +1,10 @@
 "use client";
 
 import * as React from "react";
+import { MessageCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -12,8 +14,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { formatCurrency } from "@/lib/utils";
-import type { DriverTourSalesSummaryDto } from "@/types/operations-dto";
+import {
+  buildWhatsAppInvoiceMessage,
+  buildWhatsAppUrl,
+  normalizeWhatsAppPhone,
+} from "@/lib/whatsapp-invoice";
+import type { CustomerDto, DriverTourSalesSummaryDto, SaleDto } from "@/types/operations-dto";
 
 export function DriverSalesView({
   groups,
@@ -22,6 +30,39 @@ export function DriverSalesView({
 }) {
   const [selectedTourId, setSelectedTourId] = React.useState(groups[0]?.tourId ?? "");
   const selectedGroup = groups.find((group) => group.tourId === selectedTourId) ?? groups[0];
+  const { identity } = useCompanyIdentity();
+
+  // WhatsApp sharing only: SaleDto.customer never carries a phone (see
+  // saleInclude in lib/server/sales-shared.ts), so it's resolved here from
+  // the driver's own customer list (GET /api/driver/customers, already used
+  // elsewhere - see getCustomersForCurrentDriver) by id. No new API, no
+  // change to how sales themselves are fetched or displayed.
+  const [phoneByCustomerId, setPhoneByCustomerId] = React.useState<Map<string, string | null>>(
+    new Map(),
+  );
+  React.useEffect(() => {
+    let active = true;
+    fetch("/api/driver/customers", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : { customers: [] }))
+      .then((payload: { customers?: CustomerDto[] }) => {
+        if (!active) return;
+        setPhoneByCustomerId(
+          new Map((payload.customers ?? []).map((customer) => [customer.id, customer.phone])),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function shareOnWhatsApp(sale: SaleDto) {
+    const phone = normalizeWhatsAppPhone(
+      sale.customer ? phoneByCustomerId.get(sale.customer.id) ?? null : null,
+    );
+    const message = buildWhatsAppInvoiceMessage(sale, identity?.tradeName ?? identity?.name);
+    window.open(buildWhatsAppUrl(phone, message), "_blank", "noopener,noreferrer");
+  }
   const totals = React.useMemo(
     () => ({
       salesCount: groups.reduce((sum, group) => sum + group.salesCount, 0),
@@ -89,6 +130,7 @@ export function DriverSalesView({
                     <TableHead className="text-right">TVA</TableHead>
                     <TableHead className="text-right">TTC</TableHead>
                     <TableHead className="text-right">Credit</TableHead>
+                    <TableHead className="w-10" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -106,6 +148,19 @@ export function DriverSalesView({
                       <TableCell className="text-right">{formatCurrency(sale.taxAmount)}</TableCell>
                       <TableCell className="text-right">{formatCurrency(sale.totalTTC)}</TableCell>
                       <TableCell className="text-right">{formatCurrency(sale.creditAmount)}</TableCell>
+                      <TableCell>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Envoyer la facture ${sale.displayNumber} par WhatsApp`}
+                          disabled={sale.status === "DRAFT" || sale.status === "CANCELLED"}
+                          onClick={() => shareOnWhatsApp(sale)}
+                          className="text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+                        >
+                          <MessageCircle className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
