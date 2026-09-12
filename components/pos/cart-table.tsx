@@ -49,16 +49,21 @@ type CartTableProps = {
 // Column widths are the single source of truth (`table-fixed` makes every
 // <td> take its <th> width exactly). Two regimes:
 //  - MOBILE (< lg): percentages that sum to 100% -> the whole table fits the
-//    cart panel, no internal horizontal scroll, all 5 columns visible.
+//    cart panel, no internal horizontal scroll. TOTAL is dropped entirely on
+//    mobile (see COL.total) - its 20% is redistributed to the other 4
+//    columns, weighted toward Produit (still summing to 100%: 40+26+19+15).
+//    The per-line amount is never removed from the DATA, only this display -
+//    "Total à payer" (CartSummary) still reflects it in full.
 //  - DESKTOP (lg+): the previously-validated fixed rem widths, untouched.
 const COL = {
-  produit: "w-[28%] px-1 lg:w-auto lg:px-4",
+  produit: "w-[40%] px-1 lg:w-auto lg:px-4",
   qte: "w-[26%] px-0.5 lg:w-[7.5rem] lg:px-2",
-  prix: "w-[15%] px-0.5 lg:w-24 lg:px-2",
-  rem: "w-[11%] px-0.5 lg:w-[4.25rem] lg:px-2",
-  total: "w-[20%] px-0.5 pr-1 lg:w-[6.25rem] lg:px-2 lg:pr-3",
+  prix: "w-[19%] px-0.5 lg:w-24 lg:px-2",
+  rem: "w-[15%] px-0.5 lg:w-[4.25rem] lg:px-2",
+  // Desktop-only now - see this constant group's own comment above.
+  total: "max-lg:hidden lg:w-[6.25rem] lg:px-2 lg:pr-3",
   // Own column on desktop only; on mobile the delete icon lives inside the
-  // Produit cell so it never steals width from TOTAL (see below).
+  // Produit cell so it never steals width from the row (see below).
   action: "max-lg:hidden lg:w-10 lg:px-2",
 } as const;
 

@@ -1,13 +1,7 @@
 "use client";
 
 import * as React from "react";
-import {
-  AlertTriangle,
-  ArrowLeft,
-  Printer,
-  ShoppingCart,
-  Trash2,
-} from "lucide-react";
+import { AlertTriangle, ArrowLeft, CreditCard, Printer, ShoppingCart } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 
@@ -16,10 +10,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { BankAccountCombobox } from "@/components/pos/bank-account-combobox";
+import { CartSummary } from "@/components/pos/cart-summary";
+import { CartTable } from "@/components/pos/cart-table";
 import { CollectDialog } from "@/components/pos/collect-dialog";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { CustomerNumberInput } from "@/components/pos/customer-number-input";
+import { InvoiceActions } from "@/components/pos/invoice-actions";
 import { MobileCustomerPicker } from "@/components/pos/mobile-customer-picker";
 import { MobileSupplierPicker } from "@/components/pos/mobile-supplier-picker";
 import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
@@ -30,12 +34,10 @@ import { type SupplierOption } from "@/components/pos/supplier-filter";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
-import type { PosPaymentMethodValue } from "@/types/pos";
+import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
-import { ProductMedia } from "@/components/products/product-media";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
 import { roundMoney } from "@/lib/money";
-import { posStockTone } from "@/lib/pos-stock-display";
 import { formatCurrency } from "@/lib/utils";
 import type {
   CustomerDto,
@@ -44,21 +46,16 @@ import type {
   SaleDto,
 } from "@/types/operations-dto";
 import type { PosProduct } from "@/types/pos";
+// Cart types live only on pos-layout.tsx (the admin POS page) and are
+// re-exported as types for reuse - same pattern cart-table.tsx/cart-summary.tsx
+// already use. No admin business logic is imported, only these shapes.
+import type { CartLineComputed, CartTotals } from "@/components/pos/pos-layout";
 
 type CartLine = {
   productId: string;
   quantity: number;
   discountRate: number;
 };
-
-const paymentMethods = [
-  { value: "CASH", label: "Especes" },
-  { value: "CARD", label: "Carte" },
-  { value: "CHECK", label: "Cheque" },
-  { value: "BANK_TRANSFER", label: "Virement" },
-  { value: "CREDIT", label: "Credit" },
-  { value: "MIXED", label: "Mixte" },
-];
 
 function normalize(value: string) {
   return value
@@ -97,7 +94,7 @@ export function DriverPosView({
   const [selectedCustomer, setSelectedCustomer] = React.useState<CustomerDto | null>(() =>
     resolveInitialCustomer(initialContext, initialCustomerId),
   );
-  const [paymentMethod, setPaymentMethod] = React.useState("CASH");
+  const [paymentMethod, setPaymentMethod] = React.useState<PosPaymentMethodValue>("CASH");
   // BANK_TRANSFER only: chosen active 5141 account id (mandatory before a
   // bank-transfer sale). Only sent when paymentMethod === "BANK_TRANSFER".
   const [bankAccountId, setBankAccountId] = React.useState("");
@@ -215,6 +212,47 @@ export function DriverPosView({
     [cartRows],
   );
 
+  // Adapters so the shared admin cart components (CartTable/CartSummary) can
+  // render driver's own cartRows/totals unchanged - no driver pricing/stock
+  // logic is touched, only reshaped for these presentational props. Driver
+  // has no discount input yet (see computeLine below), so discountUnitAmount
+  // is always 0 here and wired to a no-op onDiscountChange further down.
+  const cartLinesForTable = React.useMemo<CartLineComputed[]>(
+    () =>
+      cartRows.map((row) => {
+        const baseHT = row.product.salePriceHT * row.quantity;
+        return {
+          productId: row.productId,
+          designation: row.product.name,
+          reference: row.product.reference,
+          quantity: row.quantity,
+          discountUnitAmount: 0,
+          unitPriceHT: row.product.salePriceHT,
+          unitPriceTTC: row.product.salePriceTTC,
+          tauxTVA: row.product.taxRate,
+          baseHT,
+          discountAmount: 0,
+          netHT: row.totals.totalHT,
+          tvaAmount: row.totals.taxAmount,
+          totalTTC: row.totals.totalTTC,
+          transferValue: 0,
+        };
+      }),
+    [cartRows],
+  );
+
+  const cartTotalsForSummary = React.useMemo<CartTotals>(
+    () => ({
+      sousTotalHT: totals.ht,
+      remise: 0,
+      tva: totals.tax,
+      totalTTC: totals.ttc,
+      netAPayer: totals.ttc,
+      transferValue: 0,
+    }),
+    [totals],
+  );
+
   const mobileSelectedProduct = React.useMemo(() => {
     // Feedback for the LAST tapped product only - its live cart quantity
     // and line total - not cartRows[0] and not the whole cart.
@@ -282,6 +320,30 @@ export function DriverPosView({
           : line,
       ),
     );
+  }
+
+  function incrementQuantity(productId: string) {
+    setCart((current) =>
+      current.map((line) =>
+        line.productId === productId ? { ...line, quantity: line.quantity + 1 } : line,
+      ),
+    );
+  }
+
+  // Same remove-at-zero semantics as the admin CartTable (pos-layout.tsx's
+  // decrementQuantity) - a UI interaction, not a stock/sale rule, so this is
+  // still purely presentational parity, not a change to driver business logic.
+  function decrementQuantity(productId: string) {
+    setCart((current) => {
+      const line = current.find((item) => item.productId === productId);
+      if (!line) return current;
+      if (line.quantity <= 1) {
+        return current.filter((item) => item.productId !== productId);
+      }
+      return current.map((item) =>
+        item.productId === productId ? { ...item, quantity: item.quantity - 1 } : item,
+      );
+    });
   }
 
   function removeProduct(productId: string) {
@@ -520,7 +582,7 @@ export function DriverPosView({
     <div className="space-y-4 pb-6">
       <div
         ref={cartButtonRef}
-        className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] z-40 xl:hidden"
+        className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] z-40 lg:hidden"
         style={{ right: "max(0.75rem, env(safe-area-inset-right))" }}
       >
         <Button
@@ -550,7 +612,7 @@ export function DriverPosView({
       />
 
       <div
-        className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1 xl:hidden"
+        className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1 lg:hidden"
         role="tablist"
         aria-label="Vues du point de vente chauffeur"
       >
@@ -577,95 +639,38 @@ export function DriverPosView({
       </div>
 
       {mobileView === "products" && (
-        <MobileSelectedProduct product={mobileSelectedProduct} className="xl:hidden" />
+        <MobileSelectedProduct product={mobileSelectedProduct} className="lg:hidden" />
       )}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div
-          className={`${mobileView === "products" ? "block" : "hidden"} order-2 space-y-4 xl:order-1 xl:block`}
+          className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4`}
         >
-          <div className="space-y-3 xl:hidden">
-            <ProductSearch value={search} onChange={setSearch} />
-            <MobileSupplierPicker
-              suppliers={supplierOptions}
-              value={supplierFilter}
-              onChange={setSupplierFilter}
-            />
-            <ProductGrid
-              products={productTiles}
-              onAdd={addProductById}
-              onAdded={handleMobileProductAdded}
-            />
-          </div>
-          <Card className="hidden overflow-hidden rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)] xl:block">
-            <CardContent className="space-y-4 p-4">
-              <div className="space-y-2">
-                <Label>Recherche produit</Label>
-                <Input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Nom, reference ou code-barres"
-                  className="h-10 rounded-2xl"
-                />
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {filteredProducts.map((product) => {
-                  const cartLine = cart.find((line) => line.productId === product.id);
-                  const inCartQuantity = cartLine?.quantity ?? 0;
-                  // Negative truck stock is allowed: the tile is never
-                  // disabled because of stock, the quantity is only shown in
-                  // red at 0 / negative.
-                  const tone = posStockTone(product.availableQuantity);
-
-                  return (
-                    <button
-                      key={product.id}
-                      type="button"
-                      onClick={() => addProduct(product)}
-                      className="group overflow-hidden rounded-[22px] border border-border bg-card text-left transition hover:border-emerald-200 hover:shadow-[0_10px_24px_rgba(16,185,129,0.14)]"
-                    >
-                      <ProductPhoto product={product} />
-                      <div className="space-y-3 p-3">
-                        <div>
-                          <p className="line-clamp-2 text-sm font-semibold text-foreground">
-                            {product.name}
-                          </p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {product.reference}
-                            {product.barcode ? ` • ${product.barcode}` : ""}
-                          </p>
-                        </div>
-
-                        <div className="flex items-end justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-emerald-700">
-                              {formatCurrency(product.salePriceTTC)}
-                            </p>
-                            <p className={`text-xs ${tone.textClassName}`}>
-                              {tone.label(product.availableQuantity)}
-                            </p>
-                          </div>
-                          <Badge variant="secondary">
-                            {inCartQuantity > 0 ? `${inCartQuantity} au panier` : "Ajouter"}
-                          </Badge>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
+          <ProductSearch value={search} onChange={setSearch} />
+          <MobileSupplierPicker
+            className="lg:hidden"
+            suppliers={supplierOptions}
+            value={supplierFilter}
+            onChange={setSupplierFilter}
+          />
+          <ProductGrid
+            products={productTiles}
+            onAdd={addProductById}
+            onAdded={handleMobileProductAdded}
+          />
         </div>
 
         <div
           id="mobile-driver-pos-cart"
           ref={cartSectionRef}
-          className={`${mobileView === "cart" ? "block" : "hidden"} order-1 scroll-mt-16 space-y-4 xl:sticky xl:top-20 xl:order-2 xl:block xl:self-start`}
+          className={`${mobileView === "cart" ? "block" : "hidden"} order-1 scroll-mt-16 space-y-4 lg:sticky lg:top-20 lg:order-2 lg:block lg:self-start`}
         >
           <Card className="rounded-[24px] border-0 ring-0 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
             <CardContent className="space-y-4 p-4">
-              <div className="flex items-center justify-between">
+              {/* Desktop-only bonus context (article count + running total) -
+                  admin's mobile cart has no equivalent heading at all, so
+                  this is hidden on mobile for true visual parity (see
+                  InvoiceHeader's own "hidden ... lg:grid" convention). */}
+              <div className="hidden items-center justify-between lg:flex">
                 <div>
                   <h2 className="font-heading text-lg font-semibold text-foreground">
                     Panier chauffeur
@@ -679,7 +684,7 @@ export function DriverPosView({
 
               <div className="grid gap-3 max-lg:grid-cols-[7fr_3fr] max-lg:[&>*]:min-w-0 max-lg:[&>*:last-child]:col-span-2">
                 <div className="min-w-0">
-                  <div className="hidden xl:block">
+                  <div className="hidden lg:block">
                     <CustomerCombobox
                       value={selectedCustomer}
                       onChange={setSelectedCustomer}
@@ -688,7 +693,7 @@ export function DriverPosView({
                     />
                   </div>
                   <MobileCustomerPicker
-                    className="xl:hidden"
+                    className="lg:hidden"
                     value={selectedCustomer}
                     onChange={setSelectedCustomer}
                     initialSuggestions={context.customers}
@@ -700,22 +705,37 @@ export function DriverPosView({
                   customer={selectedCustomer}
                   onResolved={setSelectedCustomer}
                   placeholder="N° Client"
-                  hideLabelOnMobile="xl"
+                  hideLabelOnMobile="lg"
                 />
 
-                <Field label="Paiement">
-                  <select
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <CreditCard aria-hidden="true" className="h-3.5 w-3.5" />
+                    Mode de règlement
+                  </Label>
+                  <Select
                     value={paymentMethod}
-                    onChange={(event) => setPaymentMethod(event.target.value)}
-                    className="h-10 rounded-2xl border border-input bg-background px-3 text-sm"
+                    onValueChange={(value) =>
+                      value && setPaymentMethod(value as PosPaymentMethodValue)
+                    }
                   >
-                    {paymentMethods.map((method) => (
-                      <option key={method.value} value={method.value}>
-                        {method.label}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Sélectionner">
+                        {() =>
+                          posPaymentMethods.find((method) => method.value === paymentMethod)
+                            ?.label ?? "Sélectionner"
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {posPaymentMethods.map((method) => (
+                        <SelectItem key={method.value} value={method.value}>
+                          {method.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
                 {paymentMethod === "BANK_TRANSFER" && (
                   <Field label="Compte bancaire *">
@@ -745,106 +765,19 @@ export function DriverPosView({
                 )}
               </div>
 
-              <div className="space-y-3">
-                {cartRows.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                    Ajoutez des produits depuis le stock du camion pour commencer la vente.
-                  </div>
-                ) : (
-                  cartRows.map((row) => (
-                    <div
-                      key={row.productId}
-                      className="rounded-[22px] border border-border bg-muted/20 p-3"
-                    >
-                      <div className="flex gap-3">
-                        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-muted">
-                          <ProductPhoto product={row.product} compact />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-foreground">
-                                {row.product.name}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {row.product.reference}
-                              </p>
-                            </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={`Supprimer ${row.product.name}`}
-                              onClick={() => removeProduct(row.productId)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-
-                          <div className="mt-3 flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="icon-sm"
-                                onClick={() => updateQuantity(row.productId, row.quantity - 1)}
-                              >
-                                -
-                              </Button>
-                              <Input
-                                type="number"
-                                min={1}
-                                value={row.quantity}
-                                onFocus={(event) => {
-                                  const input = event.currentTarget;
-                                  requestAnimationFrame(() => {
-                                    try {
-                                      input.select();
-                                    } catch {
-                                      /* input detached */
-                                    }
-                                  });
-                                }}
-                                onChange={(event) =>
-                                  updateQuantity(row.productId, Number(event.target.value))
-                                }
-                                className="h-9 w-20 rounded-xl text-center"
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="icon-sm"
-                                onClick={() => updateQuantity(row.productId, row.quantity + 1)}
-                              >
-                                +
-                              </Button>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-sm font-semibold text-foreground">
-                                {formatCurrency(row.totals.totalTTC)}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                Dispo: {row.product.availableQuantity}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
+              <div className="rounded-2xl border border-border">
+                <CartTable
+                  lines={cartLinesForTable}
+                  operationType="sale"
+                  onIncrement={incrementQuantity}
+                  onDecrement={decrementQuantity}
+                  onQuantityChange={updateQuantity}
+                  onDiscountChange={() => {}}
+                  onRemove={removeProduct}
+                />
               </div>
 
-              <div className="space-y-2 rounded-[22px] bg-muted/50 p-4 text-sm">
-                <Summary label="Total HT" value={totals.ht} />
-                <Summary label="TVA" value={totals.tax} />
-                <div className="mt-2 flex items-center justify-between border-t border-border pt-3">
-                  <span className="text-base font-semibold text-foreground">Total à payer</span>
-                  <span className="text-2xl font-bold text-emerald-700 tabular-nums">
-                    {formatCurrency(totals.ttc)}
-                  </span>
-                </div>
-              </div>
+              <CartSummary totals={cartTotalsForSummary} operationType="sale" />
 
               <PendingSalesPanel
                 sales={pendingSales}
@@ -854,38 +787,16 @@ export function DriverPosView({
                 }}
               />
 
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={preparing || cartRows.length === 0}
-                    onClick={prepareInvoice}
-                    className="h-12 rounded-2xl"
-                  >
-                    {preparing ? "..." : "Préparer"}
-                  </Button>
-                  <Button
-                    type="button"
-                    disabled={busy || cartRows.length === 0}
-                    onClick={validateSale}
-                    className="h-12 rounded-2xl"
-                  >
-                    <ShoppingCart className="h-4 w-4" />
-                    Valider
-                  </Button>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={cartRows.length === 0 && !lastSale}
-                  onClick={printCurrentCart}
-                  className="h-12 w-full rounded-2xl"
-                >
-                  <Printer className="h-4 w-4" />
-                  Imprimer
-                </Button>
-              </div>
+              <InvoiceActions
+                operationType="sale"
+                disabled={cartRows.length === 0}
+                loading={busy}
+                onCheckout={validateSale}
+                onPrint={printCurrentCart}
+                onHold={prepareInvoice}
+                holdLoading={preparing}
+                isCredit={paymentMethod === "CREDIT"}
+              />
             </CardContent>
           </Card>
         </div>
@@ -966,7 +877,7 @@ function DriverInvoiceHeader({
           only - depot / stock-source stay in the sale payload and on the
           printed ticket; "Stock source" (which just repeated the truck code)
           was dropped from this strip. */}
-      <div className="hidden rounded-2xl border border-border bg-muted/40 p-4 text-xs xl:grid xl:grid-cols-6 xl:gap-3">
+      <div className="hidden rounded-2xl border border-border bg-muted/40 p-4 text-xs lg:grid lg:grid-cols-6 lg:gap-3">
         <HeaderMetric label="N° Facture" value={invoiceLabel} strong />
         <HeaderMetric label="Chauffeur" value={driverName} />
         <HeaderMetric label="Date" value={date} suppressHydrationWarning />
@@ -1008,34 +919,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <Label>{label}</Label>
       {children}
     </div>
-  );
-}
-
-function Summary({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
-  return (
-    <div className={`flex justify-between ${strong ? "font-semibold text-foreground" : ""}`}>
-      <span>{label}</span>
-      <span>{formatCurrency(value)}</span>
-    </div>
-  );
-}
-
-function ProductPhoto({
-  product,
-  compact = false,
-}: {
-  product: DriverPosProductDto;
-  compact?: boolean;
-}) {
-  return (
-    <ProductMedia
-      imageUrl={product.imageUrl}
-      alt={`Photo du produit ${product.name}`}
-      fit="contain"
-      className={compact ? "h-full rounded-2xl border-0" : "h-36 rounded-[18px]"}
-      imageClassName={compact ? "p-2" : "p-4 transition-transform duration-200 group-hover:scale-[1.03]"}
-      iconClassName={compact ? "h-6 w-6" : "h-8 w-8"}
-    />
   );
 }
 
