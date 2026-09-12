@@ -1,10 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { Search, Users, Wallet } from "lucide-react";
+import Link from "next/link";
+import { Banknote, Search, Users, Wallet } from "lucide-react";
 
 import { SalesPagination } from "@/components/ventes/sales-pagination";
 import { Card, CardContent } from "@/components/ui/card";
+import { buttonVariants } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -13,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import type { CustomerBalancesPageDto } from "@/types/customer-balance";
 
 const SEARCH_DEBOUNCE_MS = 350;
@@ -120,32 +122,67 @@ export function CustomerBalancesView({ initialPage }: CustomerBalancesViewProps)
                 <TableHead>Nom du compte</TableHead>
                 <TableHead className="text-right">Solde</TableHead>
                 <TableHead>Créé par</TableHead>
+                <TableHead className="text-right">Règlement</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {data.items.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-12 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={5} className="py-12 text-center text-sm text-muted-foreground">
                     {loading ? "Chargement…" : "Aucun client à afficher."}
                   </TableCell>
                 </TableRow>
               ) : (
-                data.items.map((row) => (
-                  <TableRow key={row.customerId}>
-                    <TableCell className="font-medium tabular-nums text-foreground">
-                      {row.accountCode}
-                    </TableCell>
-                    <TableCell className="text-foreground">{row.accountName}</TableCell>
-                    <TableCell
-                      className={`text-right font-medium tabular-nums ${
-                        row.balance > 0 ? "text-foreground" : "text-muted-foreground"
-                      }`}
-                    >
-                      {formatCurrency(row.balance)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{row.createdByUserName}</TableCell>
-                  </TableRow>
-                ))
+                data.items.map((row) => {
+                  // Same rule Règlements clients itself enforces (see
+                  // CustomerSettlementsView's `noDebt`): a settled customer
+                  // (balance 0, only ever shown via "Afficher les clients
+                  // soldés") has nothing to collect, so the action is
+                  // disabled here instead of linking to a dead-end form.
+                  const canSettle = row.balance > 0;
+                  return (
+                    <TableRow key={row.customerId}>
+                      <TableCell className="font-medium tabular-nums text-foreground">
+                        {row.accountCode}
+                      </TableCell>
+                      <TableCell className="text-foreground">{row.accountName}</TableCell>
+                      <TableCell
+                        className={`text-right font-medium tabular-nums ${
+                          row.balance > 0 ? "text-foreground" : "text-muted-foreground"
+                        }`}
+                      >
+                        {formatCurrency(row.balance)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{row.createdByUserName}</TableCell>
+                      <TableCell className="text-right">
+                        {canSettle ? (
+                          <Link
+                            href={`/comptabilite/reglements-clients?customerId=${row.customerId}`}
+                            className={cn(
+                              buttonVariants({ variant: "outline", size: "sm" }),
+                              "gap-1.5",
+                            )}
+                          >
+                            <Banknote aria-hidden="true" className="h-4 w-4" />
+                            <span className="hidden sm:inline">Régler</span>
+                          </Link>
+                        ) : (
+                          <span
+                            aria-disabled="true"
+                            title="Ce client n'a aucune créance à régler."
+                            className={cn(
+                              buttonVariants({ variant: "outline", size: "sm" }),
+                              "gap-1.5 pointer-events-none opacity-40",
+                            )}
+                          >
+                            <Banknote aria-hidden="true" className="h-4 w-4" />
+                            <span className="hidden sm:inline">Régler</span>
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>

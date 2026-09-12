@@ -40,11 +40,23 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("fr-FR");
 }
 
-export function CustomerSettlementsView() {
+type CustomerSettlementsViewProps = {
+  /**
+   * Pre-selected from ?customerId=... on /comptabilite/reglements-clients
+   * (see that page's server component) - already resolved and org-scoped
+   * server-side (getCustomerById), so it's trusted here exactly like a
+   * customer picked through the combobox or "N° client" box.
+   */
+  initialCustomer?: CustomerDto | null;
+};
+
+export function CustomerSettlementsView({
+  initialCustomer = null,
+}: CustomerSettlementsViewProps) {
   // Single source of truth for the selected client - fed identically by the
   // "Client" combobox (search) and the "N° client" box (GET
   // /api/customers/by-number, org-scoped). No parallel state.
-  const [customer, setCustomer] = React.useState<CustomerDto | null>(null);
+  const [customer, setCustomer] = React.useState<CustomerDto | null>(initialCustomer);
   const [journal, setJournal] = React.useState<CustomerJournalDto | null>(null);
   const [loadingJournal, setLoadingJournal] = React.useState(false);
 
@@ -83,6 +95,18 @@ export function CustomerSettlementsView() {
     },
     [],
   );
+
+  // Loads the journal for a customer arriving pre-selected via
+  // ?customerId=... (see the page component) - mirrors exactly what
+  // handleSelectCustomer does for a manual pick, just once on mount.
+  // Deferred to a microtask so the effect body itself never synchronously
+  // triggers loadJournal's own setLoadingJournal(true).
+  React.useEffect(() => {
+    if (!initialCustomer) return;
+    const id = initialCustomer.id;
+    queueMicrotask(() => void loadJournal(id, 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // The one entry point both fields use to change the selected client, so
   // "Client" and "N° client" can never drift apart. `null` = X / reset.
