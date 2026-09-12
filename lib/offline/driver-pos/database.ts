@@ -187,19 +187,51 @@ export type TransactionResult<T> = { ok: true; value: T } | { ok: false; error: 
  * every `db.run`/`db.execute` call it makes (the plugin's own per-call
  * transaction wrapping would otherwise nest inside this one, which SQLite
  * does not support).
+ *
+ * BUG CRITIQUE PHASE 3 bug hunt: a transaction left open by an earlier
+ * interrupted attempt on THIS SAME connection (app backgrounded/killed
+ * mid-transaction, or a commit/rollback that itself failed - see the catch
+ * below) would otherwise make every later beginTransaction() reject with
+ * something like "cannot start a transaction within a transaction", forever,
+ * until the app restarts and gets a fresh connection - `hydrateDriverOfflineCache`
+ * runs this same withTransaction on every context change, so it has had many
+ * chances to leave the shared connection in exactly this state before the
+ * driver ever taps "Encaisser". `isTransactionActive()` is the plugin's own
+ * official way to detect this; self-heal by rolling it back once before
+ * starting the new one, and log loudly so this is visible if it happens.
  */
 export async function withTransaction<T>(
   fn: (db: SQLiteDBConnection) => Promise<T>,
 ): Promise<TransactionResult<T>> {
   const db = await getDatabase();
   if (!db) return { ok: false, error: new Error("SQLite unavailable") };
+
+  try {
+    const active = await db.isTransactionActive();
+    if (active.result) {
+      console.error(
+        "[OFFLINE SALE] a transaction was already active on this connection - rolling it back before starting a new one",
+      );
+      try {
+        await db.rollbackTransaction();
+      } catch (staleRollbackError) {
+        warnOnce("Rollback of a stale leftover transaction failed.", staleRollbackError);
+      }
+    }
+  } catch (checkError) {
+    warnOnce("isTransactionActive check failed.", checkError);
+  }
+
+  let step: "beginTransaction" | "run" | "commitTransaction" = "beginTransaction";
   try {
     await db.beginTransaction();
+    step = "run";
     const value = await fn(db);
+    step = "commitTransaction";
     await db.commitTransaction();
     return { ok: true, value };
   } catch (error) {
-    console.error("[OFFLINE CACHE] SQLite error", error);
+    console.error("[OFFLINE CACHE] SQLite error", { step, error });
     try {
       await db.rollbackTransaction();
     } catch (rollbackError) {

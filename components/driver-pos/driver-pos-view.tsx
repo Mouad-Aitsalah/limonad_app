@@ -52,6 +52,7 @@ import { useNetworkState } from "@/hooks/use-network-status";
 import {
   countPendingOfflineSales,
   createOfflineSale,
+  describeOfflineSaleError,
   getOfflineSales,
   hydrateDriverOfflineCache,
   loadDriverPosContext,
@@ -617,43 +618,67 @@ export function DriverPosView({
     const handledCustomerId = selectedCustomer?.id ?? null;
     const soldAt = new Date().toISOString();
 
+    const offlineSaleInput = {
+      // Generated fresh here, as a plain local value - never a React
+      // useRef (see "3. IDENTIFIANT LOCAL"), so a later retry after a
+      // failed attempt always gets its own new key.
+      clientMutationId: crypto.randomUUID(),
+      organizationId,
+      driverId,
+      truckId: context.truck?.id ?? null,
+      tourId: context.tour?.id ?? null,
+      stockLocationId: context.stockLocationId ?? null,
+      customerId: handledCustomerId,
+      paymentMethod: "CASH" as const,
+      soldAt,
+      subtotalHT: totals.ht,
+      taxAmount: totals.tax,
+      totalTTC: totals.ttc,
+      // CASH is always paid in full on the spot - never a credit line.
+      paidAmount: totals.ttc,
+      creditAmount: 0,
+      lines: cartRows.map((row) => ({
+        productId: row.productId,
+        productNameSnapshot: row.product.name,
+        quantity: row.quantity,
+        unitPriceSnapshot: row.product.salePriceTTC,
+        taxRateSnapshot: row.product.taxRate,
+        discountSnapshot: 0,
+        totalHT: row.totals.totalHT,
+        taxAmount: row.totals.taxAmount,
+        totalTTC: row.totals.totalTTC,
+      })),
+    };
+
+    // BUG CRITIQUE PHASE 3 bug hunt - "3. VÉRIFIER LE PAYLOAD AVANT
+    // INSERTION": SQLite must never see undefined/NaN in a NOT NULL column.
+    // Logged in full (no secrets - this is only ids/amounts) so a failed
+    // attempt's exact payload is visible on the device without ADB, then
+    // validated BEFORE createOfflineSale is even called - a bad payload is
+    // now caught here instead of surfacing as an opaque SQLite error.
+    console.log("[OFFLINE SALE] payload", offlineSaleInput);
+    const payloadIssue = findOfflineSalePayloadIssue(offlineSaleInput);
+    if (payloadIssue) {
+      console.error("[OFFLINE SALE] invalid payload - refusing to call createOfflineSale", {
+        issue: payloadIssue,
+        payload: offlineSaleInput,
+      });
+      toast.error(`Offline SQLite: ${payloadIssue}`);
+      return;
+    }
+
     setBusy(true);
     try {
-      const result = await createOfflineSale({
-        // Generated fresh here, as a plain local value - never a React
-        // useRef (see "3. IDENTIFIANT LOCAL"), so a later retry after a
-        // failed attempt always gets its own new key.
-        clientMutationId: crypto.randomUUID(),
-        organizationId,
-        driverId,
-        truckId: context.truck?.id ?? null,
-        tourId: context.tour?.id ?? null,
-        stockLocationId: context.stockLocationId ?? null,
-        customerId: handledCustomerId,
-        paymentMethod: "CASH",
-        soldAt,
-        subtotalHT: totals.ht,
-        taxAmount: totals.tax,
-        totalTTC: totals.ttc,
-        // CASH is always paid in full on the spot - never a credit line.
-        paidAmount: totals.ttc,
-        creditAmount: 0,
-        lines: cartRows.map((row) => ({
-          productId: row.productId,
-          productNameSnapshot: row.product.name,
-          quantity: row.quantity,
-          unitPriceSnapshot: row.product.salePriceTTC,
-          taxRateSnapshot: row.product.taxRate,
-          discountSnapshot: 0,
-          totalHT: row.totals.totalHT,
-          taxAmount: row.totals.taxAmount,
-          totalTTC: row.totals.totalTTC,
-        })),
-      });
+      const result = await createOfflineSale(offlineSaleInput);
 
       if (!result.ok) {
-        console.error("[OFFLINE SALE] creation failed", result.error);
-        toast.error(OFFLINE_SAVE_ERROR_MESSAGE);
+        const message = describeOfflineSaleError(result.error);
+        console.error("[OFFLINE SALE] creation failed", { message, error: result.error });
+        // TEMPORARY (Phase 3 bug hunt) - shows the exact SQLite/plugin
+        // failure reason so it can be read directly on a real device
+        // without ADB. Revert to the plain OFFLINE_SAVE_ERROR_MESSAGE once
+        // the root cause is confirmed fixed.
+        toast.error(`Offline SQLite: ${message}`);
         return;
       }
 
@@ -1360,6 +1385,69 @@ function StateCard({ message }: { message: string }) {
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * BUG CRITIQUE PHASE 3 bug hunt - "3. VÉRIFIER LE PAYLOAD AVANT INSERTION":
+ * returns a short, human-readable description of the FIRST bad field found,
+ * or null if the payload is clean. Every numeric column in offline_sales/
+ * offline_sale_lines is NOT NULL, so a NaN/undefined here would otherwise
+ * only ever surface later as an opaque SQLite error.
+ */
+function findOfflineSalePayloadIssue(input: {
+  organizationId: string;
+  driverId: string;
+  soldAt: string;
+  subtotalHT: number;
+  taxAmount: number;
+  totalTTC: number;
+  paidAmount: number;
+  creditAmount: number;
+  lines: Array<{
+    productId: string;
+    productNameSnapshot: string;
+    quantity: number;
+    unitPriceSnapshot: number;
+    taxRateSnapshot: number;
+    discountSnapshot: number;
+    totalHT: number;
+    taxAmount: number;
+    totalTTC: number;
+  }>;
+}): string | null {
+  if (!input.organizationId) return "organizationId manquant";
+  if (!input.driverId) return "driverId manquant";
+  if (!input.soldAt) return "soldAt manquant";
+
+  const numericFields: Array<[string, number]> = [
+    ["subtotalHT", input.subtotalHT],
+    ["taxAmount", input.taxAmount],
+    ["totalTTC", input.totalTTC],
+    ["paidAmount", input.paidAmount],
+    ["creditAmount", input.creditAmount],
+  ];
+  for (const [name, value] of numericFields) {
+    if (!Number.isFinite(value)) return `${name} invalide (${String(value)})`;
+  }
+
+  if (input.lines.length === 0) return "aucune ligne dans le panier";
+  for (const line of input.lines) {
+    if (!line.productId) return "productId manquant sur une ligne";
+    if (!line.productNameSnapshot) return `productNameSnapshot manquant (${line.productId})`;
+    const lineNumericFields: Array<[string, number]> = [
+      ["quantity", line.quantity],
+      ["unitPriceSnapshot", line.unitPriceSnapshot],
+      ["taxRateSnapshot", line.taxRateSnapshot],
+      ["discountSnapshot", line.discountSnapshot],
+      ["totalHT", line.totalHT],
+      ["taxAmount", line.taxAmount],
+      ["totalTTC", line.totalTTC],
+    ];
+    for (const [name, value] of lineNumericFields) {
+      if (!Number.isFinite(value)) return `ligne ${line.productId}: ${name} invalide (${String(value)})`;
+    }
+  }
+  return null;
 }
 
 function computeLine(product: DriverPosProductDto, line: CartLine) {
