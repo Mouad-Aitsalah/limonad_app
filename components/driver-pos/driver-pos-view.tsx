@@ -50,7 +50,6 @@ import { useCompanyIdentity } from "@/hooks/use-company-identity";
 import { useDriverRuntime } from "@/hooks/use-driver-runtime";
 import { useNetworkState } from "@/hooks/use-network-status";
 import {
-  countPendingOfflineSales,
   createOfflineSale,
   describeOfflineSaleError,
   getOfflineDbDiagnostic,
@@ -58,7 +57,9 @@ import {
   hydrateDriverOfflineCache,
   loadDriverPosContext,
   type OfflineDbDiagnostic,
+  type OfflineSaleWithLines,
 } from "@/lib/offline/driver-pos";
+import { OfflineSalesDialog, type OfflineSaleRowData } from "@/components/driver-pos/offline-sales-dialog";
 import { roundMoney } from "@/lib/money";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
@@ -180,8 +181,13 @@ export function DriverPosView({
   const [offlineTicketReference, setOfflineTicketReference] = React.useState<string | null>(null);
   // Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": always read from SQLite,
   // never derived from in-memory state, so it stays correct across a remount
-  // (see sales-store.ts's countPendingOfflineSales / this task's "TEST C").
-  const [pendingOfflineCount, setPendingOfflineCount] = React.useState(0);
+  // (see this task's "TEST C"). `pendingOfflineCount` is just
+  // `offlinePendingSales.length` - both are refreshed together (see
+  // refreshOfflinePendingSales below) so the badge and the local "Ventes
+  // hors connexion" dialog (see "CORRECTION UX OFFLINE") can never disagree.
+  const [offlinePendingSales, setOfflinePendingSales] = React.useState<OfflineSaleWithLines[]>([]);
+  const pendingOfflineCount = offlinePendingSales.length;
+  const [offlineSalesDialogOpen, setOfflineSalesDialogOpen] = React.useState(false);
   const { identity } = useCompanyIdentity();
   const [sharingInvoice, setSharingInvoice] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -216,19 +222,39 @@ export function DriverPosView({
     };
   }, []);
 
-  // Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": (re)reads the SQLite
-  // count on mount and whenever the driver identity changes, plus every time
-  // an offline sale is created below (validateOfflineCashSale).
-  const refreshPendingOfflineCount = React.useCallback(async () => {
+  // Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE" / "CORRECTION UX OFFLINE":
+  // (re)reads every still-local PENDING_SYNC sale from SQLite on mount and
+  // whenever the driver identity changes, plus every time an offline sale
+  // is created below (validateOfflineCashSale) - one read feeds both the
+  // badge's count and the local dialog's list, so a new sale is reflected
+  // in both immediately (see this task's own "6. RAFRAÎCHISSEMENT").
+  const refreshOfflinePendingSales = React.useCallback(async () => {
     const organizationId = currentUser?.organizationId ?? null;
     if (!organizationId) return;
-    const count = await countPendingOfflineSales({ organizationId, driverId: context.driver.id });
-    setPendingOfflineCount(count);
+    const sales = await getOfflineSales({ organizationId, driverId: context.driver.id });
+    setOfflinePendingSales(sales.filter((sale) => sale.syncStatus === "PENDING_SYNC"));
   }, [currentUser, context.driver.id]);
 
   React.useEffect(() => {
-    queueMicrotask(() => void refreshPendingOfflineCount());
-  }, [refreshPendingOfflineCount]);
+    queueMicrotask(() => void refreshOfflinePendingSales());
+  }, [refreshOfflinePendingSales]);
+
+  // "CORRECTION UX OFFLINE" - "2. SOURCE SQLITE": customer names are
+  // resolved from the already-loaded context.customers (server preload
+  // online, cache-reconstructed offline - see pos-context.ts) - never a
+  // server fetch, matching this task's own "aucun fetch serveur
+  // obligatoire".
+  const offlineSaleRows = React.useMemo<OfflineSaleRowData[]>(
+    () =>
+      offlinePendingSales.map((sale) => ({
+        sale,
+        customerName: sale.customerId
+          ? context.customers.find((customer) => customer.id === sale.customerId)?.name ??
+            "Client comptoir"
+          : "Client comptoir",
+      })),
+    [offlinePendingSales, context.customers],
+  );
 
   // TEMPORARY dev diagnostic (Phase 3 bug hunt) - read once on mount, not
   // re-read on every render; the schema version doesn't change while the
@@ -750,7 +776,7 @@ export function DriverPosView({
         driverRuntime.markCustomerHandled(handledCustomerId);
       }
       toast.success(`Vente enregistrée hors connexion. Référence : ${localReference}`);
-      await Promise.allSettled([refreshContext(), refreshPendingOfflineCount()]);
+      await Promise.allSettled([refreshContext(), refreshOfflinePendingSales()]);
     } finally {
       setBusy(false);
     }
@@ -1021,6 +1047,7 @@ export function DriverPosView({
         cacheDiagnostic={cacheDiagnostic}
         dbDiagnostic={dbDiagnostic}
         pendingOfflineCount={pendingOfflineCount}
+        onOpenOfflineSales={() => setOfflineSalesDialogOpen(true)}
       />
 
       <div
@@ -1247,6 +1274,11 @@ export function DriverPosView({
         }}
       />
       <ReceiptPrint sale={lastSale} offlineReference={offlineTicketReference} />
+      <OfflineSalesDialog
+        open={offlineSalesDialogOpen}
+        onOpenChange={setOfflineSalesDialogOpen}
+        sales={offlineSaleRows}
+      />
     </div>
   );
 }
@@ -1264,6 +1296,7 @@ function DriverInvoiceHeader({
   cacheDiagnostic,
   dbDiagnostic,
   pendingOfflineCount,
+  onOpenOfflineSales,
 }: {
   driverName: string;
   truckCode: string;
@@ -1286,6 +1319,9 @@ function DriverInvoiceHeader({
   /** Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": count of local sales
    *  still PENDING_SYNC, read straight from SQLite. */
   pendingOfflineCount: number;
+  /** "CORRECTION UX OFFLINE": opens the local "Ventes hors connexion"
+   *  dialog - never a navigation to /driver/ventes. */
+  onOpenOfflineSales: () => void;
 }) {
   const now = new Date();
   const date = now.toLocaleDateString("fr-FR", {
@@ -1316,9 +1352,14 @@ function DriverInvoiceHeader({
         </Link>
         <NetworkStatusBadge />
         {pendingOfflineCount > 0 ? (
+          // "CORRECTION UX OFFLINE - 1. COMPTEUR CLIQUABLE": a real
+          // <button>, styled exactly like the badge (base-ui's `render`
+          // swaps the underlying tag - see components/ui/badge.tsx) - opens
+          // the local dialog below, never a navigation.
           <Badge
             variant="outline"
-            className="shrink-0 border-amber-200 bg-amber-50 text-amber-700"
+            render={<button type="button" onClick={onOpenOfflineSales} />}
+            className="shrink-0 cursor-pointer border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
           >
             {pendingOfflineCount} vente{pendingOfflineCount > 1 ? "s" : ""} en attente
           </Badge>
