@@ -26,10 +26,28 @@ import { SCHEMA_STATEMENTS, SCHEMA_VERSION } from "./schema";
  */
 
 const DB_NAME = "comdis_driver_pos";
-/** Bounds how long "open the database" can ever take - a stuck web-store
- *  init (jeep-sqlite not loading, wasm 404, whatever) must resolve to
- *  "unavailable" within a bounded time, never hang the caller forever. */
-const OPEN_TIMEOUT_MS = 6000;
+/**
+ * Bounds how long the WEB fallback's store init can take before we give up
+ * on it - jeep-sqlite is known to sometimes never settle at all (its wasm
+ * failing to load leaves `initWebStore()` permanently pending, see Phase 1's
+ * own report). Native Android/iOS never used this timeout even in Phase 1's
+ * intent - a real native `createConnection()`/`.open()` either resolves or
+ * rejects on its own; racing it against an arbitrary clock only risked
+ * abandoning a slow-but-succeeding open. That abandonment is the root cause
+ * of "PHASE 2 BUG CRITIQUE": once the timeout fired, `getDatabase()` reset
+ * `openPromise` to `null` and returned `null` for that call, but the
+ * original `openDatabase()` promise kept running in the background and
+ * still finished its own `createConnection()`/`.open()` against the native
+ * side. The NEXT `getDatabase()` call then started a brand new
+ * `openDatabase()`, calling `createConnection()` again for a database the
+ * native plugin already had open - depending on timing this either threw
+ * ("already exists") or raced the schema/write against a second handle,
+ * and any read that hit the failing path came back as an empty result
+ * (`withDatabase` returning `null` -> `getCachedProducts` etc. returning
+ * `[]`) instead of the real cached rows. See this timeout's new, narrower
+ * scope below - applied ONLY around the web-only `ensureWebStore()` step.
+ */
+const WEB_STORE_TIMEOUT_MS = 6000;
 
 let sqlitePlugin: SQLiteConnection | null = null;
 let webStoreReady: Promise<void> | null = null;
@@ -47,18 +65,47 @@ function getPlugin(): SQLiteConnection {
   return sqlitePlugin;
 }
 
+/** Races `promise` against a timeout WITHOUT cancelling `promise` itself -
+ *  only ever used for the web-only jeep-sqlite init below, never for a
+ *  native open (see WEB_STORE_TIMEOUT_MS's own doc comment for why). */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function ensureWebStore(): Promise<void> {
   if (Capacitor.getPlatform() !== "web") return;
   if (!webStoreReady) {
-    webStoreReady = (async () => {
-      const { defineCustomElements } = await import("jeep-sqlite/loader");
-      defineCustomElements(window);
-      if (!document.querySelector("jeep-sqlite")) {
-        document.body.appendChild(document.createElement("jeep-sqlite"));
-      }
-      await customElements.whenDefined("jeep-sqlite");
-      await getPlugin().initWebStore();
-    })();
+    webStoreReady = withTimeout(
+      (async () => {
+        const { defineCustomElements } = await import("jeep-sqlite/loader");
+        defineCustomElements(window);
+        if (!document.querySelector("jeep-sqlite")) {
+          document.body.appendChild(document.createElement("jeep-sqlite"));
+        }
+        await customElements.whenDefined("jeep-sqlite");
+        await getPlugin().initWebStore();
+      })(),
+      WEB_STORE_TIMEOUT_MS,
+      "jeep-sqlite web store init",
+    ).catch((error) => {
+      // A genuinely stuck web store must not permanently block this module -
+      // reset so a LATER call can try again, e.g. after a page reload fixed
+      // whatever made the wasm 404. Never affects native (early return above).
+      webStoreReady = null;
+      throw error;
+    });
   }
   return webStoreReady;
 }
@@ -82,35 +129,35 @@ async function openDatabase(): Promise<SQLiteDBConnection> {
   return db;
 }
 
-function withOpenTimeout(promise: Promise<SQLiteDBConnection>): Promise<SQLiteDBConnection> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`SQLite open timed out after ${OPEN_TIMEOUT_MS}ms`)),
-      OPEN_TIMEOUT_MS,
-    );
-    promise.then(
-      (db) => {
-        clearTimeout(timer);
-        resolve(db);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
-/** Returns the open connection, or `null` if SQLite isn't usable here. */
+/**
+ * Returns the open connection, or `null` if SQLite isn't usable here.
+ *
+ * No artificial timeout wraps `openDatabase()` itself - on native Android/
+ * iOS a real `createConnection()`/`.open()` call either resolves or rejects
+ * on its own; a real production bug came from doing that here anyway (see
+ * WEB_STORE_TIMEOUT_MS's doc comment above). The only bounded-time step is
+ * the web-only jeep-sqlite init inside `ensureWebStore()`.
+ */
 export async function getDatabase(): Promise<SQLiteDBConnection | null> {
   if (!openPromise) {
-    openPromise = withOpenTimeout(openDatabase()).catch((error) => {
+    openPromise = openDatabase().catch((error) => {
+      console.error("[OFFLINE CACHE] SQLite error", error);
       warnOnce("SQLite unavailable - offline cache disabled for this session.", error);
       openPromise = null;
       return null;
     });
   }
   return openPromise;
+}
+
+/**
+ * Explicit "is SQLite actually usable right now" check, distinct from a
+ * store function returning zero rows - lets pos-context.ts tell "no cache
+ * yet" apart from "the cache itself is broken" (see this task's "8. CACHE
+ * ABSENT VS CACHE VIDE").
+ */
+export async function isDatabaseAvailable(): Promise<boolean> {
+  return (await getDatabase()) !== null;
 }
 
 /**
@@ -125,6 +172,7 @@ export async function withDatabase<T>(
   try {
     return await fn(db);
   } catch (error) {
+    console.error("[OFFLINE CACHE] SQLite error", error);
     warnOnce("SQLite operation failed.", error);
     return null;
   }
@@ -151,6 +199,7 @@ export async function withTransaction<T>(
     await db.commitTransaction();
     return { ok: true, value };
   } catch (error) {
+    console.error("[OFFLINE CACHE] SQLite error", error);
     try {
       await db.rollbackTransaction();
     } catch (rollbackError) {

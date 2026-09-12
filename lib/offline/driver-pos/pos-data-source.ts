@@ -8,9 +8,18 @@ import { getNetworkState } from "./network-status";
 
 export type DriverPosContextSource = "server" | "cache";
 
+export type DriverPosCacheCounts = { products: number; customers: number; stock: number };
+
 export type DriverPosContextResult =
-  | { ok: true; source: DriverPosContextSource; context: DriverPosContextDto; cacheSyncedAt: string | null }
-  | { ok: false };
+  | { ok: true; source: "server"; context: DriverPosContextDto; cacheSyncedAt: null; cacheCounts: null }
+  | {
+      ok: true;
+      source: "cache";
+      context: DriverPosContextDto;
+      cacheSyncedAt: string;
+      cacheCounts: DriverPosCacheCounts;
+    }
+  | { ok: false; reason: "NOT_FOUND" | "ERROR" };
 
 export type LoadDriverPosContextParams = {
   organizationId: string;
@@ -33,8 +42,14 @@ export type LoadDriverPosContextParams = {
  * identically regardless of where the data came from - no OnlineDriverPos/
  * OfflineDriverPos split (see this task's "3. NE PAS DUPLIQUER L'UI").
  *
- * `ok: false` means neither a server response nor a usable cache exists -
- * see this task's "14. CACHE ABSENT". Never throws.
+ * `ok: false` distinguishes NOT_FOUND (no cache ever written for this
+ * identity) from ERROR (SQLite itself failed) - see this task's own
+ * "8. CACHE ABSENT VS CACHE VIDE". Whether an `ok: true` cache result with
+ * an empty product list is still safe to apply is the CALLER's decision
+ * (driver-pos-view.tsx keeps its last good context rather than blanking the
+ * POS - see this task's "7. NE JAMAIS EFFACER UN CONTEXTE VALIDE"), not
+ * this function's - it only ever reports what it honestly found. Never
+ * throws.
  */
 export async function loadDriverPosContext(
   params: LoadDriverPosContextParams,
@@ -55,7 +70,7 @@ export async function loadDriverPosContext(
             userName: params.userName,
             context: payload.context,
           });
-          return { ok: true, source: "server", context: payload.context, cacheSyncedAt: null };
+          return { ok: true, source: "server", context: payload.context, cacheSyncedAt: null, cacheCounts: null };
         }
       }
     } catch {
@@ -69,6 +84,14 @@ export async function loadDriverPosContext(
     organizationId: params.organizationId,
     driverId: params.driverId,
   });
-  if (!cached) return { ok: false };
-  return { ok: true, source: "cache", context: cached.context, cacheSyncedAt: cached.syncedAt };
+  if (cached.status === "FOUND") {
+    return {
+      ok: true,
+      source: "cache",
+      context: cached.context,
+      cacheSyncedAt: cached.syncedAt,
+      cacheCounts: cached.counts,
+    };
+  }
+  return { ok: false, reason: cached.status === "ERROR" ? "ERROR" : "NOT_FOUND" };
 }

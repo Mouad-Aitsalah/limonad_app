@@ -5,6 +5,7 @@ import type { CustomerDto, DriverPosContextDto, DriverPosProductDto } from "@/ty
 
 import { getCachedCustomers, getCachedProducts, getCachedTruckStock } from "./cache-store";
 import { getDriverOfflineContext } from "./context-store";
+import { isDatabaseAvailable } from "./database";
 
 export type CachedDriverPosContext = {
   context: DriverPosContextDto;
@@ -13,16 +14,44 @@ export type CachedDriverPosContext = {
 };
 
 /**
+ * Tri-state result - see this task's own "8. CACHE ABSENT VS CACHE VIDE":
+ * never collapse "SQLite itself is broken right now" and "no cache has ever
+ * been written for this identity" into the same empty-looking value. A
+ * caller must never treat ERROR the same as a legitimately empty catalogue.
+ *
+ *  - FOUND: a cached offline_context row exists for this exact
+ *    (organizationId, driverId) - `context.products`/`customers` reflect
+ *    whatever was actually cached, even if that happens to be empty (a real
+ *    org with zero sellable products, for instance).
+ *  - NOT_FOUND: SQLite is reachable, but there is no cached context row for
+ *    this identity yet (first-ever load on this device, or a genuinely
+ *    different driver's device).
+ *  - ERROR: SQLite could not be opened/queried at all right now. The caller
+ *    must keep whatever context it already has in memory - never replace it
+ *    with this.
+ */
+export type CachedDriverPosContextResult =
+  | {
+      status: "FOUND";
+      context: DriverPosContextDto;
+      syncedAt: string;
+      /** Raw per-table row counts, for the temporary dev cache diagnostic
+       *  (see driver-pos-view.tsx) - independent of how the DTO merges them. */
+      counts: { products: number; customers: number; stock: number };
+    }
+  | { status: "NOT_FOUND" }
+  | { status: "ERROR" };
+
+/**
  * Phase 2: reconstructs the SAME DriverPosContextDto shape the online
  * `GET /api/driver/pos` returns, but entirely from SQLite - so
  * driver-pos-view.tsx can render unchanged regardless of where the data
  * came from (see this task's own "3. NE PAS DUPLIQUER L'UI").
  *
- * Returns `null` when there is no usable cache for this exact
- * (organizationId, driverId) - see this task's "14. CACHE ABSENT" and
- * "15. CACHE D'UNE AUTRE IDENTITÉ": every read below is scoped to the pair
- * given here, so a different driver's (or organisation's) cache on the same
- * device can never be returned.
+ * Every read below is scoped to the exact (organizationId, driverId) given
+ * here (see this task's "13. ISOLATION" / "15. CACHE D'UNE AUTRE IDENTITÉ"),
+ * so a different driver's (or organisation's) cache on the same device can
+ * never be returned.
  *
  * Fields the cache doesn't carry (Phase 1 only stored what the POS grid/
  * cart/picker actually read - see cache-store.ts's own doc comments) get a
@@ -39,15 +68,30 @@ export type CachedDriverPosContext = {
 export async function loadCachedDriverPosContext(params: {
   organizationId: string;
   driverId: string;
-}): Promise<CachedDriverPosContext | null> {
+}): Promise<CachedDriverPosContextResult> {
+  if (!(await isDatabaseAvailable())) {
+    console.error("[OFFLINE CACHE] SQLite error", "database unavailable for read");
+    return { status: "ERROR" };
+  }
+
   const offlineContext = await getDriverOfflineContext(params);
-  if (!offlineContext) return null;
+  if (!offlineContext) {
+    console.log("[OFFLINE CACHE] no cached context found for", {
+      organizationId: params.organizationId,
+      driverId: params.driverId,
+    });
+    return { status: "NOT_FOUND" };
+  }
 
   const [products, customers, stock] = await Promise.all([
     getCachedProducts(params),
     getCachedCustomers(params),
     getCachedTruckStock(params),
   ]);
+
+  console.log("[OFFLINE CACHE] products loaded", products.length);
+  console.log("[OFFLINE CACHE] customers loaded", customers.length);
+  console.log("[OFFLINE CACHE] stock loaded", stock.length);
 
   const stockByProductId = new Map(stock.map((row) => [row.productId, row]));
 
@@ -112,5 +156,10 @@ export async function loadCachedDriverPosContext(params: {
     bankAccounts: [],
   };
 
-  return { context, syncedAt: offlineContext.syncedAt };
+  return {
+    status: "FOUND",
+    context,
+    syncedAt: offlineContext.syncedAt,
+    counts: { products: products.length, customers: customers.length, stock: stock.length },
+  };
 }

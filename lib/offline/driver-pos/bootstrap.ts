@@ -24,6 +24,11 @@ export type HydrateDriverOfflineCacheInput = {
  * can never throw - every store call already fails soft (see database.ts),
  * and the outer try/catch here is a last-resort guard on top of that, so a
  * bug in this file can still never break the online POS flow that called it.
+ *
+ * Temporary diagnostic logging (Phase 2 bug hunt - "products disappear
+ * offline"): every save's actual return value is now checked and logged, so
+ * a real device log can show precisely which table (if any) failed to
+ * write, instead of the previous silent await that hid a `false` result.
  */
 export async function hydrateDriverOfflineCache(
   input: HydrateDriverOfflineCacheInput,
@@ -31,8 +36,10 @@ export async function hydrateDriverOfflineCache(
   const { context, organizationId, organizationName, userId, userName } = input;
   const driverId = context.driver.id;
 
+  console.log("[OFFLINE CACHE] identity", { organizationId, driverId });
+
   try {
-    await saveDriverOfflineContext({
+    const contextSaved = await saveDriverOfflineContext({
       organizationId,
       organizationName,
       userId,
@@ -46,8 +53,11 @@ export async function hydrateDriverOfflineCache(
       tourCode: context.tour?.code ?? null,
       tourStatus: context.tour?.status ?? null,
     });
+    if (!contextSaved) {
+      console.error("[OFFLINE CACHE] SQLite error", "saveDriverOfflineContext returned false");
+    }
 
-    await saveCachedProducts(
+    const productsSaved = await saveCachedProducts(
       { organizationId, driverId },
       context.products.map((product) => ({
         id: product.id,
@@ -63,8 +73,13 @@ export async function hydrateDriverOfflineCache(
         supplierName: product.supplierName ?? null,
       })),
     );
+    console.log(
+      "[OFFLINE CACHE] products saved",
+      productsSaved ? context.products.length : 0,
+      productsSaved ? "" : "(write failed - see prior SQLite error)",
+    );
 
-    await saveCachedCustomers(
+    const customersSaved = await saveCachedCustomers(
       { organizationId, driverId },
       context.customers.map((customer) => ({
         id: customer.id,
@@ -74,12 +89,17 @@ export async function hydrateDriverOfflineCache(
         status: customer.status,
       })),
     );
+    console.log(
+      "[OFFLINE CACHE] customers saved",
+      customersSaved ? context.customers.length : 0,
+      customersSaved ? "" : "(write failed - see prior SQLite error)",
+    );
 
     // Truck stock is derived from the same product list, not a second
     // endpoint - DriverPosProductDto.availableQuantity already IS the
     // truck-scoped stock quantity (see getDriverPosContext server-side).
     if (context.truck?.id) {
-      await saveCachedTruckStock(
+      const stockSaved = await saveCachedTruckStock(
         { organizationId, driverId, truckId: context.truck.id },
         context.products.map((product) => ({
           productId: product.id,
@@ -88,8 +108,16 @@ export async function hydrateDriverOfflineCache(
           availableQuantity: product.availableQuantity,
         })),
       );
+      console.log(
+        "[OFFLINE CACHE] stock saved",
+        stockSaved ? context.products.length : 0,
+        stockSaved ? "" : "(write failed - see prior SQLite error)",
+      );
+    } else {
+      console.log("[OFFLINE CACHE] stock saved 0 (no truck on this context)");
     }
   } catch (error) {
+    console.error("[OFFLINE CACHE] SQLite error", error);
     console.warn("[offline/driver-pos] hydrateDriverOfflineCache failed.", error);
   }
 }

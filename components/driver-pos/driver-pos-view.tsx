@@ -102,11 +102,21 @@ export function DriverPosView({
   // DUPLIQUER L'UI").
   const [contextSource, setContextSource] = React.useState<"server" | "cache">("server");
   const [cacheSyncedAt, setCacheSyncedAt] = React.useState<string | null>(null);
-  // Only ever set when we truly have nothing to show (offline AND no cache
-  // - see this task's "14. CACHE ABSENT"). Checked at render time together
-  // with `context.products.length === 0` so a perfectly good, already-
-  // loaded POS is never yanked away by a later failed refresh attempt.
+  // Only ever set when the current `context` in memory could NOT be
+  // refreshed (server unreachable AND the cache read didn't produce a
+  // usable, non-empty result) - see this task's "14. CACHE ABSENT" and
+  // "7. NE JAMAIS EFFACER UN CONTEXTE VALIDE". Checked at render time
+  // together with `context.products.length === 0` so a perfectly good,
+  // already-loaded POS is never yanked away by a later failed attempt -
+  // it only ever blocks rendering when there is truly nothing to show.
   const [contextUnavailable, setContextUnavailable] = React.useState(false);
+  // TEMPORARY dev diagnostic (Phase 2 bug hunt - "10.10-11" of that task) -
+  // the raw row counts from the last cache read attempt, shown under the
+  // network badge so this can be checked on a real device without
+  // DevTools. Remove once the offline read path is confirmed solid.
+  const [cacheDiagnostic, setCacheDiagnostic] = React.useState<
+    { products: number; customers: number; stock: number } | "unavailable" | null
+  >(null);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
   // Last product tapped in the mobile "Produits" launcher - drives the
@@ -436,14 +446,42 @@ export function DriverPosView({
       driverId: context.driver.id,
       customerId: selectedCustomer?.id ?? null,
     });
+
     if (!result.ok) {
+      // "14. CACHE ABSENT" - no server AND nothing usable in SQLite either
+      // (NOT_FOUND) or SQLite itself failed (ERROR). Either way, `context`
+      // in memory is left completely untouched - see "7. NE JAMAIS EFFACER
+      // UN CONTEXTE VALIDE".
+      console.log("[OFFLINE CACHE] refreshContext: no usable context -", result.reason);
       setContextUnavailable(true);
+      setCacheDiagnostic("unavailable");
       return;
     }
+
+    if (result.source === "cache") {
+      setCacheDiagnostic(result.cacheCounts);
+      if (result.context.products.length === 0 && context.products.length > 0) {
+        // "7. NE JAMAIS EFFACER UN CONTEXTE VALIDE", exact scenario: the
+        // cache technically answered but with 0 products while the POS
+        // already has real ones showing - a read glitch (or a device that
+        // hasn't hydrated yet), never a legitimate reason to blank the
+        // screen. Keep the last good `context`, just flag it as stale.
+        console.log(
+          "[OFFLINE CACHE] cache returned 0 products while",
+          context.products.length,
+          "were already shown - keeping current context",
+        );
+        setContextUnavailable(true);
+        return;
+      }
+    } else {
+      setCacheDiagnostic(null);
+    }
+
     setContextUnavailable(false);
     setContext(result.context);
     setContextSource(result.source);
-    setCacheSyncedAt(result.cacheSyncedAt);
+    setCacheSyncedAt(result.source === "cache" ? result.cacheSyncedAt : null);
   }
 
   // Whenever connectivity and the context's own source disagree, resync:
@@ -767,6 +805,7 @@ export function DriverPosView({
         lastSale={lastSale}
         onPrintLastSale={printLastSale}
         cacheSyncedAt={contextSource === "cache" ? cacheSyncedAt : null}
+        cacheDiagnostic={cacheDiagnostic}
       />
 
       <div
@@ -1006,6 +1045,7 @@ function DriverInvoiceHeader({
   lastSale,
   onPrintLastSale,
   cacheSyncedAt,
+  cacheDiagnostic,
 }: {
   driverName: string;
   truckCode: string;
@@ -1017,6 +1057,8 @@ function DriverInvoiceHeader({
   /** Set only while the POS is reading from the offline cache (see "11.
    *  ÉTAT DU CACHE") - the real offline_context.syncedAt, never a guess. */
   cacheSyncedAt?: string | null;
+  /** TEMPORARY dev diagnostic - see driver-pos-view.tsx's own state comment. */
+  cacheDiagnostic?: { products: number; customers: number; stock: number } | "unavailable" | null;
 }) {
   const now = new Date();
   const date = now.toLocaleDateString("fr-FR", {
@@ -1058,6 +1100,17 @@ function DriverInvoiceHeader({
           </Button>
         ) : null}
       </div>
+
+      {/* TEMPORARY dev diagnostic (Phase 2 bug hunt) - lets the offline
+          cache be checked on a real device without DevTools. Remove once
+          the offline read path is confirmed solid on Android. */}
+      {cacheDiagnostic ? (
+        <p className="text-[11px] text-muted-foreground">
+          {cacheDiagnostic === "unavailable"
+            ? "Cache indisponible"
+            : `Cache : ${cacheDiagnostic.products} produits · ${cacheDiagnostic.customers} clients · ${cacheDiagnostic.stock} stocks`}
+        </p>
+      ) : null}
 
       {/* Metadata strip: hidden on mobile (< xl) so the phone cart goes
           straight to Client / N° client / Paiement / panier. Screen display
