@@ -643,6 +643,16 @@ export interface DriverPosProductDto {
    *  mobile "Fournisseur" filter only - never affects visibility or stock. */
   supplierId?: string | null;
   supplierName?: string | null;
+  /** PHASE 4A.1 - signed HMAC token attesting salePriceTTC was genuinely
+   *  issued by the server just now (see lib/server/offline-price-token.ts).
+   *  Cached offline alongside the price and frozen onto the offline sale
+   *  line at the moment of sale, so a later sync can trust the price the
+   *  driver actually saw even if the product's price has since changed.
+   *  Optional: this DTO is shared with the counter POS and the generic
+   *  product-search preload (counter-sales.ts / products.ts), neither of
+   *  which issues or needs a token - only getDriverPosContext (online) and
+   *  the offline cache reconstruction (pos-context.ts) ever set it. */
+  priceToken?: string;
 }
 
 /** Active 5141 accounting account, offered as the "Compte bancaire" choice
@@ -788,6 +798,9 @@ export interface SaleDto {
   bankAccountingAccountName?: string | null;
   createdByUserName: string;
   validatedAt?: string | null;
+  /** PHASE 4A.1 - the real moment of sale when known and different from
+   *  createdAt (an offline sale synced later) - null otherwise. */
+  soldAt?: string | null;
   createdAt: string;
   /** Optimistic-lock token for admin revise / cancel. */
   updatedAt?: string;

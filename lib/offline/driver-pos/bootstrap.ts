@@ -71,6 +71,12 @@ export async function hydrateDriverOfflineCache(
         availableQuantity: product.availableQuantity,
         supplierId: product.supplierId ?? null,
         supplierName: product.supplierName ?? null,
+        // PHASE 4A.1 - always set for a real driver POS context
+        // (getDriverPosContext signs one per product); null only in the
+        // unlikely case of a DriverPosProductDto that never got one (e.g.
+        // a future caller of hydrateDriverOfflineCache that isn't the
+        // driver POS - see DriverPosProductDto's own doc comment).
+        priceToken: product.priceToken ?? null,
       })),
     );
     console.log(

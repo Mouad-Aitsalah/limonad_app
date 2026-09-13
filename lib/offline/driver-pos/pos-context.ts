@@ -110,6 +110,11 @@ export async function loadCachedDriverPosContext(params: {
     availableQuantity: stockByProductId.get(product.id)?.availableQuantity ?? product.availableQuantity,
     supplierId: product.supplierId,
     supplierName: product.supplierName,
+    // PHASE 4A.1 - whatever this cache's last online refresh signed. Never
+    // regenerated here (this module never talks to the server / never has
+    // the signing secret) - null only for a cache written before this
+    // column existed.
+    priceToken: product.priceToken ?? undefined,
   }));
 
   const dtoCustomers: CustomerDto[] = customers.map((customer) => ({

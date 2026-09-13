@@ -17,6 +17,7 @@ import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { markCustomerDeliveredOnTour } from "@/lib/server/driver-tour";
+import { signOfflinePrice, verifyOfflinePriceToken } from "@/lib/server/offline-price-token";
 import {
   mapSaleToDto,
   nextInvoiceNumber,
@@ -221,6 +222,7 @@ export async function getDriverPosContext(
     products: pageProducts.map((product) => {
       const salePriceHT = product.salePrice.toNumber();
       const taxRate = product.taxRate.toNumber();
+      const salePriceTTC = computePriceTTC(salePriceHT, taxRate);
       const level = levelByProductId.get(product.id);
 
       return {
@@ -230,12 +232,20 @@ export async function getDriverPosContext(
         name: product.name,
         imageUrl: product.imageUrl,
         salePriceHT,
-        salePriceTTC: computePriceTTC(salePriceHT, taxRate),
+        salePriceTTC,
         taxRate,
         // No stock row on this truck -> shown as 0 (still sellable).
         availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
         supplierId: product.defaultSupplierId,
         supplierName: product.defaultSupplier?.name ?? null,
+        // PHASE 4A.1 - see offline-price-token.ts's own doc comment. Issued
+        // fresh on every context fetch (online only) - the offline cache
+        // just carries whatever it was last given.
+        priceToken: signOfflinePrice({
+          organizationId: user.organizationId,
+          productId: product.id,
+          unitPriceTTC: salePriceTTC,
+        }),
       };
     }),
   };
@@ -243,7 +253,21 @@ export async function getDriverPosContext(
 
 export async function createDriverSale(
   input: DriverSaleInput,
-  opts: { collectNow?: boolean } = {},
+  opts: {
+    collectNow?: boolean;
+    // PHASE 4A.1 - INTERNAL ONLY. Neither field is reachable from client
+    // JSON: driverSaleSchema has no `unitPriceTTC`/`soldAt` field at all, so
+    // the public /api/driver/sales route can never populate these - only
+    // syncOfflineDriverSale (this same file) does, and only with values it
+    // has already cryptographically verified (price token) or explicitly
+    // decided to trust (soldAt, bounded to "not more than 5 minutes in the
+    // future" - see that function's own doc comment). The online path
+    // (collectNow default, no override) is completely unaffected - see
+    // this task's own report for why this is the chosen integration point
+    // instead of a client-facing "pricingMode" field.
+    verifiedUnitPriceTTCByProductId?: Map<string, number>;
+    soldAtOverride?: Date;
+  } = {},
 ): Promise<SaleDto> {
   const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
@@ -393,11 +417,24 @@ export async function createDriverSale(
       const computedLines = lines.map((line) => {
         const product = products.find((item) => item.id === line.productId);
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
-        const unitPriceHT = product.salePrice.toNumber();
+        const taxRate = product.taxRate.toNumber();
+        // PHASE 4A.1 - "5. PROBLÈME PRIX ACTUEL": a verified offline-sync
+        // price (already checked against its signed token, or explicitly
+        // trusted for a legacy pre-token line - see syncOfflineDriverSale)
+        // anchors this line at the price the driver actually showed the
+        // customer, never today's Product.salePrice. Absent (every ONLINE
+        // sale - this map is always undefined there), unchanged behaviour:
+        // priced from the live product, exactly as before this phase.
+        const verifiedUnitPriceTTC = opts.verifiedUnitPriceTTCByProductId?.get(line.productId);
+        const unitPriceHT =
+          verifiedUnitPriceTTC !== undefined
+            ? roundMoney(verifiedUnitPriceTTC / (1 + taxRate / 100))
+            : product.salePrice.toNumber();
         // BI Phase 2A: snapshot of the cost of the day, frozen on the line
         // forever - see SaleLine.unitCostHT's doc comment. Never touched
         // again by collectSaleCore (DRAFT -> PAID/CREDIT only updates the
-        // Sale row, never SaleLine).
+        // Sale row, never SaleLine). Cost is a margin concept, distinct
+        // from the sale price above - always today's cost, offline or not.
         const unitCostHT = product.purchasePrice.toNumber();
         const discountRate = line.discountRate ?? 0;
         // F8-D: grossHT is a raw multiplication (unitPriceHT x quantity),
@@ -409,7 +446,6 @@ export async function createDriverSale(
         assertMoneyRange(grossHT, "line.grossHT");
         const discountAmount = roundMoney(grossHT * (discountRate / 100));
         const totalHT = roundMoney(grossHT - discountAmount);
-        const taxRate = product.taxRate.toNumber();
         const taxAmount = roundMoney(totalHT * (taxRate / 100));
         const totalTTC = roundMoney(totalHT + taxAmount);
         assertMoneyRange(discountAmount, "line.discountAmount");
@@ -502,6 +538,18 @@ export async function createDriverSale(
       }
 
       const saleDate = new Date();
+      // PHASE 4A.1 - "3. NOUVELLES VENTES ONLINE" / "soldAt": NULL unless
+      // this is an offline sync - see Sale.soldAt's own schema comment,
+      // which defines it as meaningful ONLY when the real moment of sale
+      // differs from createdAt. An online sale has no such distinct moment
+      // (createdAt already IS the moment of sale), so soldAt stays NULL
+      // there rather than redundantly duplicating saleDate/createdAt. Only
+      // an offline sync (opts.soldAtOverride - the driver's own device time,
+      // already validated by syncOfflineDriverSale: finite date, not more
+      // than 5 minutes in the future) ever sets it to something real.
+      // Numbering below stays keyed to `saleDate` (server now) regardless -
+      // soldAt must never influence official sequencing.
+      const soldAt = opts.soldAtOverride ?? null;
       const sequencing = collectNow
         ? await resolveSaleSequencing(tx, saleDate, user.id, user.organizationId)
         : {
@@ -552,6 +600,7 @@ export async function createDriverSale(
           bankAccountingAccountId,
           createdByUserId: user.id,
           validatedAt: collectNow ? new Date() : null,
+          soldAt,
           idempotencyKey: parsed.data.idempotencyKey,
           lines: {
             create: computedLines.map((line) => ({
@@ -654,6 +703,335 @@ export async function createDriverSale(
   );
 
   return mapSaleToDto(sale);
+}
+
+// PHASE 4A - error codes the offline-sync endpoint can return, so the
+// client can branch on something more precise than an HTTP status. Kept
+// local to this module (not a change to the shared OperationsServiceError
+// used across the rest of the app) - see DriverSaleSyncError below.
+export type OfflineSaleSyncErrorCode =
+  | "UNSUPPORTED_OFFLINE_PAYMENT_METHOD"
+  | "INVALID_QUANTITY"
+  | "INVALID_PRICE"
+  | "INVALID_SOLD_AT"
+  | "INVALID_OFFLINE_PRICE_TOKEN"
+  | "LEGACY_OFFLINE_PRICE_MISMATCH"
+  | "DRIVER_CONTEXT_NOT_FOUND"
+  | "CUSTOMER_NOT_FOUND"
+  | "PRODUCT_NOT_FOUND"
+  | "SALE_SYNC_FAILED";
+
+// PHASE 4A.1 - "4. VALIDATION soldAt": no lower/historical bound (a network
+// outage can legitimately last days - see this task's own report), only an
+// upper one, so a device with a badly wrong clock can't backdate/postdate a
+// sale far into the future. 5 minutes absorbs normal clock drift between
+// the phone and the server without being meaningfully exploitable.
+const SOLD_AT_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+
+export class DriverSaleSyncError extends OperationsServiceError {
+  constructor(
+    public code: OfflineSaleSyncErrorCode,
+    message: string,
+    status = 422,
+    fieldErrors?: Record<string, string>,
+  ) {
+    super(message, status, fieldErrors);
+  }
+}
+
+// "3. CRÉER L'ENDPOINT" - client payload shape. Deliberately does NOT accept
+// organizationId/driverId/truckId/stockLocationId (see "IMPORTANT" in that
+// section) - those are exclusively derived server-side by createDriverSale
+// itself, from the authenticated session, exactly like the online driver
+// POS already does.
+//
+// PHASE 4A.1 - "7. PRICE TOKEN SIGNÉ": `priceToken` is what makes
+// `unitPriceTTC` trustworthy as the REAL historical price rather than an
+// unverifiable client claim - see verifyOfflinePriceToken below. Optional
+// only for "11. VENTES PENDING EXISTANTES SANS TOKEN" (a sale already
+// created on a device before this phase shipped, whose offline_sale_lines
+// predate the priceToken column and are therefore NULL there) - every
+// offline sale created AFTER the client picks up this change always has one
+// (enforced client-side, not here - see the report). A missing token is
+// NEVER a free pass for whatever unitPriceTTC the client sends - see the
+// CORRECTION BLOQUANTE note on the legacy branch further down.
+const offlineSaleSyncSchema = z.object({
+  clientMutationId: z.string().trim().uuid("clientMutationId doit etre un UUID valide."),
+  // Local-only display reference (e.g. "OFF-20260913-0001") - never used for
+  // official numbering (see "7. NUMÉROTATION OFFICIELLE"), kept only for
+  // audit traceability (stored as the Payment.reference below).
+  localReference: z.string().trim().max(60).nullable().optional(),
+  soldAt: z.string().trim().min(1, "soldAt est requis."),
+  customerId: z.string().trim().nullable().optional(),
+  paymentMethod: z.enum(["CASH", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
+  lines: z
+    .array(
+      z.object({
+        productId: z.string().trim().min(1, "productId est requis."),
+        quantity: z.coerce.number().int().positive().max(1_000_000),
+        unitPriceTTC: z.coerce.number().finite().min(0),
+        priceToken: z.string().trim().min(1).nullable().optional(),
+      }),
+    )
+    .min(1, "Le panier hors connexion est vide."),
+});
+
+export type OfflineSaleSyncInput = z.input<typeof offlineSaleSyncSchema>;
+
+export type OfflineSaleSyncResult = {
+  success: true;
+  syncStatus: "SYNCED";
+  result: "CREATED" | "ALREADY_SYNCED";
+  clientMutationId: string;
+  serverSaleId: string;
+  officialDisplayNumber: string;
+  saleYear: number | null;
+  saleNumber: number | null;
+};
+
+/**
+ * PHASE 4A / 4A.1 - receives ONE already-confirmed offline (driver POS)
+ * sale and creates the real server Sale for it, exactly once, with the real
+ * official number, the driver's real sale price (not today's), and the
+ * real moment of sale. Deliberately a thin wrapper: every core business
+ * rule (organization/driver/truck/tour derivation from the session,
+ * customer/product existence, stock movement, payment, accounting,
+ * official numbering, idempotency-by-key) is createDriverSale's own,
+ * unmodified - see that function's doc comments. This function only adds
+ * what's specific to the offline-sync path:
+ *  - refusing anything but CASH ("5. CASH UNIQUEMENT POUR V1");
+ *  - verifying each line's signed price token ("7./12. PRICE TOKEN SIGNÉ")
+ *    and passing the VERIFIED historical price into createDriverSale's
+ *    internal-only override, instead of letting it price from today's
+ *    Product.salePrice;
+ *  - validating/forwarding the real `soldAt` into the same internal-only
+ *    override, instead of leaving it as "now" like an online sale.
+ *
+ * PRICING (see this task's report, "5.-14. PRIX"): a line whose token
+ * verifies is trusted at its signed price - a changed Product.salePrice
+ * since the offline sale never affects it. A line with NO token (a sale
+ * created before this phase shipped - see "11. VENTES PENDING EXISTANTES
+ * SANS TOKEN") is NEVER trusted on the client's say-so: its unitPriceTTC
+ * must match TODAY's real server tariff exactly (same computePriceTTC/
+ * roundMoney createDriverSale itself uses) or the WHOLE sync is refused
+ * with LEGACY_OFFLINE_PRICE_MISMATCH, before any DB write - see "CORRECTION
+ * BLOQUANTE - SÉCURISER LE FALLBACK LEGACY PRICE". Even when it matches,
+ * the value that actually anchors the sale is the SERVER's own computed
+ * price, never the client's number. Either way, createDriverSale still
+ * recalculates subtotal/tax/total from that anchor price × quantity - the
+ * client's totalTTC is never trusted directly ("14. RECALCUL SERVEUR").
+ */
+export async function syncOfflineDriverSale(
+  input: OfflineSaleSyncInput,
+): Promise<OfflineSaleSyncResult> {
+  // Auth first, before any business rule below can leak pass/fail
+  // information to an unauthenticated caller. requireOrganizationUser is
+  // called again, redundantly, inside createDriverSale itself further down -
+  // harmless (every authenticated request re-reads the session fresh, see
+  // that function's own doc comment) and keeps this function self-contained.
+  const user = await requireOrganizationUser(["driver"]);
+  if (!user.driverId || !user.truckId) {
+    throw new DriverSaleSyncError(
+      "DRIVER_CONTEXT_NOT_FOUND",
+      "Aucun camion n'est affecte a votre compte.",
+      403,
+    );
+  }
+
+  const parsed = offlineSaleSyncSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    // A line-level issue's path is ["lines", <index>, <field>] - distinguish
+    // a bad quantity from a bad price so the client gets the precise code,
+    // not just "something in lines is wrong".
+    const code: OfflineSaleSyncErrorCode =
+      issue?.path[0] === "lines"
+        ? issue.path[2] === "unitPriceTTC"
+          ? "INVALID_PRICE"
+          : "INVALID_QUANTITY"
+        : "SALE_SYNC_FAILED";
+    throw new DriverSaleSyncError(code, issue?.message ?? "Payload de synchronisation invalide.", 422);
+  }
+  const data = parsed.data;
+
+  const soldAtDate = new Date(data.soldAt);
+  if (Number.isNaN(soldAtDate.getTime())) {
+    throw new DriverSaleSyncError("INVALID_SOLD_AT", "soldAt n'est pas une date valide.", 422);
+  }
+  if (soldAtDate.getTime() > Date.now() + SOLD_AT_FUTURE_TOLERANCE_MS) {
+    throw new DriverSaleSyncError(
+      "INVALID_SOLD_AT",
+      "soldAt ne peut pas etre dans le futur.",
+      422,
+    );
+  }
+
+  // "5. CASH UNIQUEMENT POUR V1" - refused before any DB read. Other modes
+  // are a future phase's job, not this one's.
+  if (data.paymentMethod !== "CASH") {
+    throw new DriverSaleSyncError(
+      "UNSUPPORTED_OFFLINE_PAYMENT_METHOD",
+      "Ce mode de reglement n'est pas encore pris en charge pour une synchronisation hors connexion.",
+      422,
+    );
+  }
+
+  // "7./12. PRICE TOKEN SIGNÉ" - verified (or explicitly trusted legacy)
+  // price per productId, passed to createDriverSale's internal-only
+  // override below. A tokenized line's price MUST match what was actually
+  // signed - any mismatch (tampering or corruption) refuses the whole sale
+  // before any DB read, exactly like an unsupported payment method.
+  const verifiedUnitPriceTTCByProductId = new Map<string, number>();
+  for (const line of data.lines) {
+    if (!Number.isFinite(line.quantity) || line.quantity <= 0) {
+      throw new DriverSaleSyncError(
+        "INVALID_QUANTITY",
+        `Quantite invalide pour le produit ${line.productId}.`,
+        422,
+      );
+    }
+    if (!Number.isFinite(line.unitPriceTTC) || line.unitPriceTTC < 0) {
+      throw new DriverSaleSyncError(
+        "INVALID_PRICE",
+        `Prix invalide pour le produit ${line.productId}.`,
+        422,
+      );
+    }
+
+    if (line.priceToken) {
+      const verification = verifyOfflinePriceToken(line.priceToken);
+      if (!verification.valid) {
+        throw new DriverSaleSyncError(
+          "INVALID_OFFLINE_PRICE_TOKEN",
+          `Jeton de prix invalide pour le produit ${line.productId}.`,
+          422,
+        );
+      }
+      const { payload: tokenPayload } = verification;
+      const tokenMatches =
+        tokenPayload.organizationId === user.organizationId &&
+        tokenPayload.productId === line.productId &&
+        roundMoney(tokenPayload.unitPriceTTC) === roundMoney(line.unitPriceTTC);
+      if (!tokenMatches) {
+        throw new DriverSaleSyncError(
+          "INVALID_OFFLINE_PRICE_TOKEN",
+          `Le prix envoye ne correspond pas au jeton signe pour le produit ${line.productId}.`,
+          422,
+        );
+      }
+      verifiedUnitPriceTTCByProductId.set(line.productId, tokenPayload.unitPriceTTC);
+    } else {
+      // CORRECTION BLOQUANTE - "1. NOUVELLE POLITIQUE LEGACY": a line with
+      // no priceToken (a sale created before this phase shipped - see "11.
+      // VENTES PENDING EXISTANTES SANS TOKEN" in the prior task) is NEVER
+      // trusted on the client's say-so alone - that was exactly the hole
+      // this fix closes (delete the token, send unitPriceTTC = 1, get a 1 DH
+      // sale). The client's unitPriceTTC is only ever used to prove it still
+      // matches TODAY's real server tariff - if it matches, the value that
+      // actually anchors the sale is the SERVER's own computed price, never
+      // the client's number, even though the two are numerically identical
+      // at that point. A mismatch refuses the ENTIRE sync, before any DB
+      // write - no partial fallback, no silent repricing.
+      const legacyProduct = await prisma.product.findFirst({
+        where: { id: line.productId, organizationId: user.organizationId },
+        select: { salePrice: true, taxRate: true },
+      });
+      if (!legacyProduct) {
+        throw new DriverSaleSyncError(
+          "PRODUCT_NOT_FOUND",
+          `Produit introuvable pour la ligne ${line.productId}.`,
+          422,
+        );
+      }
+      const currentUnitPriceTTC = computePriceTTC(
+        legacyProduct.salePrice.toNumber(),
+        legacyProduct.taxRate.toNumber(),
+      );
+      if (roundMoney(currentUnitPriceTTC) !== roundMoney(line.unitPriceTTC)) {
+        console.warn(
+          "[OFFLINE SYNC] legacy line price does not match current server tariff - refusing whole sync",
+          { organizationId: user.organizationId, productId: line.productId },
+        );
+        throw new DriverSaleSyncError(
+          "LEGACY_OFFLINE_PRICE_MISMATCH",
+          `Le prix hors connexion ne correspond plus au tarif serveur actuel pour le produit ${line.productId}.`,
+          422,
+        );
+      }
+      console.warn(
+        "[OFFLINE SYNC] legacy line without a price token - matches current server tariff, accepted",
+        { organizationId: user.organizationId, productId: line.productId },
+      );
+      // The SERVER's own computed price, not the client's - see this
+      // block's own doc comment on why that distinction matters even when
+      // the two numbers are equal.
+      verifiedUnitPriceTTCByProductId.set(line.productId, currentUnitPriceTTC);
+    }
+  }
+
+  // Best-effort CREATED/ALREADY_SYNCED labeling only (see this task's
+  // report on the rare true-concurrency case) - the actual guarantee that
+  // only one Sale ever exists for this key comes from createDriverSale's
+  // own idempotency check + the DB's @@unique([organizationId,
+  // idempotencyKey]) constraint + its retry-on-conflict loop, none of which
+  // this read participates in. NEVER use this field to decide whether a
+  // sale is synced - only `success`/`serverSaleId`/`officialDisplayNumber`
+  // are guaranteed accurate under true concurrency (see "18. CONCURRENCE").
+  const existingBeforeSync = await prisma.sale.findFirst({
+    where: { organizationId: user.organizationId, idempotencyKey: data.clientMutationId },
+    select: { id: true },
+  });
+
+  const driverSaleInput: DriverSaleInput & { idempotencyKey: string } = {
+    customerId: data.customerId ?? null,
+    paymentMethod: "CASH",
+    reference: data.localReference ?? null,
+    idempotencyKey: data.clientMutationId,
+    lines: data.lines.map((line) => ({ productId: line.productId, quantity: line.quantity })),
+  };
+
+  let sale: SaleDto;
+  try {
+    sale = await createDriverSale(driverSaleInput, {
+      collectNow: true,
+      verifiedUnitPriceTTCByProductId,
+      soldAtOverride: soldAtDate,
+    });
+  } catch (error) {
+    if (error instanceof OperationsServiceError) {
+      throw new DriverSaleSyncError(
+        mapCreateDriverSaleErrorCode(error.message),
+        error.message,
+        error.status,
+        error.fieldErrors,
+      );
+    }
+    throw new DriverSaleSyncError("SALE_SYNC_FAILED", "Impossible de synchroniser la vente.", 500);
+  }
+
+  return {
+    success: true,
+    syncStatus: "SYNCED",
+    result: existingBeforeSync ? "ALREADY_SYNCED" : "CREATED",
+    clientMutationId: data.clientMutationId,
+    serverSaleId: sale.id,
+    officialDisplayNumber: sale.displayNumber,
+    saleYear: sale.saleYear,
+    saleNumber: sale.saleNumber,
+  };
+}
+
+/**
+ * Best-effort mapping of createDriverSale's own (message-only)
+ * OperationsServiceError onto this task's requested error codes, without
+ * duplicating the validation those messages already come from - see
+ * syncOfflineDriverSale's own doc comment on reuse.
+ */
+function mapCreateDriverSaleErrorCode(message: string): OfflineSaleSyncErrorCode {
+  if (message.includes("camion") || message.includes("tournee")) return "DRIVER_CONTEXT_NOT_FOUND";
+  if (message.includes("Client") || message.includes("client")) return "CUSTOMER_NOT_FOUND";
+  if (message.includes("produit") || message.includes("Produit")) return "PRODUCT_NOT_FOUND";
+  return "SALE_SYNC_FAILED";
 }
 
 // Same pattern as counter-sales.ts's withSerializableRetry - see the

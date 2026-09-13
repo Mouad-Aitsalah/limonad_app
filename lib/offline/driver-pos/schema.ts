@@ -173,6 +173,24 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       )`,
     ],
   },
+  {
+    // PHASE 4A.1 - "PRIX OFFLINE FIGÉ ET VÉRIFIABLE". Both columns are
+    // nullable, plain additive ALTER TABLEs - never touches existing rows
+    // (a device with a real PENDING_SYNC sale already on it keeps that sale
+    // exactly as-is, with priceToken simply NULL on its lines - see
+    // lib/server/driver-sales.ts's own "legacy line" fallback for how the
+    // server accepts that). cached_products.priceToken is refreshed on
+    // every online context fetch (see bootstrap.ts); offline_sale_lines.
+    // priceToken is a PERMANENT SNAPSHOT copied from the cache at the exact
+    // moment of the offline sale - never re-read from cached_products later
+    // (a subsequent cache refresh must never retroactively change what an
+    // already-confirmed sale claims to have shown the driver).
+    version: 3,
+    statements: [
+      `ALTER TABLE cached_products ADD COLUMN priceToken TEXT`,
+      `ALTER TABLE offline_sale_lines ADD COLUMN priceToken TEXT`,
+    ],
+  },
 ];
 
 /** Highest version defined above - passed to the plugin's own

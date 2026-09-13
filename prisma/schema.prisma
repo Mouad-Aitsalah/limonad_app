@@ -1308,6 +1308,16 @@ model Sale {
   createdByUserId String
   createdBy       User          @relation("SaleCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   validatedAt     DateTime?
+  // PHASE 4A.1 - the real moment of sale, distinct from createdAt (when the
+  // server row was actually inserted). NULL for every sale created before
+  // this column existed and for a normal online sale where "moment of sale"
+  // and "moment of server insert" are the same instant anyway (see
+  // createDriverSale/createCounterSale - both leave this NULL and let
+  // createdAt keep meaning exactly what it always has). Only ever set to a
+  // value DIFFERENT from createdAt for a driver sale synced from the offline
+  // POS, where the two can legitimately be hours (or days) apart - see
+  // syncOfflineDriverSale in lib/server/driver-sales.ts.
+  soldAt          DateTime?
   // Client-generated, stable for one logical sale attempt (see
   // lib/server/counter-sales.ts / driver-sales.ts). Same pattern as
   // EmployeeTransaction.idempotencyKey: nullable so existing rows and any

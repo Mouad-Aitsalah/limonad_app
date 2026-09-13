@@ -74,6 +74,9 @@ export function mapSaleToDto(sale: SaleWithRelations): SaleDto {
     bankAccountingAccountName: sale.bankAccountingAccount?.name ?? null,
     createdByUserName: sale.createdBy.fullName,
     validatedAt: sale.validatedAt?.toISOString() ?? null,
+    // PHASE 4A.1 - null for every sale created before this column existed
+    // and for a normal online sale (see Sale.soldAt's own schema comment).
+    soldAt: sale.soldAt?.toISOString() ?? null,
     createdAt: sale.createdAt.toISOString(),
     updatedAt: sale.updatedAt.toISOString(),
     lines: sale.lines.map((line) => ({

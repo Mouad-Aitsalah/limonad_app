@@ -689,6 +689,11 @@ export function DriverPosView({
         totalHT: row.totals.totalHT,
         taxAmount: row.totals.taxAmount,
         totalTTC: row.totals.totalTTC,
+        // PHASE 4A.1 - a permanent COPY taken right now, never re-read from
+        // the cache later (see schema.ts's v3 migration doc comment) - null
+        // only if this product's cache entry itself has no token yet (a
+        // cache written before this phase shipped).
+        priceToken: row.product.priceToken ?? null,
       })),
     };
 

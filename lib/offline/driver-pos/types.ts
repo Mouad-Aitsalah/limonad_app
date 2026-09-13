@@ -64,6 +64,10 @@ export type CachedProduct = {
   availableQuantity: number;
   supplierId: string | null;
   supplierName: string | null;
+  /** PHASE 4A.1 - signed server token attesting salePriceTTC, refreshed on
+   *  every online context fetch (see bootstrap.ts). Null only for a cache
+   *  written before this column existed - see schema.ts's v3 migration. */
+  priceToken: string | null;
   syncedAt: string;
 };
 
@@ -110,6 +114,15 @@ export type OfflineSaleLineInput = {
   totalHT: number;
   taxAmount: number;
   totalTTC: number;
+  /**
+   * PHASE 4A.1 - a COPY of cached_products.priceToken, taken at the exact
+   * moment of this sale - never re-read from the cache later (see schema.ts's
+   * v3 migration doc comment). Null for a sale created before this column
+   * existed (a real device may already have a PENDING_SYNC sale like this -
+   * see lib/server/driver-sales.ts's "legacy line" fallback for how the
+   * server still accepts it) or if the cached product itself had no token.
+   */
+  priceToken: string | null;
 };
 
 export type OfflineSaleInput = {
