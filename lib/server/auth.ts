@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash, randomBytes } from "crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import bcrypt from "bcryptjs";
 
 import { prisma } from "@/lib/prisma";
@@ -63,14 +63,14 @@ export class AuthServiceError extends Error {
 }
 
 /**
- * Server-side, revocable sessions (see the Session model in schema.prisma).
- * The cookie only ever carries an opaque random token - never a user id,
- * role, or organization, and never anything derived from client input.
- * Every authenticated request re-reads the session AND the user fresh from
- * the database; nothing about identity or authorization is ever trusted
- * from the client itself, here or anywhere downstream.
+ * Shared email/password validation for BOTH the web login (session cookie)
+ * and the mobile login (PHASE 5A.1 - Bearer token). Extracted so the two
+ * entry points can never drift apart on what "a valid login" means - same
+ * lookup, same ACTIVE/organization checks, same bcrypt compare, only what
+ * happens to the resulting user differs (see loginWithPassword vs
+ * loginWithPasswordForMobile below).
  */
-export async function loginWithPassword(email: string, password: string) {
+async function authenticateUser(email: string, password: string) {
   const user = await prisma.user.findUnique({
     where: { email: email.trim().toLowerCase() },
     select: { ...userForSessionSelect, passwordHash: true },
@@ -94,6 +94,20 @@ export async function loginWithPassword(email: string, password: string) {
     throw new AuthServiceError("Email ou mot de passe incorrect.", 401);
   }
 
+  return user;
+}
+
+/**
+ * Server-side, revocable sessions (see the Session model in schema.prisma).
+ * The cookie only ever carries an opaque random token - never a user id,
+ * role, or organization, and never anything derived from client input.
+ * Every authenticated request re-reads the session AND the user fresh from
+ * the database; nothing about identity or authorization is ever trusted
+ * from the client itself, here or anywhere downstream.
+ */
+export async function loginWithPassword(email: string, password: string) {
+  const user = await authenticateUser(email, password);
+
   // A brand new random token/session is minted on every successful login,
   // never reused or extended from a prior one (prevents session fixation:
   // nothing an attacker could have pre-set - e.g. a token planted before
@@ -106,9 +120,49 @@ export async function loginWithPassword(email: string, password: string) {
   return mapUserToSession(user);
 }
 
-export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
+/**
+ * PHASE 5A.1 - "AUTH MOBILE SÉPARÉE". Same validation as loginWithPassword
+ * (via authenticateUser) and the exact same Session mechanism (opaque
+ * random token, SHA-256 hash stored, same expiry) - the only difference is
+ * the token is handed back in the JSON body instead of set as a cookie, and
+ * no cookie is ever written by this path. Never exposed through the
+ * existing /api/auth/login (which stays cookie-only for the web) - a
+ * dedicated endpoint (/api/mobile/auth/login) calls this instead.
+ */
+export async function loginWithPasswordForMobile(
+  email: string,
+  password: string,
+): Promise<{ accessToken: string; expiresAt: Date; user: CurrentUser }> {
+  const user = await authenticateUser(email, password);
+  const { token, expiresAt } = await createSessionToken(user.id);
+  return { accessToken: token, expiresAt, user: mapUserToSession(user) };
+}
+
+/**
+ * PHASE 5A.1 - "2. AUTHORIZATION BEARER". Resolves the token this request is
+ * authenticated with: an `Authorization: Bearer <token>` header first (the
+ * mobile shell's only auth transport - never a cookie, since its origin is
+ * cross-site to the API and SameSite=Lax would not carry one anyway), then
+ * falling back to the existing session cookie unchanged. A web request
+ * never sends an Authorization header of its own accord, so this is purely
+ * additive: every existing cookie-based call keeps behaving exactly as
+ * before.
+ */
+async function resolveSessionToken(): Promise<string | null> {
+  const headerStore = await headers();
+  const authHeader = headerStore.get("authorization");
+  if (authHeader) {
+    const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+    const bearerToken = match?.[1]?.trim();
+    if (bearerToken) return bearerToken;
+  }
+
   const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  return cookieStore.get(SESSION_COOKIE)?.value ?? null;
+}
+
+export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
+  const token = await resolveSessionToken();
   if (!token) return null;
 
   const tokenHash = hashSessionToken(token);
@@ -272,6 +326,27 @@ export async function clearSessionCookie() {
 }
 
 /**
+ * PHASE 5A.1 - "3. LOGOUT MOBILE". Revokes the Session behind a raw Bearer
+ * token - the mobile equivalent of clearSessionCookie, minus the cookie
+ * (there is none to clear). Same revocation semantics: the token becomes
+ * unusable immediately (see getCurrentSessionUser's revokedAt check), and
+ * sessions on other devices for the same user are untouched. Never throws
+ * on an unknown/already-revoked token - logout must always succeed from the
+ * client's point of view.
+ */
+export async function revokeSessionByToken(token: string): Promise<void> {
+  const tokenHash = hashSessionToken(token);
+  await prisma.session
+    .updateMany({
+      where: { tokenHash, revokedAt: null },
+      data: { revokedAt: new Date() },
+    })
+    .catch((error: unknown) => {
+      console.error("[auth] echec de la revocation de session mobile au logout:", error);
+    });
+}
+
+/**
  * Revokes every active session belonging to a user - e.g. for a future
  * "compromised account" response, or to call after a future password-change
  * feature updates passwordHash (see this task's report for why that call
@@ -287,17 +362,28 @@ export async function revokeAllUserSessions(userId: string): Promise<number> {
   return result.count;
 }
 
-async function createSessionCookie(userId: string) {
+/**
+ * Mints a brand new Session row and returns its raw opaque token - the one
+ * piece shared by both the cookie flow (createSessionCookie, below) and the
+ * mobile Bearer flow (loginWithPasswordForMobile, above). The raw token is
+ * never persisted, only its hash - even a full database read/leak never
+ * yields a usable token, the same way a leaked passwordHash never yields a
+ * usable password.
+ */
+async function createSessionToken(userId: string): Promise<{ token: string; expiresAt: Date }> {
   const token = randomBytes(SESSION_TOKEN_BYTES).toString("base64url");
   const tokenHash = hashSessionToken(token);
   const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000);
 
-  // The raw token is never persisted - only its hash. Even a full database
-  // read/leak never yields a usable token, the same way a leaked
-  // passwordHash never yields a usable password.
   await prisma.session.create({
     data: { userId, tokenHash, expiresAt },
   });
+
+  return { token, expiresAt };
+}
+
+async function createSessionCookie(userId: string) {
+  const { token } = await createSessionToken(userId);
 
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {

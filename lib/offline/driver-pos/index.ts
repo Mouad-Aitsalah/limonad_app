@@ -9,7 +9,11 @@
 export { hydrateDriverOfflineCache } from "./bootstrap";
 export type { HydrateDriverOfflineCacheInput } from "./bootstrap";
 
-export { getDriverOfflineContext, saveDriverOfflineContext } from "./context-store";
+export {
+  getAnyDriverOfflineContext,
+  getDriverOfflineContext,
+  saveDriverOfflineContext,
+} from "./context-store";
 
 export {
   getCachedCustomers,

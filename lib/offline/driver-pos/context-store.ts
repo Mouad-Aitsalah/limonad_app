@@ -75,6 +75,27 @@ export async function getDriverOfflineContext(params: {
   return mapContextRow(rows[0]);
 }
 
+/**
+ * PHASE 5A.1 - mobile shell "Dernier contexte" screen: reads whatever is
+ * cached on this device with NO organizationId/driverId filter. Distinct
+ * from getDriverOfflineContext on purpose - that one's isolation check
+ * exists because a caller ALREADY knows who it's authenticating as (the
+ * live POS flow) and must never be handed a mismatched driver's data. This
+ * function backs a display-only screen that, by construction, runs BEFORE
+ * any authenticated call - it can only ever show "whoever last synced on
+ * this device", never write anything, and every other store (cache/sales/
+ * outbox) still enforces its own organizationId/driverId scoping regardless
+ * of what this returns.
+ */
+export async function getAnyDriverOfflineContext(): Promise<DriverOfflineContext | null> {
+  const rows = await withDatabase(async (db) => {
+    const result = await db.query(`SELECT * FROM offline_context WHERE id = 1`);
+    return result.values ?? [];
+  });
+  if (!rows || rows.length === 0) return null;
+  return mapContextRow(rows[0]);
+}
+
 function mapContextRow(row: Record<string, unknown>): DriverOfflineContext {
   return {
     organizationId: String(row.organizationId),

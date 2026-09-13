@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "build:driver-mobile": "npm --prefix mobile/driver run build"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
