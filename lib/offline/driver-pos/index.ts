@@ -28,7 +28,17 @@ export {
   getOfflineSales,
 } from "./sales-store";
 
-export { enqueueSyncOperation, getPendingOutboxEntries } from "./outbox-store";
+export {
+  deleteOutboxEntriesForEntity,
+  enqueueSyncOperation,
+  getPendingOutboxEntries,
+} from "./outbox-store";
+
+export {
+  isSyncInFlight,
+  syncPendingDriverSales,
+} from "./sync-sales";
+export type { SyncBatchResult, SyncedSale, SyncFailedSale } from "./sync-sales";
 
 export { getNetworkState, isNetworkAvailable, isServerReachable } from "./network-status";
 export type { NetworkState } from "./network-status";

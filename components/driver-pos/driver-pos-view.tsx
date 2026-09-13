@@ -8,6 +8,7 @@ import {
   LoaderCircle,
   MessageCircle,
   Printer,
+  RefreshCw,
   ShoppingCart,
 } from "lucide-react";
 import Link from "next/link";
@@ -56,6 +57,8 @@ import {
   getOfflineSales,
   hydrateDriverOfflineCache,
   loadDriverPosContext,
+  syncPendingDriverSales,
+  type NetworkState,
   type OfflineDbDiagnostic,
   type OfflineSaleWithLines,
 } from "@/lib/offline/driver-pos";
@@ -181,13 +184,25 @@ export function DriverPosView({
   const [offlineTicketReference, setOfflineTicketReference] = React.useState<string | null>(null);
   // Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": always read from SQLite,
   // never derived from in-memory state, so it stays correct across a remount
-  // (see this task's "TEST C"). `pendingOfflineCount` is just
-  // `offlinePendingSales.length` - both are refreshed together (see
-  // refreshOfflinePendingSales below) so the badge and the local "Ventes
-  // hors connexion" dialog (see "CORRECTION UX OFFLINE") can never disagree.
+  // (see this task's "TEST C"). Holds every offline sale NOT YET fully
+  // SYNCED (PENDING_SYNC/SYNCING/SYNC_ERROR/REQUIRES_REVIEW) - see Phase
+  // 4B.1's own "13. DIALOG LOCAL": the badge/dialog must never hide a
+  // REQUIRES_REVIEW-only sale just because nothing is left to actually
+  // sync. `pendingOfflineCount` (the badge) and `syncableOfflineSales`/
+  // `syncableOfflineCount` (the "Synchroniser N vente(s)" button - only
+  // PENDING_SYNC/SYNC_ERROR are ever actually retried) are both derived
+  // from this same array, refreshed together (see refreshOfflinePendingSales
+  // below) so none of them can ever disagree.
   const [offlinePendingSales, setOfflinePendingSales] = React.useState<OfflineSaleWithLines[]>([]);
   const pendingOfflineCount = offlinePendingSales.length;
+  const syncableOfflineCount = offlinePendingSales.filter(
+    (sale) => sale.syncStatus === "PENDING_SYNC" || sale.syncStatus === "SYNC_ERROR",
+  ).length;
   const [offlineSalesDialogOpen, setOfflineSalesDialogOpen] = React.useState(false);
+  // Phase 4B.1 - "10. SINGLE-FLIGHT": disables the sync button for the
+  // duration of a batch; syncPendingDriverSales itself also refuses a
+  // second concurrent batch even if this state were somehow bypassed.
+  const [syncingSales, setSyncingSales] = React.useState(false);
   const { identity } = useCompanyIdentity();
   const [sharingInvoice, setSharingInvoice] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -232,7 +247,7 @@ export function DriverPosView({
     const organizationId = currentUser?.organizationId ?? null;
     if (!organizationId) return;
     const sales = await getOfflineSales({ organizationId, driverId: context.driver.id });
-    setOfflinePendingSales(sales.filter((sale) => sale.syncStatus === "PENDING_SYNC"));
+    setOfflinePendingSales(sales.filter((sale) => sale.syncStatus !== "SYNCED"));
   }, [currentUser, context.driver.id]);
 
   React.useEffect(() => {
@@ -255,6 +270,50 @@ export function DriverPosView({
       })),
     [offlinePendingSales, context.customers],
   );
+
+  // Phase 4B.1 - "12. BOUTON MANUEL": the only place a sync batch is ever
+  // triggered in this phase (see "16. PAS ENCORE D'AUTO SYNC" - no
+  // Network listener, no background worker, no sync-on-launch). Always
+  // re-reads offline_sales from SQLite afterward regardless of outcome, so
+  // the badge/dialog reflect reality even if the batch stopped early or
+  // every sale failed.
+  async function handleSyncPendingSales() {
+    const organizationId = currentUser?.organizationId ?? null;
+    if (!organizationId || syncingSales) return;
+    setSyncingSales(true);
+    try {
+      const result = await syncPendingDriverSales({ organizationId, driverId: context.driver.id });
+      await refreshOfflinePendingSales();
+
+      if (result.stoppedForAuth) {
+        toast.error("Session expirée. Reconnectez-vous pour synchroniser les ventes.");
+      }
+      if (result.synced.length === 1) {
+        toast.success(`Vente synchronisée : ${result.synced[0].officialDisplayNumber}`);
+      } else if (result.synced.length > 1) {
+        toast.success(`${result.synced.length} ventes synchronisées`);
+      }
+      if (result.transientErrors.length > 0) {
+        toast.error(
+          `${result.transientErrors.length} vente${result.transientErrors.length > 1 ? "s" : ""} n'ont pas pu être synchronisée${result.transientErrors.length > 1 ? "s" : ""}. Réessayez plus tard.`,
+        );
+      }
+      if (result.requiresReview.length > 0) {
+        toast.error(
+          `${result.requiresReview.length} vente${result.requiresReview.length > 1 ? "s" : ""} hors connexion nécessite${result.requiresReview.length > 1 ? "nt" : ""} une vérification.`,
+        );
+      }
+
+      // "15. REFRESH APRÈS SYNC" - only to reconcile stock/context display
+      // once real server-side stock has actually moved; never re-runs any
+      // local SQLite write (refreshContext only ever reads).
+      if (result.synced.length > 0) {
+        await refreshContext();
+      }
+    } finally {
+      setSyncingSales(false);
+    }
+  }
 
   // TEMPORARY dev diagnostic (Phase 3 bug hunt) - read once on mount, not
   // re-read on every render; the schema version doesn't change while the
@@ -1053,6 +1112,10 @@ export function DriverPosView({
         dbDiagnostic={dbDiagnostic}
         pendingOfflineCount={pendingOfflineCount}
         onOpenOfflineSales={() => setOfflineSalesDialogOpen(true)}
+        networkState={networkState}
+        syncableOfflineCount={syncableOfflineCount}
+        syncingSales={syncingSales}
+        onSyncPendingSales={() => void handleSyncPendingSales()}
       />
 
       <div
@@ -1302,6 +1365,10 @@ function DriverInvoiceHeader({
   dbDiagnostic,
   pendingOfflineCount,
   onOpenOfflineSales,
+  networkState,
+  syncableOfflineCount,
+  syncingSales,
+  onSyncPendingSales,
 }: {
   driverName: string;
   truckCode: string;
@@ -1327,6 +1394,15 @@ function DriverInvoiceHeader({
   /** "CORRECTION UX OFFLINE": opens the local "Ventes hors connexion"
    *  dialog - never a navigation to /driver/ventes. */
   onOpenOfflineSales: () => void;
+  /** Phase 4B.1 - "12. BOUTON MANUEL": the sync button only ever shows
+   *  while genuinely ONLINE. */
+  networkState: NetworkState;
+  /** Count of PENDING_SYNC/SYNC_ERROR sales - the ones a click on
+   *  "Synchroniser" will actually attempt (never REQUIRES_REVIEW/SYNCING,
+   *  even though those still count toward `pendingOfflineCount` above). */
+  syncableOfflineCount: number;
+  syncingSales: boolean;
+  onSyncPendingSales: () => void;
 }) {
   const now = new Date();
   const date = now.toLocaleDateString("fr-FR", {
@@ -1368,6 +1444,29 @@ function DriverInvoiceHeader({
           >
             {pendingOfflineCount} vente{pendingOfflineCount > 1 ? "s" : ""} en attente
           </Badge>
+        ) : null}
+        {/* Phase 4B.1 - "12. BOUTON MANUEL": only while genuinely ONLINE
+            (SERVER_UNREACHABLE would just fail every request) and only
+            while there is something this button can actually attempt -
+            REQUIRES_REVIEW-only sales never make it show up here. */}
+        {networkState === "ONLINE" && syncableOfflineCount > 0 ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={syncingSales}
+            onClick={onSyncPendingSales}
+            className="shrink-0 border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+          >
+            {syncingSales ? (
+              <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
+            )}
+            {syncingSales
+              ? "Synchronisation..."
+              : `Synchroniser ${syncableOfflineCount} vente${syncableOfflineCount > 1 ? "s" : ""}`}
+          </Button>
         ) : null}
         {cacheSyncedAt ? (
           <span className="truncate text-[11px] text-muted-foreground">

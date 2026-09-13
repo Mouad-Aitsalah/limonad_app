@@ -36,6 +36,24 @@ export async function enqueueSyncOperation(entry: {
   return result ?? false;
 }
 
+/**
+ * PHASE 4B.1 - "5. SUCCÈS SERVEUR": sync_outbox has no "processed" flag (see
+ * schema.ts's own CREATE TABLE) - only entityType/entityLocalId/operation/
+ * attemptCount/lastError/lockedAt, none of which model "done". Deleting the
+ * entry is therefore the only representation of "handled" this schema
+ * supports - never a soft-delete/status column this table doesn't have.
+ * Scoped to entityLocalId only (not entityType) since a given local sale
+ * only ever has the one 'DRIVER_SALE'/'CREATE' entry createOfflineSale
+ * inserted for it.
+ */
+export async function deleteOutboxEntriesForEntity(entityLocalId: string): Promise<boolean> {
+  const result = await withDatabase(async (db) => {
+    await db.run(`DELETE FROM sync_outbox WHERE entityLocalId = ?`, [entityLocalId]);
+    return true;
+  });
+  return result ?? false;
+}
+
 export async function getPendingOutboxEntries(): Promise<SyncOutboxEntry[]> {
   const rows = await withDatabase(async (db) => {
     const result = await db.query(

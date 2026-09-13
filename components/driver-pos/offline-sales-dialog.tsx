@@ -5,8 +5,26 @@ import { ChevronDown, ChevronUp, WifiOff } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { OfflineSaleWithLines } from "@/lib/offline/driver-pos";
+import type { OfflineSaleWithLines, SyncStatus } from "@/lib/offline/driver-pos";
 import { formatCurrency } from "@/lib/utils";
+
+// Phase 4B.1 - "13. DIALOG LOCAL": one label/style per status this dialog
+// can ever actually show (SYNCED sales are filtered out by the caller
+// before they reach this component - see driver-pos-view.tsx's own
+// offlinePendingSales comment).
+const STATUS_LABEL: Partial<Record<SyncStatus, string>> = {
+  PENDING_SYNC: "En attente",
+  SYNCING: "Synchronisation...",
+  SYNC_ERROR: "Erreur de synchronisation",
+  REQUIRES_REVIEW: "À vérifier",
+};
+
+const STATUS_BADGE_CLASSNAME: Partial<Record<SyncStatus, string>> = {
+  PENDING_SYNC: "border-amber-300 bg-amber-100 text-amber-800",
+  SYNCING: "border-sky-300 bg-sky-100 text-sky-800",
+  SYNC_ERROR: "border-red-300 bg-red-100 text-red-800",
+  REQUIRES_REVIEW: "border-red-300 bg-red-100 text-red-800",
+};
 
 export type OfflineSaleRowData = {
   sale: OfflineSaleWithLines;
@@ -59,10 +77,13 @@ export function OfflineSalesDialog({ open, onOpenChange, sales }: OfflineSalesDi
           <div className="-mx-1 max-h-[60vh] space-y-2 overflow-y-auto px-1">
             {sales.map(({ sale, customerName }) => {
               const expanded = expandedLocalId === sale.localId;
+              const isProblem = sale.syncStatus === "SYNC_ERROR" || sale.syncStatus === "REQUIRES_REVIEW";
               return (
                 <div
                   key={sale.localId}
-                  className="rounded-2xl border border-dashed border-amber-200 bg-amber-50/40 p-3"
+                  className={`rounded-2xl border border-dashed p-3 ${
+                    isProblem ? "border-red-200 bg-red-50/40" : "border-amber-200 bg-amber-50/40"
+                  }`}
                 >
                   {/* A real <button>, not a <div role="button"> - unlike the
                       /driver/ventes rows, nothing is nested inside it here,
@@ -95,9 +116,9 @@ export function OfflineSalesDialog({ open, onOpenChange, sales }: OfflineSalesDi
                       <div className="flex shrink-0 items-center gap-1.5">
                         <Badge
                           variant="outline"
-                          className="border-amber-300 bg-amber-100 px-1.5 py-0 text-[10px] font-normal text-amber-800"
+                          className={`px-1.5 py-0 text-[10px] font-normal ${STATUS_BADGE_CLASSNAME[sale.syncStatus] ?? "border-amber-300 bg-amber-100 text-amber-800"}`}
                         >
-                          En attente
+                          {STATUS_LABEL[sale.syncStatus] ?? sale.syncStatus}
                         </Badge>
                         {expanded ? (
                           <ChevronUp aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground" />
@@ -121,6 +142,12 @@ export function OfflineSalesDialog({ open, onOpenChange, sales }: OfflineSalesDi
                           <span className="shrink-0 tabular-nums">{formatCurrency(line.totalTTC)}</span>
                         </div>
                       ))}
+                      {(sale.syncStatus === "SYNC_ERROR" || sale.syncStatus === "REQUIRES_REVIEW") &&
+                      sale.lastSyncError ? (
+                        <p className="mt-1 border-t border-amber-200/80 pt-1 text-xs text-red-700">
+                          {sale.lastSyncError}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

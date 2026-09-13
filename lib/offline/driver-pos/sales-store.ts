@@ -322,6 +322,89 @@ export async function getOfflineSales(scope: {
 }
 
 /**
+ * PHASE 4B.1 - "4. AVANT L'ENVOI": PENDING_SYNC or SYNC_ERROR -> SYNCING,
+ * incrementing syncAttempts (the schema already has this column - see
+ * offline_sales's own CREATE TABLE in schema.ts). Never touches
+ * clientMutationId - a retry always reuses the exact same one, generated
+ * once at createOfflineSale time and never regenerated here.
+ */
+export async function markOfflineSaleSyncing(localId: string): Promise<boolean> {
+  const result = await withDatabase(async (db) => {
+    await db.run(
+      `UPDATE offline_sales SET syncStatus = 'SYNCING', syncAttempts = syncAttempts + 1 WHERE localId = ?`,
+      [localId],
+    );
+    return true;
+  });
+  return result ?? false;
+}
+
+/**
+ * "5. SUCCÈS SERVEUR": records the server's own identity for this sale and
+ * marks it SYNCED. `syncedAt` is this device's local clock at the moment of
+ * sync (mirrors createdAtLocal's own convention) - never confused with the
+ * server's own soldAt/createdAt.
+ */
+export async function markOfflineSaleSynced(
+  localId: string,
+  result: { serverSaleId: string; officialDisplayNumber: string },
+): Promise<boolean> {
+  const ok = await withDatabase(async (db) => {
+    await db.run(
+      `UPDATE offline_sales
+         SET syncStatus = 'SYNCED', serverSaleId = ?, officialDisplayNumber = ?, syncedAt = ?
+       WHERE localId = ?`,
+      [result.serverSaleId, result.officialDisplayNumber, nowIso(), localId],
+    );
+    return true;
+  });
+  return ok ?? false;
+}
+
+/** "7. ERREURS TRANSITOIRES": network failure, timeout, or a 5xx - the sale
+ *  is kept exactly as-is (lines/lines/priceToken untouched) and remains
+ *  retryable with the same clientMutationId via the manual sync button. */
+export async function markOfflineSaleSyncError(localId: string, message: string): Promise<boolean> {
+  const result = await withDatabase(async (db) => {
+    await db.run(
+      `UPDATE offline_sales SET syncStatus = 'SYNC_ERROR', lastSyncError = ? WHERE localId = ?`,
+      [message, localId],
+    );
+    return true;
+  });
+  return result ?? false;
+}
+
+/** "9. ERREURS MÉTIER PERMANENTES": a business rejection (bad price token,
+ *  unsupported payment method, ...) that retrying unchanged would only ever
+ *  reproduce. The sale, its lines and clientMutationId are never touched -
+ *  only the status and the error message, for a future explicit review. */
+export async function markOfflineSaleRequiresReview(localId: string, message: string): Promise<boolean> {
+  const result = await withDatabase(async (db) => {
+    await db.run(
+      `UPDATE offline_sales SET syncStatus = 'REQUIRES_REVIEW', lastSyncError = ? WHERE localId = ?`,
+      [message, localId],
+    );
+    return true;
+  });
+  return result ?? false;
+}
+
+/**
+ * "8. AUTH 401": reverts a sale that was just marked SYNCING back to
+ * PENDING_SYNC - a session expiry is not this sale's fault, so it must not
+ * accumulate as a SYNC_ERROR against it (syncAttempts already incremented
+ * by markOfflineSaleSyncing stays incremented - only the status reverts).
+ */
+export async function revertOfflineSaleToPending(localId: string): Promise<boolean> {
+  const result = await withDatabase(async (db) => {
+    await db.run(`UPDATE offline_sales SET syncStatus = 'PENDING_SYNC' WHERE localId = ?`, [localId]);
+    return true;
+  });
+  return result ?? false;
+}
+
+/**
  * Number of local sales still awaiting a future sync - the "N ventes en
  * attente" counter (see driver-pos-view.tsx's network badge). Sourced
  * straight from SQLite, never from in-memory state, so it survives a
