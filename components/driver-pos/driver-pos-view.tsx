@@ -56,6 +56,7 @@ import {
   getOfflineDbDiagnostic,
   getOfflineSales,
   hydrateDriverOfflineCache,
+  isSyncInFlight,
   loadDriverPosContext,
   syncPendingDriverSales,
   type NetworkState,
@@ -271,19 +272,48 @@ export function DriverPosView({
     [offlinePendingSales, context.customers],
   );
 
-  // Phase 4B.1 - "12. BOUTON MANUEL": the only place a sync batch is ever
-  // triggered in this phase (see "16. PAS ENCORE D'AUTO SYNC" - no
-  // Network listener, no background worker, no sync-on-launch). Always
-  // re-reads offline_sales from SQLite afterward regardless of outcome, so
-  // the badge/dialog reflect reality even if the batch stopped early or
-  // every sale failed.
-  async function handleSyncPendingSales() {
+  // Phase 4B.1/4B.2 - "12. BOUTON MANUEL" / "4. RÉUTILISER LE MOTEUR 4B.1":
+  // the ONE place a sync batch is ever triggered from, for BOTH the manual
+  // button (source="manual") and the OFFLINE->ONLINE auto-trigger below
+  // (source="reconnect") - both call the exact same syncPendingDriverSales,
+  // never a second sync implementation. Always re-reads offline_sales from
+  // SQLite afterward regardless of outcome, so the badge/dialog reflect
+  // reality even if the batch stopped early or every sale failed.
+  async function handleSyncPendingSales(source: "manual" | "reconnect" = "manual") {
     const organizationId = currentUser?.organizationId ?? null;
     if (!organizationId || syncingSales) return;
+    // "9. AUCUNE VENTE" - a reconnect with nothing syncable calls nothing
+    // and shows nothing. The manual button is never even reachable in that
+    // state (see "12. BOUTON MANUEL" - it's not rendered when the count is 0).
+    if (source === "reconnect" && syncableOfflineCount === 0) return;
+
+    // "15. ÉVITER LES DOUBLES TOASTS": if a batch is ALREADY running (e.g.
+    // the auto-trigger fired a moment before this very call), this call is
+    // about to JOIN that same batch via syncPendingDriverSales's own
+    // single-flight (see sync-sales.ts) rather than start a new one - the
+    // ORIGINAL caller already owns showing toasts/refreshing context for
+    // that outcome, so this one only reflects it into local state, never a
+    // second round of toasts for the exact same batch.
+    const isJoiningExistingBatch = isSyncInFlight();
+    const startingCount = syncableOfflineCount;
+
+    let loadingToastId: string | number | undefined;
+    if (source === "reconnect" && !isJoiningExistingBatch) {
+      // "8. UX AUTO-SYNC" - a reconnect can happen while the driver isn't
+      // looking at the button at all, unlike a manual click which already
+      // gives instant feedback from the button itself.
+      loadingToastId = toast.loading(
+        `Synchronisation de ${startingCount} vente${startingCount > 1 ? "s" : ""}...`,
+      );
+    }
+
     setSyncingSales(true);
     try {
       const result = await syncPendingDriverSales({ organizationId, driverId: context.driver.id });
       await refreshOfflinePendingSales();
+
+      if (loadingToastId !== undefined) toast.dismiss(loadingToastId);
+      if (isJoiningExistingBatch) return;
 
       if (result.stoppedForAuth) {
         toast.error("Session expirée. Reconnectez-vous pour synchroniser les ventes.");
@@ -314,6 +344,26 @@ export function DriverPosView({
       setSyncingSales(false);
     }
   }
+
+  // Phase 4B.2 - "2./3. DÉCLENCHEUR EXACT" / "PREMIER RENDER": auto-sync
+  // fires ONLY on a genuine OFFLINE (or SERVER_UNREACHABLE) -> ONLINE
+  // transition actually OBSERVED during this component's lifetime - never
+  // on first mount just because the initial state happens to already be
+  // ONLINE. `previousNetworkStateRef` starts at whatever `networkState`
+  // already is on the very first render, so that render can never itself
+  // look like a transition; only a REAL later change updates it.
+  const previousNetworkStateRef = React.useRef<NetworkState>(networkState);
+  React.useEffect(() => {
+    const previous = previousNetworkStateRef.current;
+    previousNetworkStateRef.current = networkState;
+    const reconnected = previous !== "ONLINE" && networkState === "ONLINE";
+    if (!reconnected) return;
+    // Deferred to a microtask so this effect's own body never synchronously
+    // triggers handleSyncPendingSales's setState calls (same pattern as
+    // this file's other effects - see refreshOfflinePendingSales's own).
+    queueMicrotask(() => void handleSyncPendingSales("reconnect"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [networkState]);
 
   // TEMPORARY dev diagnostic (Phase 3 bug hunt) - read once on mount, not
   // re-read on every render; the schema version doesn't change while the

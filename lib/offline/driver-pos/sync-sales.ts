@@ -10,9 +10,13 @@
  * endpoint, and so a stop-on-401 (see "8. AUTH 401") can actually take
  * effect before the next sale is attempted.
  *
- * Deliberately NOT wired to any automatic trigger - see this task's own
- * "16. PAS ENCORE D'AUTO SYNC". Only a manual call (the driver POS's
- * "Synchroniser N vente(s)" button) ever runs this.
+ * PHASE 4B.2 update: this module itself is UNCHANGED - the manual button
+ * and the OFFLINE->ONLINE auto-trigger (see driver-pos-view.tsx's own
+ * handleSyncPendingSales) both call this exact same syncPendingDriverSales,
+ * so every guarantee below (single-flight, sequential/soldAt-ordered,
+ * status transitions, outbox handling, idempotency) applies identically no
+ * matter which one triggered it - there is no separate "auto" code path
+ * here to keep in sync with this one.
  */
 
 import { deleteOutboxEntriesForEntity } from "./outbox-store";
