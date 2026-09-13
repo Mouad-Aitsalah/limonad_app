@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.0",
     "@capacitor-community/sqlite": "^8.1.1",
     "@capacitor/core": "^8.5.0",
     "react": "19.2.4",

@@ -11,6 +11,7 @@
     "build:driver-mobile": "npm --prefix mobile/driver run build"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.0",
     "@base-ui/react": "^1.6.0",
     "@capacitor-community/sqlite": "^8.1.1",
     "@capacitor/android": "^8.5.0",

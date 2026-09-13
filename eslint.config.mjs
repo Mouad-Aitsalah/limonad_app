@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // PHASE 5A.1 - the Vite driver shell (mobile/driver/) is its own
+    // separate npm project with its own build output - never source to lint
+    // here (it is already type-checked and linted by its own tooling as
+    // part of `npm run build:driver-mobile`).
+    "mobile/driver/dist/**",
   ]),
 ]);
 
