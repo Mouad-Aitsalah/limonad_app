@@ -2,10 +2,12 @@ import * as React from "react";
 
 import { getAnyDriverOfflineContext, isNetworkAvailable } from "@/lib/offline/driver-pos";
 import type { DriverOfflineContext } from "@/lib/offline/driver-pos";
+import type { DriverPosContextDto } from "@/types/operations-dto";
 
 import { deriveRestingBootState, runBootSequence, type BootState } from "./lib/auth-state";
+import { mobileFetch } from "./lib/mobile-fetch";
 import { logoutMobile, type MobileUser } from "./lib/mobile-auth";
-import { seedMinimalOfflineContextIfMissing } from "./lib/seed-offline-context";
+import { refreshOfflineContextFromServer } from "./lib/refresh-offline-context";
 import type { Screen } from "./navigation";
 import { HomeScreen } from "./screens/HomeScreen";
 import { LoginScreen } from "./screens/LoginScreen";
@@ -55,6 +57,26 @@ export function App() {
       setToken(result.token);
       updateBootState(result.bootState);
       hasBootedRef.current = true;
+
+      // CORRECTION CONTEXTE OFFLINE - the boot-time restoration check above
+      // already fetched a full DriverPosContextDto when it succeeded; reuse
+      // it (no second fetch) to refresh offline_context with truck/tour/
+      // stockLocationId. organizationId/userId/userName come from the
+      // context ALREADY cached on this device (written by a prior login) -
+      // if there is none yet (a token surviving with no local context at
+      // all - see this task's own "9. ISOLATION"), this step is skipped;
+      // the next real login will populate it via handleLoginSuccess below.
+      if (result.driverPosContext && context && result.token) {
+        await refreshOfflineContextFromServer({
+          token: result.token,
+          organizationId: context.organizationId,
+          userId: context.userId,
+          userName: context.userName,
+          driverPosContext: result.driverPosContext,
+        });
+        if (!active) return;
+        setOfflineContext(await getAnyDriverOfflineContext());
+      }
     })();
     return () => {
       active = false;
@@ -87,7 +109,27 @@ export function App() {
 
   async function handleLoginSuccess(newToken: string, newUser: MobileUser) {
     setToken(newToken);
-    await seedMinimalOfflineContextIfMissing(newUser);
+
+    // CORRECTION CONTEXTE OFFLINE - fetch the SAME full context
+    // (DriverPosContextDto) the web app's driver-pos page loads, then
+    // hydrate offline_context from it via the shared, unchanged
+    // hydrateDriverOfflineCache (see refresh-offline-context.ts). Requires
+    // organizationId/driverId, which every real driver login response
+    // carries; a role/account without them (see mobile-auth.ts's
+    // MobileUser) simply has no offline context to build yet.
+    if (newUser.organizationId && newUser.driverId) {
+      const posOutcome = await mobileFetch<{ context: DriverPosContextDto }>("/api/driver/pos", newToken);
+      if (posOutcome.kind === "ok") {
+        await refreshOfflineContextFromServer({
+          token: newToken,
+          organizationId: newUser.organizationId,
+          userId: newUser.id,
+          userName: newUser.nom,
+          driverPosContext: posOutcome.data.context,
+        });
+      }
+    }
+
     setOfflineContext(await getAnyDriverOfflineContext());
     setScreen("HOME");
   }

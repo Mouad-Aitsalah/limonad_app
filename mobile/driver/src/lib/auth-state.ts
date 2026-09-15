@@ -1,4 +1,5 @@
 import type { DriverOfflineContext } from "@/lib/offline/driver-pos";
+import type { DriverPosContextDto } from "@/types/operations-dto";
 
 import { getMobileAccessToken, removeMobileAccessToken } from "./secure-token-storage";
 import { mobileFetch } from "./mobile-fetch";
@@ -36,6 +37,14 @@ export type BootState =
 export type BootResult = {
   bootState: BootState;
   token: string | null;
+  /**
+   * PHASE 5A.5 (CORRECTION CONTEXTE OFFLINE) - the full DriverPosContextDto
+   * from the boot-time /api/driver/pos check, when it succeeded (kind "ok").
+   * Threaded out so the caller can hydrate the FULL offline_context
+   * (truck/tour/stockLocationId) from the exact same response instead of
+   * discarding it and fetching it again.
+   */
+  driverPosContext: DriverPosContextDto | null;
 };
 
 /**
@@ -70,28 +79,40 @@ export async function runBootSequence(params: {
   const token = await getMobileAccessToken();
 
   if (!token) {
-    return { bootState: deriveRestingBootState(null, params.online, params.context), token: null };
+    return {
+      bootState: deriveRestingBootState(null, params.online, params.context),
+      token: null,
+      driverPosContext: null,
+    };
   }
 
   if (!params.online) {
     // Token present, device offline: NEVER touch it, never guess it is
     // expired - see this task's own "8. ... NE PAS invalider le token".
-    return { bootState: deriveRestingBootState(token, false, params.context), token };
+    return {
+      bootState: deriveRestingBootState(token, false, params.context),
+      token,
+      driverPosContext: null,
+    };
   }
 
-  const outcome = await mobileFetch("/api/driver/pos", token);
+  const outcome = await mobileFetch<{ context: DriverPosContextDto }>("/api/driver/pos", token);
 
   if (outcome.kind === "ok") {
-    return { bootState: { kind: "AUTHENTICATED" }, token };
+    return { bootState: { kind: "AUTHENTICATED" }, token, driverPosContext: outcome.data.context };
   }
 
   if (outcome.kind === "unauthorized") {
     await removeMobileAccessToken();
-    return { bootState: { kind: "SESSION_EXPIRED" }, token: null };
+    return { bootState: { kind: "SESSION_EXPIRED" }, token: null, driverPosContext: null };
   }
 
   // network_error or server_error: "un echec reseau n'est PAS equivalent a
   // un 401" - the token is kept, and the shell falls back to whatever
   // offline_context it already has (or the no-cache message otherwise).
-  return { bootState: deriveRestingBootState(token, false, params.context), token };
+  return {
+    bootState: deriveRestingBootState(token, false, params.context),
+    token,
+    driverPosContext: null,
+  };
 }

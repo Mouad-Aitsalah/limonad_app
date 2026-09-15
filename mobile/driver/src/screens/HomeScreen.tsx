@@ -52,9 +52,16 @@ export function HomeScreen({ bootState, online, context, onNavigate, onLogout, l
       <section style={styles.card}>
         <dl style={styles.definitionList}>
           <Row label="Chauffeur" value={context.driverName} />
-          <Row label="Camion" value={context.truckName ?? "-"} />
+          {/* CORRECTION CONTEXTE OFFLINE - "5./6." a bare "-" is ambiguous
+              (no data yet vs. genuinely none). truckName/tourCode are null
+              exactly when getDriverPosContext's own response said so (no
+              truck assigned / no IN_PROGRESS tour) - refreshed on every
+              successful online boot/login (see refresh-offline-context.ts),
+              so by the time this renders offline it is a real, current
+              answer, not a stale guess. */}
+          <Row label="Camion" value={context.truckName ?? "Non assigne"} />
           <Row label="Organisation" value={context.organizationName ?? "-"} />
-          <Row label="Tournee" value={context.tourCode ?? "-"} />
+          <Row label="Tournee" value={context.tourCode ?? "Aucune tournee active"} />
           <Row label="Derniere synchronisation" value={formatDate(context.syncedAt)} />
         </dl>
       </section>
