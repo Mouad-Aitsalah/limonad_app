@@ -50,6 +50,9 @@ export type { NetworkState } from "./network-status";
 export { getOfflineDbDiagnostic, isDatabaseAvailable } from "./database";
 export type { OfflineDbDiagnostic } from "./database";
 
+export { getOfflineCacheDiagnostics } from "./diagnostics";
+export type { OfflineCacheDiagnostics } from "./diagnostics";
+
 export { loadCachedDriverPosContext } from "./pos-context";
 export type { CachedDriverPosContext, CachedDriverPosContextResult } from "./pos-context";
 

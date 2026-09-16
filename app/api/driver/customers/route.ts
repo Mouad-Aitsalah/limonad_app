@@ -7,17 +7,35 @@ import {
 } from "@/lib/server/driver-customers";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { reportUnexpected } from "@/lib/server/report-error";
 
-export async function GET() {
+/**
+ * CORRECTION "CACHE COMPLET CLIENTS CHAUFFEUR": GET is now also called
+ * cross-origin by the driver shell (see mobile/driver/src/lib/driver-pos-
+ * data-source.ts's refreshFullDriverCustomerCache) to refresh cached_
+ * customers with every customer this driver is allowed to see - not just
+ * GET /api/driver/pos's small, bounded preload. Same CORS wiring as
+ * app/api/driver/pos/route.ts. POST (used only by the web app's own
+ * same-origin /driver/clients today) is left untouched - the shell does not
+ * call it, so it keeps its existing cookie/CSRF-only protection.
+ */
+export async function OPTIONS(request: Request) {
+  return handleMobilePreflight(request);
+}
+
+export async function GET(request: Request) {
   try {
-    return NextResponse.json({ customers: await getCustomersForCurrentDriver() });
+    return withMobileCors(request, NextResponse.json({ customers: await getCustomersForCurrentDriver() }));
   } catch (error) {
     if (error instanceof AuthServiceError || error instanceof OperationsServiceError) {
-      return NextResponse.json({ message: error.message }, { status: error.status });
+      return withMobileCors(request, NextResponse.json({ message: error.message }, { status: error.status }));
     }
     reportUnexpected(error, { route: "GET /api/driver/customers", area: "driver" });
-    return NextResponse.json({ message: "Impossible de charger les clients." }, { status: 500 });
+    return withMobileCors(
+      request,
+      NextResponse.json({ message: "Impossible de charger les clients." }, { status: 500 }),
+    );
   }
 }
 

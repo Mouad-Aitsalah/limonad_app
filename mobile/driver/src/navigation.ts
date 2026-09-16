@@ -4,4 +4,4 @@
  * /driver/pos or /driver/ventes (the Next app's own routes - unreachable
  * and irrelevant from this shell's origin).
  */
-export type Screen = "HOME" | "LOGIN" | "OFFLINE_SALES" | "POS_PLACEHOLDER";
+export type Screen = "HOME" | "LOGIN" | "OFFLINE_SALES" | "POS";

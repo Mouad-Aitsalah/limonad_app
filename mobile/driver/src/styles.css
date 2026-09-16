@@ -1,0 +1,324 @@
+/**
+ * INTÉGRATION POS SHELL - design tokens copied from app/globals.css so the
+ * reused POS components (components/ui/*, components/pos/*) render with the
+ * EXACT same palette/spacing as the web app - "même design" (see this
+ * phase's own "26. PAS DE DOUBLE INTERFACE"). Not `@import`-ed directly:
+ * app/globals.css also imports "shadcn/tailwind.css" and
+ * "leaflet/dist/leaflet.css" and references Next's own font-loading CSS
+ * variables, none of which this shell needs or has installed. Only the
+ * variables/rules actually used by the reused components are copied below -
+ * keep in sync by hand if the source palette in app/globals.css changes.
+ */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+:root {
+  --background: #eef4f9;
+  --foreground: #102038;
+  --card: #ffffff;
+  --card-foreground: #102038;
+  --popover: #ffffff;
+  --popover-foreground: #102038;
+  --primary: #0f7a5d;
+  --primary-foreground: #f7fffb;
+  --secondary: #edf3f8;
+  --secondary-foreground: #173156;
+  --muted: #e4edf5;
+  --muted-foreground: #61748f;
+  --accent: #dce8f7;
+  --accent-foreground: #173156;
+  --destructive: #d75059;
+  --border: #d7e1ec;
+  --input: #d7e1ec;
+  --ring: #2b6cb0;
+  --radius: 1rem;
+  --text-primary: #102038;
+  --text-secondary: #5f7391;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--text-primary);
+    min-height: 100vh;
+  }
+
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  input,
+  select,
+  textarea {
+    color: var(--text-primary);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-secondary);
+  }
+}
+
+/* components/pos/use-fly-to-cart.ts's floating "flies into the cart"
+   animation - copied verbatim from app/globals.css. */
+.pos-fly-to-cart {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  height: 44px;
+  width: 44px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.8);
+  border-radius: 14px;
+  background: #ecfdf5;
+  box-shadow: 0 12px 28px rgb(15 23 42 / 0.22);
+  color: #047857;
+  font-size: 18px;
+  font-weight: 700;
+  pointer-events: none;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition:
+    transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 520ms ease-in;
+}
+
+.pos-fly-to-cart img {
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+
+.pos-fly-to-cart--active {
+  opacity: 0;
+  transform: translate3d(var(--fly-x), var(--fly-y), 0) scale(0.42) rotate(7deg);
+}
+
+/* components/pos/mobile-selection-sheet.tsx's entrance animation. */
+@keyframes customer-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.customer-sheet-enter {
+  animation: customer-sheet-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-sheet-enter {
+    animation: none;
+  }
+}
+
+/* components/pos/receipt-print.tsx's print layout - copied verbatim from
+   app/globals.css (only the "sale" document rules; the deposit-ticket rules
+   are unused here, kept in case a future phase reuses them). */
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    min-height: auto !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .receipt-print-area,
+  .receipt-print-area * {
+    visibility: visible !important;
+  }
+
+  .receipt-print-area {
+    display: block !important;
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 80mm !important;
+    padding: 2mm !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .receipt-print-area[data-paper="58"] {
+    width: 58mm !important;
+    padding: 1.5mm !important;
+  }
+
+  .receipt-print-area[data-document="sale"] {
+    box-sizing: border-box !important;
+  }
+
+  .receipt-print-ticket {
+    width: 100%;
+    color: #000;
+    font-family: Arial, system-ui, sans-serif;
+    font-size: 10px;
+    line-height: 1.22;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-ticket {
+    font-size: 9px;
+  }
+
+  .receipt-print-header {
+    margin-bottom: 2mm;
+    text-align: center;
+  }
+
+  .receipt-print-area[data-document="sale"] .receipt-print-logo {
+    display: block;
+    margin: 0 auto 1mm;
+    max-height: 27.2mm;
+    max-width: 78.2mm;
+    height: auto;
+    width: auto;
+    object-fit: contain;
+  }
+
+  .receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-logo {
+    max-height: 22.1mm;
+    max-width: 64.6mm;
+  }
+
+  .receipt-print-brand {
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+  }
+
+  .receipt-print-meta {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1mm 2mm;
+  }
+
+  .receipt-print-separator {
+    margin: 1.8mm 0;
+    border-top: 1px dashed #000;
+  }
+
+  .receipt-print-area[data-document="sale"] .receipt-print-grid {
+    display: grid;
+    grid-template-columns: 7mm minmax(0, 1fr) 15mm 20mm;
+    gap: 1mm;
+    align-items: start;
+  }
+
+  .receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-grid {
+    grid-template-columns: 5mm minmax(0, 1fr) 13mm 16mm;
+    gap: 0.7mm;
+  }
+
+  .receipt-print-head {
+    font-weight: 700;
+  }
+
+  .receipt-print-lines {
+    display: grid;
+    gap: 1mm;
+  }
+
+  .receipt-print-number,
+  .receipt-print-right {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .receipt-print-qty {
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .receipt-print-product {
+    max-height: 2.5em;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .receipt-print-discount {
+    margin-left: 8mm;
+    font-size: 9px;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-discount {
+    margin-left: 5.7mm;
+  }
+
+  .receipt-print-total {
+    display: flex;
+    justify-content: space-between;
+    gap: 2mm;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .receipt-print-pending {
+    margin-top: 1mm;
+    border: 1px dashed #000;
+    padding: 1mm 2mm;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+
+  .receipt-print-footer {
+    display: grid;
+    gap: 0.8mm;
+  }
+}

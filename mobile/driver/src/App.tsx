@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Toaster } from "sonner";
 
 import { getAnyDriverOfflineContext, isNetworkAvailable } from "@/lib/offline/driver-pos";
 import type { DriverOfflineContext } from "@/lib/offline/driver-pos";
@@ -12,7 +13,7 @@ import type { Screen } from "./navigation";
 import { HomeScreen } from "./screens/HomeScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { OfflineSalesScreen } from "./screens/OfflineSalesScreen";
-import { PosPlaceholderScreen } from "./screens/PosPlaceholderScreen";
+import { PosScreen } from "./screens/PosScreen";
 import { styles } from "./ui/styles";
 
 /**
@@ -166,23 +167,37 @@ export function App() {
 
   // By elimination, bootState is now AUTHENTICATED or OFFLINE_CONTEXT_ONLY,
   // and offlineContext is non-null - exactly what HomeScreen/OfflineSalesScreen need.
-  switch (screen) {
-    case "OFFLINE_SALES":
-      return <OfflineSalesScreen context={offlineContext} onBack={() => setScreen("HOME")} />;
-    case "POS_PLACEHOLDER":
-      return <PosPlaceholderScreen onBack={() => setScreen("HOME")} />;
-    default:
-      return (
-        <HomeScreen
-          bootState={bootState}
-          online={online}
-          context={offlineContext}
-          onNavigate={setScreen}
-          onLogout={() => void handleLogout()}
-          logoutPending={logoutPending}
-        />
-      );
-  }
+  return (
+    <>
+      <Toaster position="top-center" richColors />
+      {(() => {
+        switch (screen) {
+          case "OFFLINE_SALES":
+            return <OfflineSalesScreen context={offlineContext} onBack={() => setScreen("HOME")} />;
+          case "POS":
+            return (
+              <PosScreen
+                token={token}
+                offlineContext={offlineContext}
+                deviceOnline={online}
+                onBack={() => setScreen("HOME")}
+              />
+            );
+          default:
+            return (
+              <HomeScreen
+                bootState={bootState}
+                online={online}
+                context={offlineContext}
+                onNavigate={setScreen}
+                onLogout={() => void handleLogout()}
+                logoutPending={logoutPending}
+              />
+            );
+        }
+      })()}
+    </>
+  );
 }
 
 /**

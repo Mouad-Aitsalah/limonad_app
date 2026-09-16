@@ -67,7 +67,7 @@ export function HomeScreen({ bootState, online, context, onNavigate, onLogout, l
       </section>
 
       <section style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
-        <button type="button" style={styles.actionButton} onClick={() => onNavigate("POS_PLACEHOLDER")}>
+        <button type="button" style={styles.actionButton} onClick={() => onNavigate("POS")}>
           Point de vente
         </button>
         <button type="button" style={styles.actionButton} onClick={() => onNavigate("OFFLINE_SALES")}>

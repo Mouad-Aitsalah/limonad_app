@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
@@ -10,14 +11,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // lib/offline/driver-pos/** modules without copying a single file.
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+// INTÉGRATION POS SHELL - the shell also reuses components/products/
+// product-media.tsx (and everything that depends on it) UNCHANGED, whose
+// only Next-specific import is "next/image" - aliased below to a local
+// <img>-based shim (src/shims/next-image.tsx). This is the ONE deliberate,
+// controlled exception to the guard below - never a general opt-out.
+const nextImageShimPath = path.resolve(__dirname, "src/shims/next-image.tsx");
+
 // PHASE 5A.1 - "10. INTERDICTION DES MODULES SERVEUR": a build-time guard,
 // not just a convention. lib/offline/driver-pos/** is pure client code by
 // design (no Prisma, no next/headers, no server-only), so nothing the shell
 // legitimately needs should ever match these patterns - if one does, that is
 // exactly the mistake this plugin exists to catch before it ships in an APK.
+// "next/image" is explicitly exempted (see nextImageShimPath above) - every
+// other next/* import (next/navigation, next/headers, next/server, bare
+// "next", ...) stays forbidden.
 const FORBIDDEN_SPECIFIER_PATTERNS: RegExp[] = [
   /^server-only$/,
-  /^next(\/|$)/,
+  /^next$/,
+  /^next\/(?!image$)/,
   /^@prisma\//,
   /(^|\/)lib\/server\//,
   /(^|\/)lib\/generated\/prisma(\/|$)/,
@@ -40,9 +52,10 @@ function forbidServerImports(): Plugin {
 
 export default defineConfig({
   root: __dirname,
-  plugins: [forbidServerImports(), react()],
+  plugins: [forbidServerImports(), react(), tailwindcss()],
   resolve: {
     alias: {
+      "next/image": nextImageShimPath,
       "@": repoRoot,
     },
   },

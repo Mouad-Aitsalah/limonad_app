@@ -60,14 +60,25 @@ export function OfflineSalesScreen({ context, onBack }: OfflineSalesScreenProps)
           ? state.sales.map((sale) => (
               <div key={sale.localId} style={styles.saleRow}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontWeight: 600 }}>{sale.localReference}</span>
+                  {/* CORRECTION - "15. HISTORIQUE": la meme ligne locale
+                      passe de la reference OFF-... a l'officialDisplayNumber
+                      une fois SYNCED (markOfflineSaleSynced ecrit dans la
+                      meme ligne SQLite) - jamais une deuxieme ligne. */}
+                  <span style={{ fontWeight: 600 }}>
+                    {sale.syncStatus === "SYNCED" && sale.officialDisplayNumber
+                      ? sale.officialDisplayNumber
+                      : sale.localReference}
+                  </span>
                   <span style={{ fontWeight: 600 }}>{sale.totalTTC.toFixed(2)} DH</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#64748b" }}>
                   <span>
                     {formatTime(sale.soldAt)} - {sale.customerId ? (state.customerNames.get(sale.customerId) ?? "Client") : "Client comptoir"}
                   </span>
-                  <span>{STATUS_LABEL[sale.syncStatus] ?? sale.syncStatus}</span>
+                  <span>
+                    {sale.syncStatus === "SYNCED" ? "✓ " : sale.syncStatus === "PENDING_SYNC" ? "⏳ " : ""}
+                    {STATUS_LABEL[sale.syncStatus] ?? sale.syncStatus}
+                  </span>
                 </div>
               </div>
             ))

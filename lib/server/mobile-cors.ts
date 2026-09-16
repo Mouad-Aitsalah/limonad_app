@@ -13,10 +13,12 @@ import { NextResponse } from "next/server";
  * origin IS the API's origin). This module is the single place that origin
  * allowlist lives, so it is never copy-pasted per route.
  *
- * Deliberately narrow: only /api/mobile/* and the specific /api/driver/*
- * routes the shell actually calls opt into this (by calling the two
- * functions below) - every other route is completely untouched and keeps
- * working exactly as before.
+ * Deliberately narrow: only the specific routes the shell actually calls opt
+ * into this (by calling the two functions below) - originally /api/mobile/*
+ * and /api/driver/*, joined by /api/customers/search and
+ * /api/customers/by-number once the shell's own customer picker/N° client
+ * box started calling them too (see those routes' own doc comments) - every
+ * other route is completely untouched and keeps working exactly as before.
  *
  * Never `Access-Control-Allow-Origin: *` - these routes accept a bearer
  * token via the `Authorization` header, and a wildcard origin combined with
