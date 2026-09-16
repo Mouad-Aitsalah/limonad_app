@@ -193,13 +193,34 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
       }
       setContextError(null);
       setContext(result.context);
-      setAllCustomers(result.context.customers);
+      // BUG-01 "CLIENTS NON DISPONIBLES OFFLINE" - a "server" result's own
+      // `customers` field is ALWAYS GET /api/driver/pos's small, bounded
+      // preload (max 20 - see getPosCustomerPreload) - it must never
+      // overwrite an already-loaded COMPLETE list (from
+      // refreshFullDriverCustomerCache) back down to 20 on every later
+      // online reload (after a sale, a sync, ...). A "cache" result's
+      // `customers`, by contrast, is read straight from cached_customers
+      // (now written ONLY by refreshFullDriverCustomerCache for this shell -
+      // see hydrateDriverOfflineCache's skipCustomersCache) - always the
+      // fullest data actually available right now, so always trusted.
+      if (result.source === "cache" || !fullCustomersCached) {
+        if (import.meta.env.DEV) {
+          if (result.source === "cache") {
+            console.log("[OFFLINE CUSTOMERS] cache read offline =", result.context.customers.length, {
+              organizationId: offlineContext.organizationId,
+              driverId: offlineContext.driverId,
+            });
+          }
+          console.log("[OFFLINE CUSTOMERS] allCustomers =", result.context.customers.length);
+        }
+        setAllCustomers(result.context.customers);
+      }
       setContextSource(result.source);
       setCacheSyncedAt(result.source === "cache" ? result.cacheSyncedAt : null);
       if (result.source === "server") setServerReachable(true);
       else if (token) setServerReachable(false);
     },
-    [token],
+    [token, fullCustomersCached, offlineContext.organizationId, offlineContext.driverId],
   );
 
   const loadContext = React.useCallback(
@@ -272,7 +293,10 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
       if (cancelled || !fullList) return;
       setAllCustomers(fullList);
       setFullCustomersCached(true);
-      if (import.meta.env.DEV) console.log("[OFFLINE CACHE] full driver customers cached", fullList.length);
+      if (import.meta.env.DEV) {
+        console.log("[OFFLINE CACHE] full driver customers cached", fullList.length);
+        console.log("[OFFLINE CUSTOMERS] allCustomers =", fullList.length);
+      }
     });
     return () => {
       cancelled = true;

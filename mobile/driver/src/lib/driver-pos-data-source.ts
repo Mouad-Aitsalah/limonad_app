@@ -1,4 +1,5 @@
 import {
+  getCachedCustomers,
   hydrateDriverOfflineCache,
   loadCachedDriverPosContext,
   saveCachedCustomers,
@@ -48,13 +49,21 @@ export async function loadShellDriverPosContext(params: {
     if (outcome.kind === "ok") {
       // Mirror into SQLite exactly like the web app does - same function,
       // same shape, so a later cold-start offline read sees the same data
-      // regardless of which app actually talked to the server.
+      // regardless of which app actually talked to the server. skipCustomers
+      // Cache:true - BUG-01 "CLIENTS OFFLINE": this shell maintains its OWN
+      // complete customers cache (refreshFullDriverCustomerCache, called
+      // separately below by PosScreen) - letting this call ALSO write
+      // cached_customers with GET /api/driver/pos's small 20-item preload
+      // raced that fuller write with no ordering guarantee and could
+      // silently clobber it back down to 20 - see hydrateDriverOfflineCache's
+      // own doc comment on this flag.
       void hydrateDriverOfflineCache({
         organizationId: params.organizationId,
         organizationName: params.organizationName,
         userId: params.userId,
         userName: params.userName,
         context: outcome.data.context,
+        skipCustomersCache: true,
       });
       return { ok: true, source: "server", context: outcome.data.context, cacheSyncedAt: null };
     }
@@ -98,13 +107,18 @@ export async function refreshFullDriverCustomerCache(params: {
   organizationId: string;
   driverId: string;
 }): Promise<CustomerDto[] | null> {
+  const scope = { organizationId: params.organizationId, driverId: params.driverId };
   if (!params.token) return null;
   const outcome = await mobileFetch<{ customers: CustomerDto[] }>("/api/driver/customers", params.token);
   if (outcome.kind !== "ok" || !outcome.data?.customers) return null;
 
   const customers = outcome.data.customers;
+  if (import.meta.env.DEV) {
+    console.log("[OFFLINE CUSTOMERS] server count =", customers.length, scope);
+  }
+
   const saved = await saveCachedCustomers(
-    { organizationId: params.organizationId, driverId: params.driverId },
+    scope,
     customers.map((customer) => ({
       id: customer.id,
       code: customer.code,
@@ -113,6 +127,13 @@ export async function refreshFullDriverCustomerCache(params: {
       status: customer.status,
     })),
   );
+  if (import.meta.env.DEV) {
+    console.log("[OFFLINE CUSTOMERS] cache write count =", saved ? customers.length : 0, scope);
+    if (saved) {
+      const rowsAfterWrite = await getCachedCustomers(scope);
+      console.log("[OFFLINE CUSTOMERS] cache read after write =", rowsAfterWrite.length, scope);
+    }
+  }
   return saved ? customers : null;
 }
 

@@ -18,6 +18,15 @@ type OrganizationIdentityResponse = { identity: OrganizationIdentity | null };
  * has one org, so the DTO never carries its name) - the web app itself
  * sources it from a separate call (see hooks/use-company-identity.tsx),
  * GET /api/organization/identity. Same call here, Bearer-authenticated.
+ *
+ * CORRECTION BUG-01 "CLIENTS NON DISPONIBLES OFFLINE": this runs on EVERY
+ * boot/login while online (see App.tsx) - `skipCustomersCache: true` for the
+ * exact same reason as driver-pos-data-source.ts's own call: `driverPos
+ * Context.customers` here is always the small POS preload, and letting this
+ * write cached_customers would silently clobber the COMPLETE list a
+ * previous session's PosScreen (refreshFullDriverCustomerCache) already
+ * cached, every single time the app is reopened online - before the driver
+ * even gets a chance to open POS again and have it restored.
  */
 export async function refreshOfflineContextFromServer(params: {
   token: string;
@@ -41,5 +50,6 @@ export async function refreshOfflineContextFromServer(params: {
     userId: params.userId,
     userName: params.userName,
     context: params.driverPosContext,
+    skipCustomersCache: true,
   });
 }

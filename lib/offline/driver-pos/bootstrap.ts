@@ -12,6 +12,26 @@ export type HydrateDriverOfflineCacheInput = {
   userId: string;
   userName: string;
   context: DriverPosContextDto;
+  /**
+   * CORRECTION BUG-01 "CLIENTS NON DISPONIBLES OFFLINE": `context.customers`
+   * here is always GET /api/driver/pos's small, bounded preload (max 20 -
+   * see getPosCustomerPreload) - fine as the ONLY source for cached_customers
+   * when there is no fuller alternative (the web app's driver-pos-view.tsx,
+   * still the default: this flag omitted/false). The driver SHELL maintains
+   * its own separate, unbounded customer cache refresh (see mobile/driver's
+   * refreshFullDriverCustomerCache, GET /api/driver/customers) - without this
+   * flag, this call's own saveCachedCustomers and that separate one both
+   * target the exact same cached_customers row set with NO ordering
+   * guarantee between them (this one is normally fired-and-forgotten, never
+   * awaited by its caller), so whichever finishes last wins - on a real
+   * device this preload write can finish AFTER the fuller one and silently
+   * clobber it back down to 20 rows, which is exactly the reported bug (the
+   * cache read while offline reflects whichever write raced last, not what
+   * was most recently intentionally cached). Set true to skip the customers
+   * write here entirely, leaving cached_customers as the shell's own
+   * separate refresh alone maintains it.
+   */
+  skipCustomersCache?: boolean;
 };
 
 /**
@@ -33,7 +53,7 @@ export type HydrateDriverOfflineCacheInput = {
 export async function hydrateDriverOfflineCache(
   input: HydrateDriverOfflineCacheInput,
 ): Promise<void> {
-  const { context, organizationId, organizationName, userId, userName } = input;
+  const { context, organizationId, organizationName, userId, userName, skipCustomersCache } = input;
   const driverId = context.driver.id;
 
   console.log("[OFFLINE CACHE] identity", { organizationId, driverId });
@@ -85,21 +105,25 @@ export async function hydrateDriverOfflineCache(
       productsSaved ? "" : "(write failed - see prior SQLite error)",
     );
 
-    const customersSaved = await saveCachedCustomers(
-      { organizationId, driverId },
-      context.customers.map((customer) => ({
-        id: customer.id,
-        code: customer.code,
-        name: customer.name,
-        phone: customer.phone ?? null,
-        status: customer.status,
-      })),
-    );
-    console.log(
-      "[OFFLINE CACHE] customers saved",
-      customersSaved ? context.customers.length : 0,
-      customersSaved ? "" : "(write failed - see prior SQLite error)",
-    );
+    if (skipCustomersCache) {
+      console.log("[OFFLINE CACHE] customers skipped (caller maintains its own complete cache)");
+    } else {
+      const customersSaved = await saveCachedCustomers(
+        { organizationId, driverId },
+        context.customers.map((customer) => ({
+          id: customer.id,
+          code: customer.code,
+          name: customer.name,
+          phone: customer.phone ?? null,
+          status: customer.status,
+        })),
+      );
+      console.log(
+        "[OFFLINE CACHE] customers saved",
+        customersSaved ? context.customers.length : 0,
+        customersSaved ? "" : "(write failed - see prior SQLite error)",
+      );
+    }
 
     // Truck stock is derived from the same product list, not a second
     // endpoint - DriverPosProductDto.availableQuantity already IS the

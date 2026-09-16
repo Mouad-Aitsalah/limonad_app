@@ -112,7 +112,12 @@ export function ShellCustomerPicker({
         type="button"
         aria-label="Client"
         aria-haspopup="dialog"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          if (import.meta.env.DEV) {
+            console.log("[OFFLINE CUSTOMERS] picker source count =", initialSuggestions.length);
+          }
+          setOpen(true);
+        }}
         className="flex h-9 w-full items-center gap-2 rounded-lg border border-input bg-background px-3 text-sm transition-colors active:bg-accent"
       >
         <User aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
