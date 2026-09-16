@@ -340,6 +340,39 @@ export async function markOfflineSaleSyncing(localId: string): Promise<boolean> 
 }
 
 /**
+ * CORRECTION "FINALISATION PIPELINE OFFLINE V1" - "13. CRASH ENTRE SERVEUR
+ * ET SQLITE": a sale can only be 'SYNCING' while a sync batch's loop is
+ * actively awaiting ITS response - the batch is strictly sequential (one
+ * sale at a time - see sync-sales.ts's own "2. Les ventes doivent etre
+ * envoyees UNE PAR UNE") and single-flight (syncInFlight), so only one such
+ * loop ever runs at a time in this whole process. A row still 'SYNCING' at
+ * the very START of a fresh batch - before this run has touched anything -
+ * can therefore only be a PREVIOUS process's interrupted attempt (the app
+ * crashed/was force-stopped between the server accepting the sale and this
+ * device recording SYNCED) - never a live one. Without this, such a row
+ * would be silently invisible to every future retry forever: runSyncBatch's
+ * own filter only ever picks up PENDING_SYNC/SYNC_ERROR, not SYNCING - a
+ * sale could get permanently stranded, unsynced, with no error shown
+ * anywhere. Resetting it to PENDING_SYNC lets the normal retry path pick it
+ * back up with the SAME clientMutationId (never regenerated) - the server's
+ * own idempotency (createDriverSale's unique idempotencyKey) then returns
+ * the already-created Sale instead of ever creating a duplicate.
+ */
+export async function reapStaleSyncingSales(scope: {
+  organizationId: string;
+  driverId: string;
+}): Promise<number> {
+  const result = await withDatabase(async (db) => {
+    const updateResult = await db.run(
+      `UPDATE offline_sales SET syncStatus = 'PENDING_SYNC' WHERE organizationId = ? AND driverId = ? AND syncStatus = 'SYNCING'`,
+      [scope.organizationId, scope.driverId],
+    );
+    return updateResult.changes?.changes ?? 0;
+  });
+  return result ?? 0;
+}
+
+/**
  * "5. SUCCÈS SERVEUR": records the server's own identity for this sale and
  * marks it SYNCED. `syncedAt` is this device's local clock at the moment of
  * sync (mirrors createdAtLocal's own convention) - never confused with the

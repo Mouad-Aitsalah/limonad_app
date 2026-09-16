@@ -22,7 +22,6 @@ import {
   describeOfflineSaleError,
   getOfflineCacheDiagnostics,
   getOfflineSales,
-  syncPendingDriverSales,
   type DriverOfflineContext,
   type OfflineSaleWithLines,
 } from "@/lib/offline/driver-pos";
@@ -38,7 +37,11 @@ import { ShellCustomerPicker } from "../components/shell-customer-picker";
 import { ShellNetworkBadge } from "../components/shell-network-badge";
 import { ShellReceiptPrint } from "../components/shell-receipt-print";
 import type { CartLineComputed, CartTotals } from "../lib/cart-types";
-import { loadShellDriverPosContext, refreshFullDriverCustomerCache } from "../lib/driver-pos-data-source";
+import {
+  loadShellDriverPosContext,
+  refreshFullDriverCustomerCache,
+  syncPendingDriverSalesForShell,
+} from "../lib/driver-pos-data-source";
 import { createOnlineDriverSale } from "../lib/driver-sales-api";
 import { useOrganizationIdentity } from "../lib/organization-identity";
 import { useShellPosProductSearch } from "../lib/use-shell-pos-product-search";
@@ -292,10 +295,10 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
     if (syncingSales || syncableOfflineCount === 0) return;
     setSyncingSales(true);
     try {
-      const result = await syncPendingDriverSales({
-        organizationId: offlineContext.organizationId,
-        driverId: offlineContext.driverId,
-      });
+      const result = await syncPendingDriverSalesForShell(
+        { organizationId: offlineContext.organizationId, driverId: offlineContext.driverId },
+        token,
+      );
       await refreshOfflinePendingSales();
       if (result.stoppedForAuth) {
         toast.error("Session expiree. Reconnectez-vous pour synchroniser les ventes.");

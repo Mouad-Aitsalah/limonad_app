@@ -1,6 +1,13 @@
-import { hydrateDriverOfflineCache, loadCachedDriverPosContext, saveCachedCustomers } from "@/lib/offline/driver-pos";
+import {
+  hydrateDriverOfflineCache,
+  loadCachedDriverPosContext,
+  saveCachedCustomers,
+  syncPendingDriverSales,
+  type SyncBatchResult,
+} from "@/lib/offline/driver-pos";
 import type { CustomerDto, DriverPosContextDto } from "@/types/operations-dto";
 
+import { apiUrl } from "./api-base";
 import { mobileFetch } from "./mobile-fetch";
 
 /**
@@ -107,4 +114,27 @@ export async function refreshFullDriverCustomerCache(params: {
     })),
   );
   return saved ? customers : null;
+}
+
+/**
+ * CORRECTION "FINALISATION PIPELINE OFFLINE V1" - "7./8. SYNCHRONISATION":
+ * the shared syncPendingDriverSales (lib/offline/driver-pos/sync-sales.ts)
+ * posts to a same-origin, cookie-authenticated endpoint by default - correct
+ * for the web app, broken for this shell (cross-origin, Bearer-only, no
+ * cookie). This supplies ONLY the transport (absolute URL + Authorization
+ * header) via that function's own optional `transport` parameter - every
+ * other guarantee (ordering, single-flight, status transitions, error
+ * classification, idempotency) is the exact same engine, never duplicated.
+ * Used by both the manual "Synchroniser" button and the OFFLINE->ONLINE/
+ * boot-with-pending auto-trigger (see App.tsx) - both calls share the same
+ * underlying single-flight promise, so they can never run concurrently.
+ */
+export async function syncPendingDriverSalesForShell(
+  scope: { organizationId: string; driverId: string },
+  token: string | null,
+): Promise<SyncBatchResult> {
+  return syncPendingDriverSales(scope, {
+    endpoint: apiUrl("/api/driver/sales/sync"),
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
 }

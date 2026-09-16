@@ -17,6 +17,18 @@
  * status transitions, outbox handling, idempotency) applies identically no
  * matter which one triggered it - there is no separate "auto" code path
  * here to keep in sync with this one.
+ *
+ * CORRECTION "FINALISATION PIPELINE OFFLINE V1" - "7./8. TRANSPORT": the
+ * mobile driver shell (mobile/driver/) calls this SAME function - it must
+ * never fork/duplicate this engine (ordering, single-flight, status
+ * transitions, error classification would drift out of sync between two
+ * copies). Its only real difference from the web app is the network
+ * transport: cross-origin (needs an absolute URL + CORS) and Bearer-
+ * authenticated (no session cookie). `transport` is optional and additive -
+ * the web app's own call sites (no second argument) are byte-for-byte
+ * identical to before this change: same relative URL, same headers, same
+ * cookie auth. See mobile/driver/src/lib/driver-pos-data-source.ts's
+ * syncPendingDriverSalesForShell for the shell's own transport.
  */
 
 import { deleteOutboxEntriesForEntity } from "./outbox-store";
@@ -26,6 +38,7 @@ import {
   markOfflineSaleSynced,
   markOfflineSaleSyncError,
   markOfflineSaleSyncing,
+  reapStaleSyncingSales,
   revertOfflineSaleToPending,
 } from "./sales-store";
 import type { OfflineSaleWithLines } from "./types";
@@ -75,6 +88,16 @@ export type SyncBatchResult = {
   stoppedForAuth: boolean;
 };
 
+/** Optional transport override - see this module's own doc comment ("7./8.
+ *  TRANSPORT"). Omitted entirely (every existing web-app call site), this is
+ *  the exact same relative URL + no extra headers as before this change. */
+export type SyncTransportOptions = {
+  /** Absolute URL to POST to instead of the same-origin SYNC_ENDPOINT. */
+  endpoint?: string;
+  /** Extra headers merged in - e.g. { Authorization: "Bearer <token>" }. */
+  headers?: Record<string, string>;
+};
+
 type SyncOutcome =
   | { kind: "success"; serverSaleId: string; officialDisplayNumber: string }
   | { kind: "auth_required"; message: string }
@@ -113,13 +136,16 @@ async function classifyResponse(response: Response): Promise<SyncOutcome> {
   return { kind: "transient", message };
 }
 
-async function syncOneSale(sale: OfflineSaleWithLines): Promise<SyncOutcome> {
+async function syncOneSale(
+  sale: OfflineSaleWithLines,
+  transport?: SyncTransportOptions,
+): Promise<SyncOutcome> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(SYNC_ENDPOINT, {
+    const response = await fetch(transport?.endpoint ?? SYNC_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(transport?.headers ?? {}) },
       // "3. PAYLOAD SERVEUR" - exactly the fields Phase 4A expects. Never
       // organizationId/driverId/truckId/stockLocationId/totalTTC/an official
       // number - those are either server-derived from the session or
@@ -153,7 +179,19 @@ async function syncOneSale(sale: OfflineSaleWithLines): Promise<SyncOutcome> {
   }
 }
 
-async function runSyncBatch(scope: { organizationId: string; driverId: string }): Promise<SyncBatchResult> {
+async function runSyncBatch(
+  scope: { organizationId: string; driverId: string },
+  transport?: SyncTransportOptions,
+): Promise<SyncBatchResult> {
+  // "13. CRASH ENTRE SERVEUR ET SQLITE" - must run BEFORE reading
+  // offline_sales below, so a row orphaned in SYNCING by a previous crashed
+  // process is already back to PENDING_SYNC (and therefore included in
+  // `toSync`) by the time this batch decides what to send - see
+  // reapStaleSyncingSales's own doc comment for why this can never mistake
+  // a live in-progress row for a stale one.
+  const reaped = await reapStaleSyncingSales(scope);
+  if (reaped > 0) console.log("[SYNC RECOVERED]", { count: reaped });
+
   const allSales = await getOfflineSales(scope);
   const toSync = allSales
     .filter((sale) => sale.syncStatus === "PENDING_SYNC" || sale.syncStatus === "SYNC_ERROR")
@@ -172,13 +210,16 @@ async function runSyncBatch(scope: { organizationId: string; driverId: string })
     stoppedForAuth: false,
   };
 
+  console.log("[SYNC START]", { count: toSync.length });
+  if (toSync.length === 0) return result;
+
   // Sequential, deliberately - "2. ... Les ventes doivent être envoyées UNE
   // PAR UNE. Pas de Promise.all." Also what makes stopping on 401 possible.
   for (const sale of toSync) {
     result.attempted += 1;
     await markOfflineSaleSyncing(sale.localId);
 
-    const outcome = await syncOneSale(sale);
+    const outcome = await syncOneSale(sale, transport);
 
     if (outcome.kind === "success") {
       await markOfflineSaleSynced(sale.localId, {
@@ -194,6 +235,11 @@ async function runSyncBatch(scope: { organizationId: string; driverId: string })
         serverSaleId: outcome.serverSaleId,
         officialDisplayNumber: outcome.officialDisplayNumber,
       });
+      console.log("[SYNC SUCCESS]", {
+        localId: sale.localId,
+        clientMutationId: sale.clientMutationId,
+        officialDisplayNumber: outcome.officialDisplayNumber,
+      });
       continue;
     }
 
@@ -202,6 +248,7 @@ async function runSyncBatch(scope: { organizationId: string; driverId: string })
       // (not SYNC_ERROR), stop the whole batch, never touch the outbox.
       await revertOfflineSaleToPending(sale.localId);
       result.stoppedForAuth = true;
+      console.log("[SYNC FAILED]", { localId: sale.localId, clientMutationId: sale.clientMutationId, status: "AUTH_REQUIRED" });
       break;
     }
 
@@ -212,6 +259,7 @@ async function runSyncBatch(scope: { organizationId: string; driverId: string })
         localReference: sale.localReference,
         message: outcome.message,
       });
+      console.log("[SYNC FAILED]", { localId: sale.localId, clientMutationId: sale.clientMutationId, status: "REQUIRES_REVIEW" });
       // "9. ... Une seule vente problématique ne doit pas nécessairement
       // bloquer toutes les autres." - continue with the next one.
       continue;
@@ -224,6 +272,7 @@ async function runSyncBatch(scope: { organizationId: string; driverId: string })
       localReference: sale.localReference,
       message: outcome.message,
     });
+    console.log("[SYNC RETRY]", { localId: sale.localId, clientMutationId: sale.clientMutationId, status: "SYNC_ERROR" });
   }
 
   return result;
@@ -238,12 +287,15 @@ export function isSyncInFlight(): boolean {
   return syncInFlight !== null;
 }
 
-export async function syncPendingDriverSales(scope: {
-  organizationId: string;
-  driverId: string;
-}): Promise<SyncBatchResult> {
-  if (syncInFlight) return syncInFlight;
-  const run = runSyncBatch(scope).finally(() => {
+export async function syncPendingDriverSales(
+  scope: { organizationId: string; driverId: string },
+  transport?: SyncTransportOptions,
+): Promise<SyncBatchResult> {
+  if (syncInFlight) {
+    console.log("[SYNC ALREADY RUNNING]");
+    return syncInFlight;
+  }
+  const run = runSyncBatch(scope, transport).finally(() => {
     syncInFlight = null;
   });
   syncInFlight = run;

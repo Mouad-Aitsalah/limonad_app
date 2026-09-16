@@ -6,6 +6,7 @@ import type { DriverOfflineContext } from "@/lib/offline/driver-pos";
 import type { DriverPosContextDto } from "@/types/operations-dto";
 
 import { deriveRestingBootState, runBootSequence, type BootState } from "./lib/auth-state";
+import { syncPendingDriverSalesForShell } from "./lib/driver-pos-data-source";
 import { mobileFetch } from "./lib/mobile-fetch";
 import { logoutMobile, type MobileUser } from "./lib/mobile-auth";
 import { refreshOfflineContextFromServer } from "./lib/refresh-offline-context";
@@ -98,8 +99,14 @@ export function App() {
   }, [online, token, offlineContext]);
 
   React.useEffect(() => {
-    const handleOnline = () => setOnline(true);
-    const handleOffline = () => setOnline(false);
+    const handleOnline = () => {
+      if (import.meta.env.DEV) console.log("[NETWORK ONLINE]");
+      setOnline(true);
+    };
+    const handleOffline = () => {
+      if (import.meta.env.DEV) console.log("[NETWORK OFFLINE]");
+      setOnline(false);
+    };
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
     return () => {
@@ -107,6 +114,25 @@ export function App() {
       window.removeEventListener("offline", handleOffline);
     };
   }, []);
+
+  // CORRECTION "FINALISATION PIPELINE OFFLINE V1" - "8./9. SYNC AUTOMATIQUE":
+  // fires on every OFFLINE->ONLINE transition (online flips true) AND once
+  // at boot if the app starts already online with sales left over from a
+  // previous session - both cases are just "online + token + a local context
+  // are now all available", so ONE effect covers both without two separate
+  // trigger paths to keep in sync. Safe to fire even with nothing pending or
+  // while genuinely offline (a stale/optimistic `online` flag): syncPending-
+  // DriverSalesForShell's own engine is single-flight (see sync-sales.ts)
+  // and a no-op batch (nothing PENDING_SYNC/SYNC_ERROR) never touches the
+  // network at all - so this can never create a duplicate sale, only, at
+  // worst, attempt a sync that immediately no-ops or transiently fails.
+  React.useEffect(() => {
+    if (!online || !token || !offlineContext) return;
+    void syncPendingDriverSalesForShell(
+      { organizationId: offlineContext.organizationId, driverId: offlineContext.driverId },
+      token,
+    );
+  }, [online, token, offlineContext]);
 
   async function handleLoginSuccess(newToken: string, newUser: MobileUser) {
     setToken(newToken);
