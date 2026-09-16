@@ -37,7 +37,9 @@ import { ShellCustomerPicker } from "../components/shell-customer-picker";
 import { ShellNetworkBadge } from "../components/shell-network-badge";
 import { ShellReceiptPrint } from "../components/shell-receipt-print";
 import type { CartLineComputed, CartTotals } from "../lib/cart-types";
+import { onDriverOfflineSyncCompleted } from "../lib/driver-offline-events";
 import {
+  fetchDriverSaleById,
   loadShellDriverPosContext,
   refreshFullDriverCustomerCache,
   syncPendingDriverSalesForShell,
@@ -166,6 +168,16 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
   const [paidAmount, setPaidAmount] = React.useState("");
   const [lastSale, setLastSale] = React.useState<SaleDto | null>(null);
   const [offlineTicketReference, setOfflineTicketReference] = React.useState<string | null>(null);
+  // BUG-03 "TICKET OFF-* → VENTE OFFICIELLE" - "3. IDENTIFICATION STABLE":
+  // never inferred from the ticket's own displayed OFF-... text (never
+  // stable/unique enough on its own to survive being reused as a lookup
+  // key) - the real offline_sales.localId of the sale `lastSale` currently
+  // represents, or null when `lastSale` isn't tied to any local offline sale
+  // (an online sale, or a preview of the not-yet-validated cart). NEVER
+  // rendered on the ticket itself - purely internal bookkeeping so the
+  // sync-completed handler below can look up and upgrade the RIGHT sale,
+  // never a stale/different one (see "10. VENTE PLUS ANCIENNE").
+  const [lastOfflineSaleLocalId, setLastOfflineSaleLocalId] = React.useState<string | null>(null);
   const [offlinePendingSales, setOfflinePendingSales] = React.useState<OfflineSaleWithLines[]>([]);
   const pendingOfflineCount = offlinePendingSales.length;
   const syncableOfflineCount = offlinePendingSales.filter(
@@ -315,6 +327,66 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
     queueMicrotask(() => void refreshOfflinePendingSales());
   }, [refreshOfflinePendingSales]);
 
+  // BUG-02 "RAFRAÎCHIR L'UI APRÈS SYNCHRONISATION AUTOMATIQUE" - the ONE
+  // refresh mechanism both the manual button (below) and App.tsx's
+  // OFFLINE->ONLINE auto-trigger rely on: syncPendingDriverSalesForShell
+  // dispatches this event right after the existing sync engine settles, no
+  // matter which of the two triggered it - so the pending-sales badge/count
+  // updates live even when a background auto-sync finishes while the
+  // chauffeur is sitting on this exact screen, with no poll and no reload.
+  React.useEffect(() => {
+    return onDriverOfflineSyncCompleted(() => {
+      void refreshOfflinePendingSales();
+    });
+  }, [refreshOfflinePendingSales]);
+
+  // BUG-03 "TICKET OFF-* → VENTE OFFICIELLE" - "2./4./5. TRANSFORMER LA
+  // PREVIEW EN VENTE OFFICIELLE": reacts to the SAME sync-completed event as
+  // above - a pure UI refresh, never a resync. Looks up ONLY the one offline
+  // sale `lastSale` currently represents (lastOfflineSaleLocalId, never the
+  // OFF-... text/amount/date - see "3. IDENTIFICATION STABLE"). If that
+  // exact sale is now SYNCED, the ticket upgrades in two steps:
+  //  1. Immediately, from data ALREADY in SQLite (serverSaleId +
+  //     officialDisplayNumber, written by markOfflineSaleSynced) - zero
+  //     network dependency, so PDF/WhatsApp unblock even if step 2 fails.
+  //  2. Best-effort: fetch the full official Sale (GET /api/driver/sales/
+  //     [id], reused unchanged) for a richer ticket (payments/stampAmount/
+  //     ...). A failure here changes nothing - step 1's upgrade already
+  //     stands (SYNCED, real number, shareable) - never reverted, never
+  //     resynced (see "7. SOURCE DE VÉRITÉ").
+  // Both steps are self-guarded against a race with a newer sale: the
+  // functional updaters only apply if `lastSale`/`offlineTicketReference`
+  // still represent THIS exact sale at the moment the update actually lands
+  // - see "10. VENTE PLUS ANCIENNE" / "18. TEST DEUX VENTES".
+  React.useEffect(() => {
+    return onDriverOfflineSyncCompleted(() => {
+      const watchedLocalId = lastOfflineSaleLocalId;
+      if (!watchedLocalId) return;
+      void (async () => {
+        const sales = await getOfflineSales({
+          organizationId: offlineContext.organizationId,
+          driverId: offlineContext.driverId,
+        });
+        const match = sales.find((sale) => sale.localId === watchedLocalId);
+        if (!match || match.syncStatus !== "SYNCED" || !match.serverSaleId || !match.officialDisplayNumber) return;
+        const { serverSaleId, officialDisplayNumber, localReference } = match;
+
+        setLastSale((current) =>
+          current && current.id === "preview" && current.displayNumber === localReference
+            ? { ...current, id: serverSaleId, invoiceNumber: officialDisplayNumber, displayNumber: officialDisplayNumber, status: "COMPLETED" }
+            : current,
+        );
+        setOfflineTicketReference((current) => (current === localReference ? null : current));
+        setLastOfflineSaleLocalId((current) => (current === watchedLocalId ? null : current));
+
+        const fullSale = await fetchDriverSaleById(token, serverSaleId);
+        if (fullSale) {
+          setLastSale((current) => (current && current.id === serverSaleId ? fullSale : current));
+        }
+      })();
+    });
+  }, [lastOfflineSaleLocalId, offlineContext.organizationId, offlineContext.driverId, token]);
+
   async function handleSyncPendingSales() {
     if (syncingSales || syncableOfflineCount === 0) return;
     setSyncingSales(true);
@@ -323,7 +395,9 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
         { organizationId: offlineContext.organizationId, driverId: offlineContext.driverId },
         token,
       );
-      await refreshOfflinePendingSales();
+      // refreshOfflinePendingSales() is no longer called directly here - the
+      // onDriverOfflineSyncCompleted listener above already re-runs it for
+      // every sync, manual or automatic, from the one shared mechanism.
       if (result.stoppedForAuth) {
         toast.error("Session expiree. Reconnectez-vous pour synchroniser les ventes.");
       }
@@ -570,6 +644,7 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
       });
       setLastSale({ ...ticket, status: "COMPLETED", paidAmount: ticket.totalTTC, creditAmount: 0, createdAt: soldAt });
       setOfflineTicketReference(localReference);
+      setLastOfflineSaleLocalId(result.localId);
       resetForNextSale();
       toast.success(`Vente enregistree hors connexion. Reference : ${localReference}`);
       await Promise.allSettled([loadContext(), refreshOfflinePendingSales()]);
@@ -613,6 +688,7 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
       setServerReachable(true);
       setLastSale(result.sale);
       setOfflineTicketReference(null);
+      setLastOfflineSaleLocalId(null);
       resetForNextSale();
       toast.success(`Vente ${result.sale.invoiceNumber} validee.`);
       await loadContext();
@@ -644,6 +720,7 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
       return;
     }
     setOfflineTicketReference(null);
+    setLastOfflineSaleLocalId(null);
     setLastSale(
       buildPreviewSale({
         displayNumber: lastSale?.displayNumber ?? "-",

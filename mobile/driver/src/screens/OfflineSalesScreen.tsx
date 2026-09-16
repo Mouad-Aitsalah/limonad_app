@@ -3,6 +3,7 @@ import * as React from "react";
 import { getCachedCustomers, getOfflineSales } from "@/lib/offline/driver-pos";
 import type { DriverOfflineContext, OfflineSaleWithLines, SyncStatus } from "@/lib/offline/driver-pos";
 
+import { onDriverOfflineSyncCompleted } from "../lib/driver-offline-events";
 import { styles } from "../ui/styles";
 
 type OfflineSalesScreenProps = {
@@ -22,28 +23,53 @@ type LoadState =
   | { status: "loading" }
   | { status: "ready"; sales: OfflineSaleWithLines[]; customerNames: Map<string, string> };
 
+/** Plain data load - never touches setState itself, so calling it from an
+ *  effect body never trips react-hooks/set-state-in-effect: the setter is
+ *  always applied by the caller's own .then(), the pattern the rule expects
+ *  ("calling setState in a callback function when external state changes"). */
+async function loadOfflineSalesState(scope: {
+  organizationId: string;
+  driverId: string;
+}): Promise<Extract<LoadState, { status: "ready" }>> {
+  const [sales, customers] = await Promise.all([getOfflineSales(scope), getCachedCustomers(scope)]);
+  const customerNames = new Map(customers.map((customer) => [customer.id, customer.name]));
+  return { status: "ready", sales, customerNames };
+}
+
 /**
  * PHASE 5A.2 - "16. VENTES OFFLINE ÉCRAN SIMPLE". SQLite only, zero fetch -
  * reuses getOfflineSales/getCachedCustomers unchanged (same module the
  * already-validated driver POS uses), never the Next app's
  * OfflineSalesDialog component (that one imports shadcn/ui components tied
  * to the Next app's own build, not portable to this Vite shell).
+ *
+ * BUG-02 "RAFRAÎCHIR L'UI APRÈS SYNCHRONISATION AUTOMATIQUE" - "5. OFFLINE
+ * SALES SCREEN": re-runs this exact same local (SQLite-only) load whenever
+ * a sync batch completes (manual or automatic - see driver-offline-events.ts)
+ * while this screen happens to be open, so a status goes PENDING_SYNC ->
+ * SYNCED live, with no need to leave and reopen this screen.
  */
 export function OfflineSalesScreen({ context, onBack }: OfflineSalesScreenProps) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
+  const { organizationId, driverId } = context;
 
   React.useEffect(() => {
     let active = true;
-    const scope = { organizationId: context.organizationId, driverId: context.driverId };
-    Promise.all([getOfflineSales(scope), getCachedCustomers(scope)]).then(([sales, customers]) => {
-      if (!active) return;
-      const customerNames = new Map(customers.map((customer) => [customer.id, customer.name]));
-      setState({ status: "ready", sales, customerNames });
+    loadOfflineSalesState({ organizationId, driverId }).then((result) => {
+      if (active) setState(result);
     });
     return () => {
       active = false;
     };
-  }, [context.organizationId, context.driverId]);
+  }, [organizationId, driverId]);
+
+  React.useEffect(
+    () =>
+      onDriverOfflineSyncCompleted(() => {
+        void loadOfflineSalesState({ organizationId, driverId }).then((result) => setState(result));
+      }),
+    [organizationId, driverId],
+  );
 
   return (
     <main style={styles.page}>

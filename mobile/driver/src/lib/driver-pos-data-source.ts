@@ -6,9 +6,10 @@ import {
   syncPendingDriverSales,
   type SyncBatchResult,
 } from "@/lib/offline/driver-pos";
-import type { CustomerDto, DriverPosContextDto } from "@/types/operations-dto";
+import type { CustomerDto, DriverPosContextDto, SaleDto } from "@/types/operations-dto";
 
 import { apiUrl } from "./api-base";
+import { dispatchDriverOfflineSyncCompleted } from "./driver-offline-events";
 import { mobileFetch } from "./mobile-fetch";
 
 /**
@@ -149,13 +150,45 @@ export async function refreshFullDriverCustomerCache(params: {
  * Used by both the manual "Synchroniser" button and the OFFLINE->ONLINE/
  * boot-with-pending auto-trigger (see App.tsx) - both calls share the same
  * underlying single-flight promise, so they can never run concurrently.
+ *
+ * BUG-02 "RAFRAÎCHIR L'UI APRÈS SYNCHRONISATION AUTOMATIQUE": this is the
+ * ONE place both triggers converge on, so it is also the one place a
+ * post-sync UI-refresh notification can be dispatched for both uniformly -
+ * see driver-offline-events.ts's own doc comment. Fired AFTER the existing
+ * engine (above) has fully settled - never replaces or races with it, and
+ * never touches sync-sales.ts itself.
  */
 export async function syncPendingDriverSalesForShell(
   scope: { organizationId: string; driverId: string },
   token: string | null,
 ): Promise<SyncBatchResult> {
-  return syncPendingDriverSales(scope, {
+  const result = await syncPendingDriverSales(scope, {
     endpoint: apiUrl("/api/driver/sales/sync"),
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
+  dispatchDriverOfflineSyncCompleted({
+    syncedCount: result.synced.length,
+    failedCount: result.transientErrors.length + result.requiresReview.length,
+  });
+  return result;
+}
+
+/**
+ * BUG-03 "TICKET OFF-* → VENTE OFFICIELLE" - "6./7. SOURCE DE VÉRITÉ": once
+ * an offline sale is SYNCED, SQLite already has serverSaleId +
+ * officialDisplayNumber (from markOfflineSaleSynced) - enough to upgrade the
+ * ticket's identity/number immediately with zero network call (see
+ * PosScreen's own upgrade-on-sync-event effect). This is the OPTIONAL,
+ * best-effort richer follow-up: reuses the existing, already-scoped
+ * GET /api/driver/sales/[id] (getDriverSaleById - driver+organization scoped,
+ * 404 if not this driver's own sale) to fetch the FULL official Sale
+ * (payments/lines/stampAmount/... - fields SQLite never stored) for a more
+ * complete PDF/ticket. Never invents data: returns null on ANY failure
+ * (offline, CORS, 401, 404, 5xx) - the caller keeps whatever it already has
+ * (the locally-upgraded ticket), never reverts anything, never resyncs.
+ */
+export async function fetchDriverSaleById(token: string | null, serverSaleId: string): Promise<SaleDto | null> {
+  if (!token) return null;
+  const outcome = await mobileFetch<{ sale: SaleDto }>(`/api/driver/sales/${encodeURIComponent(serverSaleId)}`, token);
+  return outcome.kind === "ok" && outcome.data?.sale ? outcome.data.sale : null;
 }
