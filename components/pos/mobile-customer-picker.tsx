@@ -37,7 +37,12 @@ export type CustomerSearchFn = (query: string) => Promise<CustomerDto[]>;
  * before this step (there was none - this is genuinely new, but has zero
  * dependency on anything shell-specific).
  */
-function normalizeSearchValue(value: unknown): string {
+// ÉTAPE 21 - exported (additive only, no other behavior change here) so
+// mobile/driver/src/lib/driver-clients-data-source.ts's offline customer
+// search can reuse this exact same accent/case-insensitive matching instead
+// of a second, possibly-diverging reimplementation - see that file's own
+// doc comment.
+export function normalizeSearchValue(value: unknown): string {
   return String(value ?? "")
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
@@ -45,7 +50,7 @@ function normalizeSearchValue(value: unknown): string {
     .trim();
 }
 
-function localCustomerFilter(customers: CustomerDto[], query: string): CustomerDto[] {
+export function localCustomerFilter(customers: CustomerDto[], query: string): CustomerDto[] {
   const normalized = normalizeSearchValue(query);
   if (!normalized) return customers;
   return customers.filter((customer) =>

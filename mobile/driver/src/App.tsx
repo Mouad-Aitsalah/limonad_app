@@ -12,6 +12,7 @@ import { mobileFetch } from "./lib/mobile-fetch";
 import { logoutMobile, type MobileUser } from "./lib/mobile-auth";
 import { refreshOfflineContextFromServer } from "./lib/refresh-offline-context";
 import type { Screen } from "./navigation";
+import { DriverClientsScreen } from "./screens/DriverClientsScreen";
 import { DriverHomeScreen } from "./screens/DriverHomeScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { MigrationPendingScreen } from "./screens/MigrationPendingScreen";
@@ -220,18 +221,25 @@ export function App() {
                 onBack={() => setScreen("HOME")}
               />
             );
+          case "CLIENTS":
+            return (
+              <DriverClientsScreen
+                token={token}
+                offlineContext={offlineContext}
+                deviceOnline={online}
+                onBack={() => setScreen("HOME")}
+                onCreateSale={() => setScreen("POS")}
+              />
+            );
           case "STOCK":
           case "VENTES":
-          case "CLIENTS":
           case "TOURNEE": {
             const href =
               screen === "STOCK"
                 ? "/driver/stock"
                 : screen === "VENTES"
                   ? "/driver/ventes"
-                  : screen === "CLIENTS"
-                    ? "/driver/clients"
-                    : "/driver/tournee";
+                  : "/driver/tournee";
             const item = navItemForHref(href);
             return (
               <MigrationPendingScreen

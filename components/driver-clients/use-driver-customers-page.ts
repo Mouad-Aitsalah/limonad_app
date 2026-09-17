@@ -11,13 +11,50 @@ export type DriverCustomersQueryFilters = {
 const PAGE_SIZE = 25;
 
 /**
+ * PHASE 1 "RESTAURATION DU POS CHAUFFEUR" - ÉTAPE 21: the page-fetch request
+ * this hook needs, abstracted away from HOW it's actually sent - a plain
+ * async function, not a fetch wrapper, same pattern already established for
+ * usePosProductSearch/CustomerNumberInput/MobileCustomerPicker. `null`
+ * return means "this attempt produced nothing usable" (never throws) - the
+ * caller then simply leaves whatever page is already showing untouched,
+ * exactly like the previous inline `if (!response.ok) return;` did.
+ */
+export type DriverCustomersFetchPage = (params: {
+  cursor: string | null;
+  pageSize: number;
+  search?: string;
+}) => Promise<DriverCustomersPageDto | null>;
+
+/** The hook's own, unchanged-since-always default: a same-origin, cookie-
+ *  authenticated GET - exactly what every existing web call site (only
+ *  DriverClientsView today) still gets when it doesn't pass `fetchPageImpl`. */
+const defaultFetchPage: DriverCustomersFetchPage = async ({ cursor, pageSize, search }) => {
+  const query = new URLSearchParams({ pageSize: String(pageSize) });
+  if (cursor) query.set("cursor", cursor);
+  if (search) query.set("search", search);
+
+  const response = await fetch(`/api/driver/customers/list?${query.toString()}`, {
+    cache: "no-store",
+  });
+  if (!response.ok) return null;
+  return (await response.json()) as DriverCustomersPageDto;
+};
+
+/**
  * CRITICAL #2 follow-up: cursor-pagination client for /driver/clients, same
  * forward-only-with-cursor-stack pattern as useProductsPage (/produits) -
  * see getDriverCustomersPage's doc comment in lib/server/driver-customers.ts.
+ *
+ * ÉTAPE 21 - `fetchPageImpl`, omitted (every existing web call site), keeps
+ * today's exact same-origin fetch. The Android shell can inject its own
+ * online-Bearer-then-offline-cache implementation (see mobile/driver/src/lib/
+ * driver-clients-data-source.ts) without this file needing to know anything
+ * about SQLite/Capacitor - it only ever sees a plain function.
  */
 export function useDriverCustomersPage(
   filters: DriverCustomersQueryFilters,
   initial?: DriverCustomersPageDto,
+  fetchPageImpl: DriverCustomersFetchPage = defaultFetchPage,
 ) {
   const [items, setItems] = React.useState<CustomerDto[]>(initial?.items ?? []);
   const [totalCount, setTotalCount] = React.useState(initial?.totalCount ?? 0);
@@ -43,15 +80,8 @@ export function useDriverCustomersPage(
     async (cursor: string | null) => {
       setLoading(true);
       try {
-        const query = new URLSearchParams({ pageSize: String(PAGE_SIZE) });
-        if (cursor) query.set("cursor", cursor);
-        if (search) query.set("search", search);
-
-        const response = await fetch(`/api/driver/customers/list?${query.toString()}`, {
-          cache: "no-store",
-        });
-        const body = (await response.json()) as DriverCustomersPageDto & { message?: string };
-        if (!response.ok) return;
+        const body = await fetchPageImpl({ cursor, pageSize: PAGE_SIZE, search: search || undefined });
+        if (!body) return;
         setItems(body.items);
         setTotalCount(body.totalCount);
         setTotalAccessibleCustomers(body.totalAccessibleCustomers);
@@ -65,7 +95,7 @@ export function useDriverCustomersPage(
         setLoading(false);
       }
     },
-    [search],
+    [search, fetchPageImpl],
   );
 
   React.useEffect(() => {

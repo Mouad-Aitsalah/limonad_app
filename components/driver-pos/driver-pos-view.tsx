@@ -549,6 +549,7 @@ export function DriverPosView({
       userId: currentUser.id,
       userName: currentUser.nom,
       context,
+      skipCustomersCache: true,
     });
   }, [context, currentUser, identity]);
 

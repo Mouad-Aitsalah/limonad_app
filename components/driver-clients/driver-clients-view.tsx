@@ -11,8 +11,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { driverCustomerTypes as customerTypes } from "@/components/driver-clients/driver-customer-form";
 import { DriverCustomerForm } from "@/components/driver-clients/driver-customer-form";
 import { Input } from "@/components/ui/input";
-import { useDriverCustomersPage } from "@/components/driver-clients/use-driver-customers-page";
-import { useDriverRuntime } from "@/hooks/use-driver-runtime";
+import {
+  useDriverCustomersPage,
+  type DriverCustomersFetchPage,
+} from "@/components/driver-clients/use-driver-customers-page";
+import { DriverRuntimeContext } from "@/hooks/use-driver-runtime";
 import { cn, formatCurrency } from "@/lib/utils";
 import {
   Table,
@@ -30,15 +33,68 @@ import type {
 
 const SEARCH_DEBOUNCE_MS = 400;
 
+/**
+ * PHASE 1 "RESTAURATION DU POS CHAUFFEUR" - ÉTAPE 21 - "1. UPSERT CUSTOMER
+ * DANS LE RUNTIME": the only DriverRuntimeContextValue member this file
+ * actually reads (refreshing the GPS-proximity candidate pool right after a
+ * save) - never the whole context. Same narrowing already applied to
+ * DriverPosRuntime (driver-pos-view.tsx's own ÉTAPE 7).
+ */
+type DriverClientsRuntime = {
+  upsertCustomer: (customer: CustomerDto) => void;
+};
+
+/**
+ * ÉTAPE 21 - discovered incompatibility, same shape as driver-pos-view.tsx's
+ * own ÉTAPE 8: useDriverRuntime() THROWS with no <DriverRuntimeProvider>
+ * ancestor - the mobile shell never mounts one (no GPS/tour runtime exists
+ * there yet - see Étape 18's own GPS audit). A no-op upsert here is a
+ * faithful "this shell has no GPS-proximity feed to refresh", never a
+ * fabricated behavior. Never reached on the web (that page is always
+ * rendered under a real provider - see components/driver/driver-runtime-
+ * boundary.tsx).
+ */
+const NOOP_DRIVER_CLIENTS_RUNTIME: DriverClientsRuntime = {
+  upsertCustomer: () => {},
+};
+
 export function DriverClientsView({
   initialPage,
   initialSelectedCustomerId,
+  fetchCustomersPage,
+  onCreateSale,
+  disableCustomerManagement,
 }: {
-  initialPage: DriverCustomersPageDto;
+  initialPage?: DriverCustomersPageDto;
   initialSelectedCustomerId?: string | null;
+  /** ÉTAPE 21 - see DriverCustomersFetchPage's own doc comment. Omitted
+   *  (every existing web call site) -> today's exact same-origin fetch. */
+  fetchCustomersPage?: DriverCustomersFetchPage;
+  /** ÉTAPE 21 - "2. FAIRE UNE VENTE": omitted (every existing web call site)
+   *  -> router.push, byte-for-byte as before this prop existed. The shell
+   *  has no Next router (next/navigation is shimmed there - see mobile/
+   *  driver/src/shims/next-navigation.ts) so it injects its own screen
+   *  switch instead. */
+  onCreateSale?: (customerId: string) => void;
+  /** ÉTAPE 21 - "3. CRÉER/MODIFIER HORS PÉRIMÈTRE ANDROID": omitted (every
+   *  existing web call site) -> "Nouveau client"/"Modifier la fiche"/
+   *  "Ajouter la localisation" open the form exactly as before. A non-null
+   *  string disables all four of those entry points and shows this message
+   *  instead - never opens the form - see this component's own
+   *  openCustomerForm helper. The shell passes one because POST /api/driver/
+   *  customers has no Bearer/CORS path yet and location capture needs GPS
+   *  infrastructure this shell doesn't have (see Étape 21's own audit) -
+   *  deliberately NOT solved here, never silently faked. */
+  disableCustomerManagement?: string;
 }) {
+  // Rules of Hooks: useRouter() is still called unconditionally on every
+  // render, exactly like useAuth()/useDriverRuntime() elsewhere - only
+  // WHETHER its result is actually used depends on `onCreateSale`. On the
+  // shell, next/navigation resolves to a harmless shim (see that file's own
+  // doc comment) whose router.push is never actually reached, since
+  // onCreateSale is always supplied there.
   const router = useRouter();
-  const driverRuntime = useDriverRuntime();
+  const liveDriverRuntime = React.useContext(DriverRuntimeContext) ?? NOOP_DRIVER_CLIENTS_RUNTIME;
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   React.useEffect(() => {
@@ -61,7 +117,7 @@ export function DriverClientsView({
     goToPreviousPage,
     refetchCurrentPage,
     resetToFirstPage,
-  } = useDriverCustomersPage({ search: debouncedSearch }, initialPage);
+  } = useDriverCustomersPage({ search: debouncedSearch }, initialPage, fetchCustomersPage);
 
   const [editing, setEditing] = React.useState<CustomerDto | null>(null);
   const [showForm, setShowForm] = React.useState(false);
@@ -69,6 +125,19 @@ export function DriverClientsView({
   const [selectedCustomerId, setSelectedCustomerId] = React.useState<string | null>(
     initialSelectedCustomerId ?? null,
   );
+
+  /** ÉTAPE 21 - the ONE place all four "open the create/edit form" entry
+   *  points (header button, detail card's two buttons, table row button) now
+   *  go through, so disableCustomerManagement only ever needs checking once. */
+  function openCustomerForm(customer: CustomerDto | null, focusLoc: boolean) {
+    if (disableCustomerManagement) {
+      toast.error(disableCustomerManagement);
+      return;
+    }
+    setEditing(customer);
+    setFocusLocation(focusLoc);
+    setShowForm(true);
+  }
 
   // CRITICAL #2 follow-up: `customers` is now one bounded page, not every
   // accessible customer - a selection can point at a row on another page
@@ -101,7 +170,7 @@ export function DriverClientsView({
     }
     const savedCustomer = payload.customer;
     setSelectedCustomerId(savedCustomer.id);
-    driverRuntime.upsertCustomer(savedCustomer);
+    liveDriverRuntime.upsertCustomer(savedCustomer);
     // A new customer sorts first (createdAt desc) - jump back to page 1 so
     // it's immediately visible. An edit's row is already on the current
     // page - just refresh it in place.
@@ -128,14 +197,7 @@ export function DriverClientsView({
             Clients associes a votre activite et a vos tournees.
           </p>
         </div>
-        <Button
-          type="button"
-          onClick={() => {
-            setEditing(null);
-            setFocusLocation(false);
-            setShowForm(true);
-          }}
-        >
+        <Button type="button" onClick={() => openCustomerForm(null, false)}>
           <Plus className="h-4 w-4" />
           Nouveau client
         </Button>
@@ -189,9 +251,9 @@ export function DriverClientsView({
                 type="button"
                 className="rounded-2xl"
                 onClick={() =>
-                  router.push(
-                    `/driver/pos?customerId=${encodeURIComponent(selectedCustomer.id)}`,
-                  )
+                  onCreateSale
+                    ? onCreateSale(selectedCustomer.id)
+                    : router.push(`/driver/pos?customerId=${encodeURIComponent(selectedCustomer.id)}`)
                 }
               >
                 Faire une vente
@@ -201,11 +263,7 @@ export function DriverClientsView({
                 variant="outline"
                 className="rounded-2xl"
                 disabled={selectedCustomer.creationOrigin !== "DRIVER"}
-                onClick={() => {
-                  setEditing(selectedCustomer);
-                  setFocusLocation(false);
-                  setShowForm(true);
-                }}
+                onClick={() => openCustomerForm(selectedCustomer, false)}
               >
                 Modifier la fiche
               </Button>
@@ -214,11 +272,7 @@ export function DriverClientsView({
                 variant="outline"
                 className="rounded-2xl"
                 disabled={selectedCustomer.creationOrigin !== "DRIVER"}
-                onClick={() => {
-                  setEditing(selectedCustomer);
-                  setFocusLocation(true);
-                  setShowForm(true);
-                }}
+                onClick={() => openCustomerForm(selectedCustomer, true)}
               >
                 {hasCustomerLocation(selectedCustomer)
                   ? "Mettre a jour la localisation"
@@ -316,8 +370,7 @@ export function DriverClientsView({
                       onClick={(event) => {
                         event.stopPropagation();
                         setSelectedCustomerId(customer.id);
-                        setEditing(customer);
-                        setShowForm(true);
+                        openCustomerForm(customer, false);
                       }}
                     >
                       Modifier

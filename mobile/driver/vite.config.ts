@@ -28,18 +28,26 @@ const nextImageShimPath = path.resolve(__dirname, "src/shims/next-image.tsx");
 // once a later step does.
 const nextLinkShimPath = path.resolve(__dirname, "src/shims/next-link.tsx");
 
+// ÉTAPE 21: components/driver-clients/driver-clients-view.tsx's own single
+// Next-specific import is "next/navigation"'s useRouter() (called
+// unconditionally per Rules of Hooks, only to push to /driver/pos when a
+// caller doesn't inject its own onCreateSale - the shell always does) -
+// aliased below to a minimal useRouter() shim (src/shims/next-navigation.ts),
+// same controlled-exception pattern as "next/image"/"next/link" above.
+const nextNavigationShimPath = path.resolve(__dirname, "src/shims/next-navigation.ts");
+
 // PHASE 5A.1 - "10. INTERDICTION DES MODULES SERVEUR": a build-time guard,
 // not just a convention. lib/offline/driver-pos/** is pure client code by
 // design (no Prisma, no next/headers, no server-only), so nothing the shell
 // legitimately needs should ever match these patterns - if one does, that is
 // exactly the mistake this plugin exists to catch before it ships in an APK.
-// "next/image" and "next/link" are explicitly exempted (see the two shim
-// paths above) - every other next/* import (next/navigation, next/headers,
+// "next/image", "next/link" and "next/navigation" are explicitly exempted
+// (see the three shim paths above) - every other next/* import (next/headers,
 // next/server, next/dynamic, bare "next", ...) stays forbidden.
 const FORBIDDEN_SPECIFIER_PATTERNS: RegExp[] = [
   /^server-only$/,
   /^next$/,
-  /^next\/(?!image$|link$)/,
+  /^next\/(?!image$|link$|navigation$)/,
   /^@prisma\//,
   /(^|\/)lib\/server\//,
   /(^|\/)lib\/generated\/prisma(\/|$)/,
@@ -67,6 +75,7 @@ export default defineConfig({
     alias: {
       "next/image": nextImageShimPath,
       "next/link": nextLinkShimPath,
+      "next/navigation": nextNavigationShimPath,
       "@": repoRoot,
     },
   },
