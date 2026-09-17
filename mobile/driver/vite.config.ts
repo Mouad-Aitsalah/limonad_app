@@ -18,18 +18,28 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 // controlled exception to the guard below - never a general opt-out.
 const nextImageShimPath = path.resolve(__dirname, "src/shims/next-image.tsx");
 
+// PHASE 1 "RESTAURATION DU POS CHAUFFEUR" - ÉTAPE 1: components/driver-pos/
+// driver-pos-view.tsx's own single Next-specific import is "next/link" (one
+// back-link, hidden below `lg` and therefore never visible on this shell's
+// phone-only viewport) - aliased below to a plain <a>-based shim
+// (src/shims/next-link.tsx), same controlled-exception pattern as
+// "next/image" above. driver-pos-view.tsx itself is NOT imported by the
+// shell yet at this step - this only makes it RESOLVABLE by Vite/TypeScript
+// once a later step does.
+const nextLinkShimPath = path.resolve(__dirname, "src/shims/next-link.tsx");
+
 // PHASE 5A.1 - "10. INTERDICTION DES MODULES SERVEUR": a build-time guard,
 // not just a convention. lib/offline/driver-pos/** is pure client code by
 // design (no Prisma, no next/headers, no server-only), so nothing the shell
 // legitimately needs should ever match these patterns - if one does, that is
 // exactly the mistake this plugin exists to catch before it ships in an APK.
-// "next/image" is explicitly exempted (see nextImageShimPath above) - every
-// other next/* import (next/navigation, next/headers, next/server, bare
-// "next", ...) stays forbidden.
+// "next/image" and "next/link" are explicitly exempted (see the two shim
+// paths above) - every other next/* import (next/navigation, next/headers,
+// next/server, next/dynamic, bare "next", ...) stays forbidden.
 const FORBIDDEN_SPECIFIER_PATTERNS: RegExp[] = [
   /^server-only$/,
   /^next$/,
-  /^next\/(?!image$)/,
+  /^next\/(?!image$|link$)/,
   /^@prisma\//,
   /(^|\/)lib\/server\//,
   /(^|\/)lib\/generated\/prisma(\/|$)/,
@@ -56,6 +66,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "next/image": nextImageShimPath,
+      "next/link": nextLinkShimPath,
       "@": repoRoot,
     },
   },
