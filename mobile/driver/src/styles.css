@@ -13,9 +13,34 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/**
+ * ÉTAPE 19 - Tailwind v4's automatic class scanning only walks this Vite
+ * project's own directory (mobile/driver/), never the monorepo root - so
+ * any utility class that appears ONLY inside a reused components/pos/**,
+ * components/driver/**, or lib/**.ts(x) file (never duplicated anywhere
+ * under mobile/driver/src/ itself) was silently missing from the compiled
+ * CSS, with no build error - confirmed by inspecting the built stylesheet
+ * (grep for e.g. "max-lg:hidden": zero matches despite product-card.tsx
+ * using it extensively). These two directives extend the scan to cover
+ * every shared UI/style-bearing file the shell actually imports (driver-pos-
+ * view.tsx, product-card.tsx, driver-home-view.tsx, pos-stock-display.ts,
+ * ...), so their classes are generated exactly like a class written directly
+ * inside mobile/driver/src/ already was.
+ */
+@source "../../../components";
+@source "../../../lib";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* ÉTAPE 19 - font-heading/font-sans resolve to Geist (next/font) on the
+     web, which this shell does not bundle - see this file's own top-of-file
+     doc comment ("none of which this shell needs or has installed"). Points
+     both at the same system-font stack `body` below already uses, so
+     `font-heading`/`font-sans` become real, generated utilities instead of
+     silently unrecognized class names, without pulling in a new font asset. */
+  --font-heading: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-ring: var(--ring);
@@ -69,6 +94,9 @@ body {
   --radius: 1rem;
   --text-primary: #102038;
   --text-secondary: #5f7391;
+  /* ÉTAPE 19 - copied from app/globals.css, needed by the reused Accueil
+     quick-link cards (bg-[var(--surface-soft)]). */
+  --surface-soft: #e9f1f8;
 }
 
 @layer base {
@@ -101,6 +129,17 @@ body {
   textarea::placeholder {
     color: var(--text-secondary);
   }
+}
+
+/* ÉTAPE 19 - components/ui/page-eyebrow.tsx's own class, used by
+   AppPageHeader/MetricCard (both reused by the Accueil) - copied verbatim
+   from app/globals.css. Not a Tailwind utility (no @source scan can
+   generate it), so it has to be copied by hand like every other rule in
+   this section. */
+.page-eyebrow {
+  color: var(--text-secondary);
+  letter-spacing: 0.24em;
+  @apply text-[0.68rem] font-semibold uppercase;
 }
 
 /* components/pos/use-fly-to-cart.ts's floating "flies into the cart"

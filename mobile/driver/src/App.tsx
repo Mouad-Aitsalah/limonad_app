@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Toaster } from "sonner";
 
+import { driverNavItems } from "@/components/driver/driver-nav-items";
 import { getAnyDriverOfflineContext, isNetworkAvailable } from "@/lib/offline/driver-pos";
 import type { DriverOfflineContext } from "@/lib/offline/driver-pos";
 import type { DriverPosContextDto } from "@/types/operations-dto";
@@ -11,11 +12,21 @@ import { mobileFetch } from "./lib/mobile-fetch";
 import { logoutMobile, type MobileUser } from "./lib/mobile-auth";
 import { refreshOfflineContextFromServer } from "./lib/refresh-offline-context";
 import type { Screen } from "./navigation";
-import { HomeScreen } from "./screens/HomeScreen";
+import { DriverHomeScreen } from "./screens/DriverHomeScreen";
 import { LoginScreen } from "./screens/LoginScreen";
+import { MigrationPendingScreen } from "./screens/MigrationPendingScreen";
 import { OfflineSalesScreen } from "./screens/OfflineSalesScreen";
 import { PosScreen } from "./screens/PosScreen";
 import { styles } from "./ui/styles";
+
+// ÉTAPE 19 - "4. NAVIGATION ANDROID": one lookup, driverNavItems itself as
+// the only source of truth for label/icon per historical route - never a
+// second, hand-typed copy of those labels.
+function navItemForHref(href: string) {
+  const item = driverNavItems.find((candidate) => candidate.href === href);
+  if (!item) throw new Error(`No driverNavItems entry for ${href}`);
+  return item;
+}
 
 /**
  * PHASE 5A.2 - shell orchestrator: bootstraps (SQLite + secure token +
@@ -209,12 +220,33 @@ export function App() {
                 onBack={() => setScreen("HOME")}
               />
             );
+          case "STOCK":
+          case "VENTES":
+          case "CLIENTS":
+          case "TOURNEE": {
+            const href =
+              screen === "STOCK"
+                ? "/driver/stock"
+                : screen === "VENTES"
+                  ? "/driver/ventes"
+                  : screen === "CLIENTS"
+                    ? "/driver/clients"
+                    : "/driver/tournee";
+            const item = navItemForHref(href);
+            return (
+              <MigrationPendingScreen
+                label={item.label}
+                icon={item.icon}
+                onBack={() => setScreen("HOME")}
+              />
+            );
+          }
           default:
             return (
-              <HomeScreen
+              <DriverHomeScreen
                 bootState={bootState}
                 online={online}
-                context={offlineContext}
+                token={token}
                 onNavigate={setScreen}
                 onLogout={() => void handleLogout()}
                 logoutPending={logoutPending}
