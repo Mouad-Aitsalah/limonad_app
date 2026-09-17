@@ -2,6 +2,7 @@
 
 import { saveCachedCustomers, saveCachedProducts, saveCachedTruckStock } from "./cache-store";
 import { saveDriverOfflineContext } from "./context-store";
+import { logSqliteError } from "./database";
 import type { DriverPosContextDto } from "@/types/operations-dto";
 
 export type HydrateDriverOfflineCacheInput = {
@@ -147,7 +148,7 @@ export async function hydrateDriverOfflineCache(
       console.log("[OFFLINE CACHE] stock saved 0 (no truck on this context)");
     }
   } catch (error) {
-    console.error("[OFFLINE CACHE] SQLite error", error);
+    logSqliteError("hydrateDriverOfflineCache", error);
     console.warn("[offline/driver-pos] hydrateDriverOfflineCache failed.", error);
   }
 }

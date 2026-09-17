@@ -60,6 +60,52 @@ function warnOnce(message: string, error: unknown) {
   console.warn(`[offline/driver-pos] ${message}`, error);
 }
 
+/**
+ * TEMPORARY DEV DIAGNOSTIC (bug hunt - "cached_products write failed,
+ * [object Object]"): Android's WebView console -> Logcat bridge stringifies
+ * a console.error's non-string arguments with a bare `.toString()` instead
+ * of deep-inspecting them the way Chrome DevTools does - a thrown/rejected
+ * SQLite error object (or even a plain `{ step, error }` object literal)
+ * therefore only ever showed up as the literal text "[object Object]" on a
+ * real device, never its actual message/code/contents. This never changes
+ * what is caught or how a failure is handled - every call site below still
+ * fails exactly as soft as before; it only makes the SAME already-caught
+ * error legible in Logcat: every own enumerable property the rejected value
+ * carries (message/code/result/whatever the native plugin actually
+ * attached), plus a JSON dump. No secrets ever flow through this path (only
+ * SQL error details), so nothing here needs redaction.
+ */
+function describeSqliteError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    const details: Record<string, unknown> = {};
+    for (const key of Object.getOwnPropertyNames(error)) {
+      details[key] = (error as unknown as Record<string, unknown>)[key];
+    }
+    return details;
+  }
+  if (error && typeof error === "object") {
+    return { ...(error as Record<string, unknown>) };
+  }
+  return { value: error };
+}
+
+/** See describeSqliteError's own doc comment - logs both the raw value (in
+ *  case the environment DOES deep-inspect it, e.g. Chrome DevTools) and an
+ *  explicit JSON dump of its own properties (what actually shows up on
+ *  Android Logcat). `context` names which catch block logged it (this
+ *  module's three, plus bootstrap.ts's own outer guard), so every site stays
+ *  distinguishable. Exported only for that reuse - never called from outside
+ *  an already-existing catch block, so this changes no control flow. */
+export function logSqliteError(context: string, error: unknown): void {
+  console.error(`[OFFLINE CACHE] SQLite error - ${context}`, error);
+  const details = describeSqliteError(error);
+  try {
+    console.error(`[OFFLINE CACHE] SQLite error details - ${context}`, JSON.stringify(details, null, 2));
+  } catch {
+    console.error(`[OFFLINE CACHE] SQLite error details (unserializable) - ${context}`, details);
+  }
+}
+
 function getPlugin(): SQLiteConnection {
   if (!sqlitePlugin) sqlitePlugin = new SQLiteConnection(CapacitorSQLite);
   return sqlitePlugin;
@@ -222,7 +268,7 @@ async function openDatabase(): Promise<SQLiteDBConnection> {
 export async function getDatabase(): Promise<SQLiteDBConnection | null> {
   if (!openPromise) {
     openPromise = openDatabase().catch((error) => {
-      console.error("[OFFLINE CACHE] SQLite error", error);
+      logSqliteError("getDatabase/openDatabase", error);
       warnOnce("SQLite unavailable - offline cache disabled for this session.", error);
       openPromise = null;
       return null;
@@ -242,6 +288,49 @@ export async function isDatabaseAvailable(): Promise<boolean> {
 }
 
 /**
+ * ÉTAPE 15A/15B - FIFO async mutex around every operation that actually
+ * touches the shared SQLite connection. `beginTransaction`/`commitTransaction`/
+ * `rollbackTransaction`, and the plugin's own implicit per-`db.run()`
+ * transaction (its `transaction` option defaults to `true` - see
+ * @capacitor-community/sqlite's own capSQLiteRunOptions), are both state
+ * global to the CONNECTION, not scoped to whichever caller happens to be
+ * running. Before this queue, several independent callers (hydrateDriverOfflineCache
+ * firing from up to four separate places at once, a reconnect-triggered sync
+ * batch's own status updates, a live offline sale, ...) could each touch
+ * that global state at the same time - and withTransaction's own self-heal
+ * (isTransactionActive -> rollbackTransaction, see below) could roll back a
+ * SIBLING caller's still-in-progress transaction instead of a genuine
+ * leftover, which is exactly what produced the observed
+ * "UNIQUE constraint failed" and "CommitTransaction: ... no current
+ * transaction" errors (see ÉTAPE 15A's audit).
+ *
+ * `runExclusive` makes every withDatabase()/withTransaction() body run to
+ * completion - success OR failure - before the next queued one starts, so at
+ * most one of them is ever mid-flight against `db`. `getDatabase()` itself is
+ * deliberately called OUTSIDE this queue in both functions below (it is
+ * already de-duplicated by its own memoized `openPromise`, and a call that
+ * fails fast because SQLite is unavailable should never sit in this queue).
+ *
+ * NOT reentrant: `fn` must never itself call withDatabase()/withTransaction()
+ * - a nested call would wait on `operationQueue`, which in turn only advances
+ * once the OUTER call's own task settles, so it would never resolve. Verified
+ * for every current caller (context-store.ts, cache-store.ts, sales-store.ts's
+ * createOfflineSale) - each only calls `db.run`/`db.query` directly inside its
+ * own callback, never one of these two exported functions again.
+ */
+let operationQueue: Promise<void> = Promise.resolve();
+
+function runExclusive<T>(task: () => Promise<T>): Promise<T> {
+  const previous = operationQueue;
+  let release: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  operationQueue = next;
+  return previous.then(() => task()).finally(() => release());
+}
+
+/**
  * Runs `fn` against the database, swallowing any failure into `null` so a
  * broken local cache can never surface as an error to the online POS.
  */
@@ -250,13 +339,15 @@ export async function withDatabase<T>(
 ): Promise<T | null> {
   const db = await getDatabase();
   if (!db) return null;
-  try {
-    return await fn(db);
-  } catch (error) {
-    console.error("[OFFLINE CACHE] SQLite error", error);
-    warnOnce("SQLite operation failed.", error);
-    return null;
-  }
+  return runExclusive(async () => {
+    try {
+      return await fn(db);
+    } catch (error) {
+      logSqliteError("withDatabase", error);
+      warnOnce("SQLite operation failed.", error);
+      return null;
+    }
+  });
 }
 
 export type TransactionResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
@@ -267,19 +358,31 @@ export type TransactionResult<T> = { ok: true; value: T } | { ok: false; error: 
  * failure is returned to the caller. `fn` must pass `transaction: false` to
  * every `db.run`/`db.execute` call it makes (the plugin's own per-call
  * transaction wrapping would otherwise nest inside this one, which SQLite
- * does not support).
+ * does not support). The whole body below runs inside `runExclusive` (see
+ * its own doc comment above withDatabase) - no sibling withTransaction()/
+ * withDatabase() call can be mid-flight while this one runs.
  *
- * BUG CRITIQUE PHASE 3 bug hunt: a transaction left open by an earlier
- * interrupted attempt on THIS SAME connection (app backgrounded/killed
- * mid-transaction, or a commit/rollback that itself failed - see the catch
- * below) would otherwise make every later beginTransaction() reject with
- * something like "cannot start a transaction within a transaction", forever,
- * until the app restarts and gets a fresh connection - `hydrateDriverOfflineCache`
- * runs this same withTransaction on every context change, so it has had many
- * chances to leave the shared connection in exactly this state before the
- * driver ever taps "Encaisser". `isTransactionActive()` is the plugin's own
- * official way to detect this; self-heal by rolling it back once before
- * starting the new one, and log loudly so this is visible if it happens.
+ * BUG CRITIQUE PHASE 3 bug hunt / ÉTAPE 15B: a transaction left open by an
+ * earlier interrupted attempt on THIS SAME connection (app backgrounded/
+ * killed mid-transaction, or a commit/rollback that itself failed - see the
+ * catch below) would otherwise make every later beginTransaction() reject
+ * with something like "cannot start a transaction within a transaction",
+ * forever, until the app restarts and gets a fresh connection.
+ * `isTransactionActive()` is the plugin's own official way to detect this;
+ * self-heal by rolling it back once before starting the new one, and log
+ * loudly so this is visible if it happens.
+ *
+ * ÉTAPE 15A found that, WITHOUT the queue above, this self-heal was actually
+ * the mechanism destroying other callers' work: several independent chains
+ * could each be mid-transaction on the same connection at once, so this
+ * rollback frequently hit a SIBLING's still-live transaction rather than a
+ * genuine orphan, producing the observed "UNIQUE constraint failed" /
+ * "no current transaction" errors. Now that `runExclusive` guarantees no
+ * other withTransaction()/withDatabase() body is ever running concurrently,
+ * an active transaction found here can only be a real cross-session leftover
+ * (e.g. the native connection survived a JS/WebView reload while this
+ * module's own state, including `operationQueue`, was reset) - never a live
+ * sibling - so this self-heal is kept, but is now provably safe.
  */
 export async function withTransaction<T>(
   fn: (db: SQLiteDBConnection) => Promise<T>,
@@ -287,40 +390,42 @@ export async function withTransaction<T>(
   const db = await getDatabase();
   if (!db) return { ok: false, error: new Error("SQLite unavailable") };
 
-  try {
-    const active = await db.isTransactionActive();
-    if (active.result) {
-      console.error(
-        "[OFFLINE SALE] a transaction was already active on this connection - rolling it back before starting a new one",
-      );
+  return runExclusive(async () => {
+    try {
+      const active = await db.isTransactionActive();
+      if (active.result) {
+        console.error(
+          "[OFFLINE SALE] a transaction was already active on this connection - rolling it back before starting a new one",
+        );
+        try {
+          await db.rollbackTransaction();
+        } catch (staleRollbackError) {
+          warnOnce("Rollback of a stale leftover transaction failed.", staleRollbackError);
+        }
+      }
+    } catch (checkError) {
+      warnOnce("isTransactionActive check failed.", checkError);
+    }
+
+    let step: "beginTransaction" | "run" | "commitTransaction" = "beginTransaction";
+    try {
+      await db.beginTransaction();
+      step = "run";
+      const value = await fn(db);
+      step = "commitTransaction";
+      await db.commitTransaction();
+      return { ok: true, value };
+    } catch (error) {
+      logSqliteError(`withTransaction (step=${step})`, error);
       try {
         await db.rollbackTransaction();
-      } catch (staleRollbackError) {
-        warnOnce("Rollback of a stale leftover transaction failed.", staleRollbackError);
+      } catch (rollbackError) {
+        warnOnce("SQLite rollback itself failed.", rollbackError);
       }
+      warnOnce("SQLite transaction rolled back.", error);
+      return { ok: false, error };
     }
-  } catch (checkError) {
-    warnOnce("isTransactionActive check failed.", checkError);
-  }
-
-  let step: "beginTransaction" | "run" | "commitTransaction" = "beginTransaction";
-  try {
-    await db.beginTransaction();
-    step = "run";
-    const value = await fn(db);
-    step = "commitTransaction";
-    await db.commitTransaction();
-    return { ok: true, value };
-  } catch (error) {
-    console.error("[OFFLINE CACHE] SQLite error", { step, error });
-    try {
-      await db.rollbackTransaction();
-    } catch (rollbackError) {
-      warnOnce("SQLite rollback itself failed.", rollbackError);
-    }
-    warnOnce("SQLite transaction rolled back.", error);
-    return { ok: false, error };
-  }
+  });
 }
 
 export type OfflineDbDiagnostic = {
