@@ -10,6 +10,50 @@ import { customerAccountNumber } from "@/lib/customer-code";
 import { cn } from "@/lib/utils";
 import type { CustomerDto } from "@/types/operations-dto";
 
+/**
+ * PHASE 1 "RESTAURATION DU POS CHAUFFEUR" - ÉTAPE 5: the outcome of
+ * resolving one typed account number, abstracted away from HOW that
+ * resolution actually happened (a relative fetch, a Bearer fetch, a local
+ * SQLite lookup, or any combination) - a plain discriminated union, not a
+ * transport detail. Three cases, matching the three distinct messages this
+ * box has always shown (see BUG-05's own "9. NUMÉRO INCONNU" - never
+ * conflate them):
+ *  - "found": the number resolved to a real customer.
+ *  - "not_found": a genuine, definitive "no such customer" (a real 404, or
+ *    a local cache miss with nothing left to fall back to) - shows
+ *    `message` (or the historical "Client introuvable.") and triggers
+ *    `onNotFound` exactly like today.
+ *  - "error": a real network/technical failure - shows `message` (or the
+ *    historical "Recherche impossible.") and never triggers `onNotFound`
+ *    (a transient failure is not the same claim as "this customer does not
+ *    exist" - see this file's own `lookup()`).
+ */
+export type CustomerNumberLookupResult =
+  | { kind: "found"; customer: CustomerDto }
+  | { kind: "not_found"; message?: string }
+  | { kind: "error"; message?: string };
+
+export type CustomerNumberResolver = (accountNumber: string) => Promise<CustomerNumberLookupResult>;
+
+/** The box's own, unchanged-since-always default: a same-origin, cookie-
+ *  authenticated GET - exactly what every existing web call site (POS
+ *  comptoir, POS chauffeur, règlements client) still gets when it doesn't
+ *  pass `resolveCustomer`. */
+const defaultResolveCustomer: CustomerNumberResolver = async (accountNumber) => {
+  try {
+    const response = await fetch(`/api/customers/by-number?n=${encodeURIComponent(accountNumber)}`, {
+      cache: "no-store",
+    });
+    const body = (await response.json()) as { customer?: CustomerDto; message?: string };
+    if (!response.ok || !body.customer) {
+      return { kind: "not_found", message: body.message };
+    }
+    return { kind: "found", customer: body.customer };
+  } catch {
+    return { kind: "error" };
+  }
+};
+
 type CustomerNumberInputProps = {
   /**
    * The customer currently selected in the POS (from the Client combobox, a
@@ -41,6 +85,31 @@ type CustomerNumberInputProps = {
    * fully visible.
    */
   hideLabelOnMobile?: "lg" | "xl";
+  /**
+   * ÉTAPE 5: optional override for how a typed number is actually resolved -
+   * see `CustomerNumberResolver`'s own doc comment. Omitted (every existing
+   * web call site - pos-layout.tsx, driver-pos-view.tsx,
+   * customer-settlements-view.tsx), behavior is byte-for-byte the same
+   * relative, cookie-authenticated fetch as before this option existed. The
+   * Android shell can inject a resolver that checks its own SQLite
+   * `cached_customers` cache first (instant, zero network, online or
+   * offline - the exact BUG-05 behavior already validated there) and only
+   * falls back to a Bearer-authenticated fetch for a genuine local cache
+   * miss - see mobile/driver/src/components/shell-customer-number-input.tsx,
+   * whose own local-first `lookup()` this type is meant to let that same
+   * logic move behind, not duplicate. This file never imports SQLite or
+   * anything under mobile/driver/ itself - the injection point is a plain
+   * function type.
+   */
+  resolveCustomer?: CustomerNumberResolver;
+  /**
+   * ÉTAPE 5: when true, shows a persistent "✓ N° — Nom" confirmation line
+   * once the typed number matches the currently-resolved customer (BUG-05's
+   * own validated affordance - a toast alone is transient). Defaults to
+   * false so every existing web call site renders exactly as before; the
+   * shell will opt in explicitly once it switches to this component.
+   */
+  showResolvedConfirmation?: boolean;
 };
 
 /**
@@ -65,6 +134,8 @@ export function CustomerNumberInput({
   disabled,
   placeholder = "ex : 15",
   hideLabelOnMobile,
+  resolveCustomer = defaultResolveCustomer,
+  showResolvedConfirmation = false,
 }: CustomerNumberInputProps) {
   // Below the POS mobile breakpoint the label is present for assistive tech
   // (sr-only) but visually gone, and the label gap is removed so the input
@@ -120,25 +191,26 @@ export function CustomerNumberInput({
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(
-        `/api/customers/by-number?n=${encodeURIComponent(trimmed)}`,
-        { cache: "no-store" },
-      );
-      const body = (await response.json()) as { customer?: CustomerDto; message?: string };
-      if (!response.ok || !body.customer) {
-        setError(body.message ?? "Client introuvable.");
+      const result = await resolveCustomer(trimmed);
+      if (result.kind === "found") {
+        onResolved(result.customer);
+        toast.success(`Client ${result.customer.displayCode} — ${result.customer.name}`);
+        setError(null);
+        focusAfterResolve?.current?.focus();
+        return;
+      }
+      if (result.kind === "not_found") {
+        setError(result.message ?? "Client introuvable.");
         if (onNotFound) {
           selfClearedRef.current = true;
           onNotFound();
         }
         return;
       }
-      onResolved(body.customer);
-      toast.success(`Client ${body.customer.displayCode} — ${body.customer.name}`);
-      setError(null);
-      focusAfterResolve?.current?.focus();
-    } catch {
-      setError("Recherche impossible.");
+      // "error" - a real network/technical failure, never the same claim as
+      // "this customer does not exist" - see CustomerNumberLookupResult's
+      // own doc comment. Never triggers onNotFound.
+      setError(result.message ?? "Recherche impossible.");
     } finally {
       setLoading(false);
     }
@@ -176,6 +248,18 @@ export function CustomerNumberInput({
           if (value.trim()) void lookup();
         }}
       />
+      {/* ÉTAPE 5 - opt-in only (see `showResolvedConfirmation`'s own doc
+          comment): a persistent confirmation once the typed number matches
+          the currently-resolved customer - BUG-05's own validated
+          affordance on the shell, ported here behind a flag so no existing
+          web caller's rendering changes. Mutually exclusive with `error`
+          (both are cleared together on every successful resolution and on
+          every edit). */}
+      {showResolvedConfirmation && !error && customer && value.trim() === customerAccountNumber(customer.code) ? (
+        <p className="text-xs font-medium text-emerald-700">
+          ✓ {customer.displayCode} — {customer.name}
+        </p>
+      ) : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );

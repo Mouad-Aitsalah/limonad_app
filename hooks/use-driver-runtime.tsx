@@ -74,7 +74,14 @@ type DriverRuntimeContextValue = {
   replaceCurrentTour: (tour: CurrentDriverTourDto) => void;
 };
 
-const DriverRuntimeContext = React.createContext<DriverRuntimeContextValue | null>(null);
+// Exported (additive - every other export/behavior here is unchanged) so a
+// caller that must call this hook unconditionally per Rules of Hooks but
+// cannot guarantee a <DriverRuntimeProvider> ancestor - see components/
+// driver-pos/driver-pos-view.tsx's own ÉTAPE 8 doc comment - can read it via
+// the raw React.useContext (which safely returns null with no provider)
+// instead of useDriverRuntime() below, which deliberately throws for every
+// other caller.
+export const DriverRuntimeContext = React.createContext<DriverRuntimeContextValue | null>(null);
 
 // Phase 3 CRITICAL #2 fix: the runtime's own GPS-reactive proximity feed
 // (syncNearbyCustomer below) never needs the driver's ENTIRE accessible

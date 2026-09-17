@@ -31,9 +31,15 @@ import { CartSummary } from "@/components/pos/cart-summary";
 import { CartTable } from "@/components/pos/cart-table";
 import { CollectDialog } from "@/components/pos/collect-dialog";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
-import { CustomerNumberInput } from "@/components/pos/customer-number-input";
+import {
+  CustomerNumberInput,
+  type CustomerNumberResolver,
+} from "@/components/pos/customer-number-input";
 import { InvoiceActions } from "@/components/pos/invoice-actions";
-import { MobileCustomerPicker } from "@/components/pos/mobile-customer-picker";
+import {
+  MobileCustomerPicker,
+  type CustomerSearchFn,
+} from "@/components/pos/mobile-customer-picker";
 import { MobileSupplierPicker } from "@/components/pos/mobile-supplier-picker";
 import { NetworkStatusBadge } from "@/components/driver-pos/network-status-badge";
 import { PendingSalesPanel } from "@/components/pos/pending-sales-panel";
@@ -45,10 +51,13 @@ import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
-import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
-import { useAuth } from "@/hooks/use-auth";
-import { useCompanyIdentity } from "@/hooks/use-company-identity";
-import { useDriverRuntime } from "@/hooks/use-driver-runtime";
+import {
+  usePosProductSearch,
+  type PosProductRemoteSearch,
+} from "@/components/pos/use-pos-product-search";
+import { AuthContext } from "@/hooks/use-auth";
+import { useCompanyIdentity, type CompanyIdentity } from "@/hooks/use-company-identity";
+import { DriverRuntimeContext } from "@/hooks/use-driver-runtime";
 import { useNetworkState } from "@/hooks/use-network-status";
 import {
   createOfflineSale,
@@ -59,9 +68,12 @@ import {
   isSyncInFlight,
   loadDriverPosContext,
   syncPendingDriverSales,
+  type DriverPosCacheCounts,
+  type LoadDriverPosContextParams,
   type NetworkState,
   type OfflineDbDiagnostic,
   type OfflineSaleWithLines,
+  type SyncBatchResult,
 } from "@/lib/offline/driver-pos";
 import { OfflineSalesDialog, type OfflineSaleRowData } from "@/components/driver-pos/offline-sales-dialog";
 import { roundMoney } from "@/lib/money";
@@ -79,7 +91,7 @@ import type { PosProduct } from "@/types/pos";
 // already use. No admin business logic is imported, only these shapes.
 import type { CartLineComputed, CartTotals } from "@/components/pos/pos-layout";
 
-type CartLine = {
+export type CartLine = {
   productId: string;
   quantity: number;
   discountRate: number;
@@ -105,16 +117,316 @@ function normalize(value: string) {
     .trim();
 }
 
+/**
+ * PHASE 1 "RESTAURATION DU POS CHAUFFEUR" - \u00c9TAPE 7: the only two
+ * `useDriverRuntime()` members this file actually reads (markCustomerHandled
+ * after a sale, refreshCurrentTour after a sale/collect) - never the whole
+ * `DriverRuntimeContextValue` (tour/stop-list data this component never
+ * touches). Deliberately narrow per this step's own "Ne devine aucun champ."
+ */
+export type DriverPosRuntime = {
+  markCustomerHandled: (customerId: string) => void;
+  refreshCurrentTour: () => Promise<unknown>;
+};
+
+/**
+ * ÉTAPE 8 - discovered incompatibility: `useDriverRuntime()` THROWS when
+ * called outside a `<DriverRuntimeProvider>` ancestor (see hooks/use-driver-
+ * runtime.tsx's own guard) - a real provider the mobile shell never mounts
+ * (it wraps GPS/tour-tracking effects with relative fetches and a Capacitor
+ * plugin this shell's own Android project doesn't register, none of which
+ * the POS itself needs). This file reads the context DIRECTLY below (now
+ * exported for exactly this - see that hook file's own comment) instead of
+ * calling useDriverRuntime() itself, so a missing provider safely resolves
+ * to `null` instead of throwing - Rules-of-Hooks safe with no conditional/
+ * try-catch wrapper needed. Used only as the stand-in when that read comes
+ * back null AND the caller also didn't supply `driverRuntime` - never
+ * reached on the web (that page is always rendered under a real provider
+ * for an actual driver - see components/driver/driver-runtime-boundary.tsx).
+ */
+const NOOP_DRIVER_RUNTIME: DriverPosRuntime = {
+  markCustomerHandled: () => {},
+  refreshCurrentTour: async () => undefined,
+};
+
+/**
+ * ÉTAPE 8 - "1. AUTH/UTILISATEUR": discovered incompatibility - the full
+ * `CurrentUser` (types/auth.ts) requires `email`/`role`, neither of which
+ * the mobile shell's own `DriverOfflineContext` carries (it was never fetched
+ * for that shell - see mobile/driver/src/lib/auth-state.ts). This file only
+ * ever reads `.organizationId`/`.id`/`.nom` (see hydrateDriverOfflineCache/
+ * refreshContext/validateOfflineCashSale below) - narrowed here the same way
+ * DriverPosRuntime already was in ÉTAPE 7, so the shell can supply a real
+ * value without inventing a fake email/role. The live useAuth() CurrentUser
+ * is a structural superset, so the web path is unaffected.
+ */
+export type DriverPosCurrentUser = {
+  id: string;
+  organizationId: string | null;
+  nom: string;
+};
+
+/**
+ * \u00c9TAPE 7 - "8. CR\u00c9ATION DE VENTE": the server-side write this file's own
+ * `validateSale`/`prepareInvoice` both perform once ONLINE (the offline-CASH
+ * branch already goes through createOfflineSale from lib/offline/driver-pos,
+ * untouched by this step) - abstracted away from HOW it's actually sent.
+ * `ok: false` carries the server's own raw `message` (possibly absent) so
+ * each caller can keep applying its OWN historical fallback text, exactly as
+ * today - this type never bakes in a specific error string itself.
+ */
+export type DriverPosCreateSaleInput = {
+  customerId: string | null;
+  paymentMethod: PosPaymentMethodValue;
+  paidAmount?: number;
+  bankAccountingAccountId?: string | null;
+  lines: CartLine[];
+  idempotencyKey: string;
+  collectNow?: boolean;
+};
+export type DriverPosCreateSaleResult =
+  | { ok: true; sale: SaleDto }
+  | { ok: false; message?: string };
+export type DriverPosCreateSale = (input: DriverPosCreateSaleInput) => Promise<DriverPosCreateSaleResult>;
+
+/** The file's own, unchanged-since-always default: a same-origin, cookie-
+ *  authenticated POST /api/driver/sales - exactly what both existing call
+ *  sites (validateSale, prepareInvoice) still get when the caller doesn't
+ *  pass `createSale`. */
+const defaultCreateSale: DriverPosCreateSale = async (input) => {
+  const response = await fetch("/api/driver/sales", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = (await response.json()) as { sale?: SaleDto; message?: string };
+  if (!response.ok || !payload.sale) {
+    return { ok: false, message: payload.message };
+  }
+  return { ok: true, sale: payload.sale };
+};
+
+/** \u00c9TAPE 7 - "9. PENDING SALES": "Factures du jour" - DRAFT truck sales
+ *  awaiting collection, read fresh on mount and after prepareInvoice/collect.
+ *  Must resolve to `[]` on any failure (never throw) - both existing call
+ *  sites already treat a failed read as non-fatal. */
+export type DriverPosFetchPendingSales = () => Promise<SaleDto[]>;
+
+const defaultFetchPendingSales: DriverPosFetchPendingSales = async () => {
+  try {
+    const response = await fetch("/api/driver/sales/pending", { cache: "no-store" });
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { sales?: SaleDto[] };
+    return payload.sales ?? [];
+  } catch {
+    return [];
+  }
+};
+
+/** \u00c9TAPE 7 - "10. COLLECT/PAIEMENT": encaissement d'une facture "Factures du
+ *  jour" en attente - the server-side write `collectPending` performs once
+ *  ONLINE (blockIfOffline already refuses this entirely otherwise, untouched
+ *  by this step). Same `{ok:false, message?}` contract as DriverPosCreateSale. */
+export type DriverPosCollectSaleInput = {
+  saleId: string;
+  paymentMethod: PosPaymentMethodValue;
+  paidAmount?: number;
+  bankAccountingAccountId?: string | null;
+};
+export type DriverPosCollectSaleResult =
+  | { ok: true; sale: SaleDto }
+  | { ok: false; message?: string };
+export type DriverPosCollectSale = (input: DriverPosCollectSaleInput) => Promise<DriverPosCollectSaleResult>;
+
+/** The file's own, unchanged-since-always default: a same-origin, cookie-
+ *  authenticated POST /api/driver/sales/:id/collect - exactly what the
+ *  existing call site (collectPending) still gets when the caller doesn't
+ *  pass `collectSale`. */
+const defaultCollectSale: DriverPosCollectSale = async ({
+  saleId,
+  paymentMethod,
+  paidAmount,
+  bankAccountingAccountId,
+}) => {
+  const response = await fetch(`/api/driver/sales/${saleId}/collect`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      paymentMethod,
+      paidAmount,
+      reference: null,
+      ...(paymentMethod === "BANK_TRANSFER"
+        ? { bankAccountingAccountId: bankAccountingAccountId ?? null }
+        : {}),
+    }),
+  });
+  const payload = (await response.json()) as { sale?: SaleDto; message?: string };
+  if (!response.ok || !payload.sale) {
+    return { ok: false, message: payload.message };
+  }
+  return { ok: true, sale: payload.sale };
+};
+
+/**
+ * ÉTAPE 9 - "1. SYNC DES VENTES": the same shared engine this file's own
+ * `handleSyncPendingSales` already called directly (`syncPendingDriverSales`,
+ * still untouched - lib/offline/driver-pos/sync-sales.ts) - abstracted only
+ * so a caller that needs a DIFFERENT transport (Bearer + absolute URL, see
+ * mobile/driver/src/lib/driver-pos-data-source.ts's own
+ * syncPendingDriverSalesForShell) can inject it wholesale instead of this
+ * file reimplementing the choice. Omitted (every existing web call site) ->
+ * defaultSyncPendingSales (byte-for-byte today's same-origin, cookie call).
+ * Never a second sync engine - this only ever forwards to the one shared one.
+ */
+export type DriverPosSyncPendingSales = (scope: {
+  organizationId: string;
+  driverId: string;
+}) => Promise<SyncBatchResult>;
+
+const defaultSyncPendingSales: DriverPosSyncPendingSales = (scope) => syncPendingDriverSales(scope);
+
+/**
+ * ÉTAPE 9 - "2. REFRESH CONTEXT": the same shared reader this file's own
+ * `refreshContext` already called directly (`loadDriverPosContext`, still
+ * untouched - lib/offline/driver-pos/pos-data-source.ts) - abstracted only
+ * so a caller with its own transport (see mobile/driver/src/lib/
+ * driver-pos-data-source.ts's own loadShellDriverPosContext) can inject it,
+ * without this file reimplementing any cache logic. Omitted (every existing
+ * web call site) -> defaultRefreshDriverContext (byte-for-byte today's same-
+ * origin, cookie call, cache-fallback included). `cacheCounts` is relaxed to
+ * optional here - it is only ever a TEMPORARY dev diagnostic (see
+ * cacheDiagnostic's own state comment below) the shell's own reader doesn't
+ * track, so `loadDriverPosContext`'s own (stricter) result stays trivially
+ * assignable to this type unchanged.
+ */
+export type DriverPosRefreshContextResult =
+  | { ok: true; source: "server"; context: DriverPosContextDto; cacheSyncedAt: null }
+  | {
+      ok: true;
+      source: "cache";
+      context: DriverPosContextDto;
+      cacheSyncedAt: string;
+      cacheCounts?: DriverPosCacheCounts | null;
+    }
+  | { ok: false; reason: "NOT_FOUND" | "ERROR" };
+export type DriverPosRefreshContext = (
+  params: LoadDriverPosContextParams,
+) => Promise<DriverPosRefreshContextResult>;
+
+const defaultRefreshDriverContext: DriverPosRefreshContext = (params) => loadDriverPosContext(params);
+
+/**
+ * ÉTAPE 9 - "4. ÉVÉNEMENT DE SYNCHRONISATION": a plain subscribe function -
+ * same shape as mobile/driver/src/lib/driver-offline-events.ts's own
+ * onDriverOfflineSyncCompleted (subscribe a callback, get back an unsubscribe
+ * function) - so the shell can wire its EXISTING event bus in directly, with
+ * zero Capacitor/mobile-driver import here (this file only ever sees a
+ * generic function signature). Omitted (the web has no such event bus) ->
+ * the BUG-03 ticket-upgrade effect below simply never subscribes, so nothing
+ * about this file's behavior changes for any existing web call site.
+ */
+export type DriverPosSyncCompletedSubscribe = (callback: () => void) => () => void;
+
 export function DriverPosView({
   initialContext,
   initialCustomerId,
+  currentUser: currentUserProp,
+  identity: identityProp,
+  networkState: networkStateProp,
+  driverRuntime: driverRuntimeProp,
+  createSale = defaultCreateSale,
+  fetchPendingSales = defaultFetchPendingSales,
+  collectSale = defaultCollectSale,
+  syncPendingSales = defaultSyncPendingSales,
+  refreshDriverContext = defaultRefreshDriverContext,
+  onSyncCompleted,
+  searchProductsRemote,
+  searchCustomers,
+  showCustomerAccountNumberInTrigger,
+  resolveCustomerByNumber,
+  showResolvedCustomerConfirmation,
 }: {
   initialContext: DriverPosContextDto;
   initialCustomerId?: string | null;
+  /** \u00c9TAPE 7 - "1. AUTH/UTILISATEUR": omitted (every existing web call site)
+   *  -> the live useAuth() session, byte-for-byte as before this prop
+   *  existed. The shell can inject its own already-hydrated driver identity
+   *  instead of relying on this hook's own cookie-session fetch. `null` is a
+   *  meaningful, real value (no session yet) - never treated the same as
+   *  omitted, same reasoning as ReceiptPrint's own `identity` prop. */
+  currentUser?: DriverPosCurrentUser | null;
+  /** \u00c9TAPE 7 - "2. COMPANY IDENTITY": same principle for useCompanyIdentity() -
+   *  see ReceiptPrint's own `identity` prop, whose exact pattern this reuses. */
+  identity?: CompanyIdentity | null;
+  /** \u00c9TAPE 7 - "4. NETWORK STATE": same principle already established for
+   *  NetworkStatusBadge's own `networkState` prop (\u00c9TAPE 2) - no meaningful
+   *  `null` here, so omitted falls back to the live hook via `??`. */
+  networkState?: NetworkState;
+  /** \u00c9TAPE 7 - "3. RUNTIME CHAUFFEUR": see DriverPosRuntime's own doc comment
+   *  for exactly why only these two members are asked for. */
+  driverRuntime?: DriverPosRuntime;
+  /** \u00c9TAPE 7 - "8. CR\u00c9ATION DE VENTE": see DriverPosCreateSale's own doc
+   *  comment. Omitted -> defaultCreateSale (byte-for-byte today's fetch). */
+  createSale?: DriverPosCreateSale;
+  /** \u00c9TAPE 7 - "9. PENDING SALES": see DriverPosFetchPendingSales's own doc
+   *  comment. Omitted -> defaultFetchPendingSales. */
+  fetchPendingSales?: DriverPosFetchPendingSales;
+  /** \u00c9TAPE 7 - "10. COLLECT/PAIEMENT": see DriverPosCollectSale's own doc
+   *  comment. Omitted -> defaultCollectSale. */
+  collectSale?: DriverPosCollectSale;
+  /** \u00c9TAPE 9 - "1. SYNC DES VENTES": see DriverPosSyncPendingSales's own doc
+   *  comment. Omitted -> defaultSyncPendingSales. */
+  syncPendingSales?: DriverPosSyncPendingSales;
+  /** \u00c9TAPE 9 - "2. REFRESH CONTEXT": see DriverPosRefreshContext's own doc
+   *  comment. Omitted -> defaultRefreshDriverContext. */
+  refreshDriverContext?: DriverPosRefreshContext;
+  /** \u00c9TAPE 9 - "4. \u00c9V\u00c9NEMENT DE SYNCHRONISATION": see
+   *  DriverPosSyncCompletedSubscribe's own doc comment. Omitted -> BUG-03's
+   *  ticket upgrade never triggers (today's web behavior, unchanged). */
+  onSyncCompleted?: DriverPosSyncCompletedSubscribe;
+  /** \u00c9TAPE 7 - "5. RECHERCHE PRODUITS": forwarded as-is to the already-
+   *  generalized usePosProductSearch (\u00c9TAPE 4) - no logic duplicated here. */
+  searchProductsRemote?: PosProductRemoteSearch;
+  /** \u00c9TAPE 7 - "6. RECHERCHE CLIENT": forwarded as-is to the already-
+   *  generalized MobileCustomerPicker (\u00c9TAPE 6) - three-state
+   *  undefined/function/null semantics preserved unchanged. */
+  searchCustomers?: CustomerSearchFn | null;
+  showCustomerAccountNumberInTrigger?: boolean;
+  /** \u00c9TAPE 7 - "7. CustomerNumberInput": forwarded as-is to the already-
+   *  generalized CustomerNumberInput (\u00c9TAPE 5). */
+  resolveCustomerByNumber?: CustomerNumberResolver;
+  showResolvedCustomerConfirmation?: boolean;
 }) {
-  const driverRuntime = useDriverRuntime();
-  const { currentUser } = useAuth();
-  const networkState = useNetworkState();
+  // Rules of Hooks: every hook below is still called unconditionally, on
+  // every render, exactly as before this step - only WHICH value ends up
+  // used (the live hook's vs. the caller's own) depends on the matching
+  // prop, never whether the hook itself runs. Same pattern already
+  // established in \u00c9TAPE 2/3/6. See NOOP_DRIVER_RUNTIME's own doc comment
+  // for why this reads DriverRuntimeContext directly instead of calling
+  // useDriverRuntime() (which throws with no provider).
+  const liveDriverRuntime = React.useContext(DriverRuntimeContext) ?? NOOP_DRIVER_RUNTIME;
+  // \u00c9TAPE 11 - discovered incompatibility (same shape as DriverRuntimeContext
+  // above): useAuth() throws "must be used within AuthProvider" with no
+  // provider ancestor - a real crash in the mobile shell, which never mounts
+  // one (it has its own token/Bearer auth, not the web's cookie-session
+  // AuthProvider). Reads AuthContext directly instead (now exported for
+  // exactly this) so a missing provider safely resolves to `null` - Rules-
+  // of-Hooks safe, no conditional/try-catch wrapper needed. Never reached on
+  // the web (AuthProvider always wraps this page - see app/layout.tsx).
+  const liveCurrentUser = React.useContext(AuthContext)?.currentUser ?? null;
+  const liveNetworkState = useNetworkState();
+  const { identity: liveIdentity } = useCompanyIdentity();
+
+  const driverRuntime = driverRuntimeProp ?? liveDriverRuntime;
+  const networkState = networkStateProp ?? liveNetworkState;
+  // `currentUser`/`identity` can legitimately BE `null` (no session yet / no
+  // organisation identity yet) - a genuinely PROVIDED value, never the same
+  // thing as "the prop was omitted". Only `undefined` (the prop truly absent)
+  // falls back to the live hook - see ReceiptPrint's own `identity` prop for
+  // the same reasoning.
+  const currentUser = currentUserProp !== undefined ? currentUserProp : liveCurrentUser;
+  const identity = identityProp !== undefined ? identityProp : liveIdentity;
+
   const [context, setContext] = React.useState(initialContext);
   // Phase 2: which side the current `context` actually came from - "server"
   // right after the initial load (always true - see app/driver/pos/page.tsx,
@@ -183,6 +495,15 @@ export function DriverPosView({
   // OFFLINE"). Cleared every time `lastSale` is replaced by anything else
   // (a real server sale, or a live unconfirmed cart preview).
   const [offlineTicketReference, setOfflineTicketReference] = React.useState<string | null>(null);
+  // ÉTAPE 9 - "3. BUG-03 OFF-* -> FACTURE OFFICIELLE": the offline_sales.
+  // localId of the sale `lastSale`/`offlineTicketReference` currently
+  // represent, or null when they don't represent any local offline sale (an
+  // online sale, or a still-unconfirmed cart preview) - never inferred from
+  // the ticket's own displayed "OFF-..." text (not unique/stable enough to
+  // survive being reused as a lookup key - ported verbatim from the mobile
+  // shell's own previously-validated fork, see this component's own
+  // onSyncCompleted-subscribed effect below for how it's consumed).
+  const [lastOfflineSaleLocalId, setLastOfflineSaleLocalId] = React.useState<string | null>(null);
   // Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": always read from SQLite,
   // never derived from in-memory state, so it stays correct across a remount
   // (see this task's "TEST C"). Holds every offline sale NOT YET fully
@@ -204,7 +525,6 @@ export function DriverPosView({
   // duration of a batch; syncPendingDriverSales itself also refuses a
   // second concurrent batch even if this state were somehow bypassed.
   const [syncingSales, setSyncingSales] = React.useState(false);
-  const { identity } = useCompanyIdentity();
   const [sharingInvoice, setSharingInvoice] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   // "Factures du jour" - server-persisted DRAFT truck sales awaiting collection.
@@ -309,7 +629,7 @@ export function DriverPosView({
 
     setSyncingSales(true);
     try {
-      const result = await syncPendingDriverSales({ organizationId, driverId: context.driver.id });
+      const result = await syncPendingSales({ organizationId, driverId: context.driver.id });
       await refreshOfflinePendingSales();
 
       if (loadingToastId !== undefined) toast.dismiss(loadingToastId);
@@ -365,6 +685,73 @@ export function DriverPosView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [networkState]);
 
+  // ÉTAPE 9 - "3./4. BUG-03 OFF-* -> FACTURE OFFICIELLE" / "ÉVÉNEMENT DE
+  // SYNCHRONISATION": ported verbatim from the mobile shell's own previously-
+  // validated PosScreen.tsx fork (before ÉTAPE 8's branchement), generalized
+  // behind `onSyncCompleted` so this file never imports Capacitor/mobile-
+  // driver itself - it only ever sees a plain subscribe function (see that
+  // prop's own doc comment). No-op with no subscriber (every existing web
+  // call site - the web has no such event bus, so this never fires there).
+  //
+  // Reacts to SOME sync batch having just completed (never re-runs the sync
+  // itself, never resyncs) by re-reading ONLY the one offline sale
+  // `lastOfflineSaleLocalId` currently names - never the OFF-... text/
+  // amount/date, which aren't stable/unique enough to use as a lookup key.
+  // If that exact sale is now SYNCED, the ticket upgrades from SQLite data
+  // already written by the sync engine (serverSaleId + officialDisplayNumber -
+  // markOfflineSaleSynced) - zero extra network call. Both state updates are
+  // self-guarded against a race with a newer sale: the functional updaters
+  // only apply if `lastSale`/`offlineTicketReference`/`lastOfflineSaleLocalId`
+  // still represent THIS exact sale at the moment the update actually lands.
+  React.useEffect(() => {
+    if (!onSyncCompleted) return undefined;
+    return onSyncCompleted(() => {
+      // ÉTAPE 14 - "1./2. COMPTEUR DE VENTES EN ATTENTE": unconditional on
+      // every completed batch, regardless of whether this render even has a
+      // currently-watched sale below - a batch triggered from OUTSIDE this
+      // component (App.tsx's own reconnect effect calling
+      // syncPendingDriverSalesForShell directly, never through this file's
+      // own handleSyncPendingSales) never otherwise reaches this component,
+      // so the badge/dialog would otherwise stay stale until an unrelated
+      // remount. Reuses the SAME getOfflineSales-backed reader this file's
+      // own handleSyncPendingSales already calls after its own sync - never
+      // a second offline-sales read implementation, never a second sync.
+      void refreshOfflinePendingSales();
+
+      const watchedLocalId = lastOfflineSaleLocalId;
+      const organizationId = currentUser?.organizationId ?? null;
+      if (!watchedLocalId || !organizationId) return;
+      void (async () => {
+        const sales = await getOfflineSales({ organizationId, driverId: context.driver.id });
+        const match = sales.find((sale) => sale.localId === watchedLocalId);
+        if (!match || match.syncStatus !== "SYNCED" || !match.serverSaleId || !match.officialDisplayNumber) {
+          return;
+        }
+        const { serverSaleId, officialDisplayNumber, localReference } = match;
+
+        setLastSale((current) =>
+          current && current.id === "preview" && current.displayNumber === localReference
+            ? {
+                ...current,
+                id: serverSaleId,
+                invoiceNumber: officialDisplayNumber,
+                displayNumber: officialDisplayNumber,
+                status: "COMPLETED",
+              }
+            : current,
+        );
+        setOfflineTicketReference((current) => (current === localReference ? null : current));
+        setLastOfflineSaleLocalId((current) => (current === watchedLocalId ? null : current));
+      })();
+    });
+  }, [
+    onSyncCompleted,
+    lastOfflineSaleLocalId,
+    currentUser?.organizationId,
+    context.driver.id,
+    refreshOfflinePendingSales,
+  ]);
+
   // TEMPORARY dev diagnostic (Phase 3 bug hunt) - read once on mount, not
   // re-read on every render; the schema version doesn't change while the
   // app is running.
@@ -390,6 +777,7 @@ export function DriverPosView({
       truncated: context.productsTruncated,
       locationId: context.stockLocationId,
       normalize,
+      searchRemote: searchProductsRemote,
     },
   );
 
@@ -629,7 +1017,7 @@ export function DriverPosView({
   // selected" guarantee the online-only version already had.
   async function refreshContext() {
     if (!currentUser?.organizationId) return;
-    const result = await loadDriverPosContext({
+    const result = await refreshDriverContext({
       organizationId: currentUser.organizationId,
       organizationName: identity?.tradeName ?? identity?.name ?? null,
       userId: currentUser.id,
@@ -650,7 +1038,7 @@ export function DriverPosView({
     }
 
     if (result.source === "cache") {
-      setCacheDiagnostic(result.cacheCounts);
+      setCacheDiagnostic(result.cacheCounts ?? null);
       if (result.context.products.length === 0 && context.products.length > 0) {
         // "7. NE JAMAIS EFFACER UN CONTEXTE VALIDE", exact scenario: the
         // cache technically answered but with 0 products while the POS
@@ -690,8 +1078,11 @@ export function DriverPosView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [networkState, contextSource]);
 
-  function buildSaleBody(extra: Record<string, unknown>) {
-    return JSON.stringify({
+  // ÉTAPE 7 - "8. CRÉATION DE VENTE": a plain object now (was JSON.stringify)
+  // so it matches DriverPosCreateSaleInput directly - defaultCreateSale does
+  // its own JSON.stringify, exactly where the old inline fetch did.
+  function buildSaleInput(collectNow?: boolean): DriverPosCreateSaleInput {
+    return {
       customerId: selectedCustomer?.id ?? null,
       paymentMethod,
       paidAmount: paidAmount ? Number(paidAmount) : undefined,
@@ -700,8 +1091,8 @@ export function DriverPosView({
         : {}),
       lines: cart,
       idempotencyKey: idempotencyKeyRef.current,
-      ...extra,
-    });
+      ...(collectNow !== undefined ? { collectNow } : {}),
+    };
   }
 
   function resetForNextSale() {
@@ -714,28 +1105,21 @@ export function DriverPosView({
   }
 
   async function refreshPending() {
-    try {
-      const response = await fetch("/api/driver/sales/pending", { cache: "no-store" });
-      if (!response.ok) return;
-      const payload = (await response.json()) as { sales?: SaleDto[] };
-      setPendingSales(payload.sales ?? []);
-    } catch {
-      // non-fatal
-    }
+    setPendingSales(await fetchPendingSales());
   }
 
   React.useEffect(() => {
     let active = true;
-    fetch("/api/driver/sales/pending", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : { sales: [] }))
-      .then((payload: { sales?: SaleDto[] }) => {
-        if (active) setPendingSales(payload.sales ?? []);
-      })
-      .catch(() => {});
+    fetchPendingSales().then((sales) => {
+      if (active) setPendingSales(sales);
+    });
     return () => {
       active = false;
     };
-  }, []);
+    // fetchPendingSales defaults to a stable module-scope constant when not
+    // injected (same contract as this file's other injected callbacks - see
+    // searchRemote in use-pos-product-search.ts), so this still runs once.
+  }, [fetchPendingSales]);
 
   // Phase 2: "9. VALIDATION / ENCAISSEMENT OFFLINE" - no silent server
   // attempt, no local sale, no touched cart. Checked at the moment of the
@@ -885,6 +1269,12 @@ export function DriverPosView({
       });
       setLastSalePhone(null);
       setOfflineTicketReference(localReference);
+      // ÉTAPE 9 - "3. BUG-03": remembers exactly which offline sale this
+      // ticket represents, so the onSyncCompleted-subscribed effect above
+      // can upgrade THIS one (and no other) once it syncs - see that
+      // effect's own doc comment and lastOfflineSaleLocalId's own state
+      // comment.
+      setLastOfflineSaleLocalId(result.localId);
       resetForNextSale();
       if (handledCustomerId) {
         driverRuntime.markCustomerHandled(handledCustomerId);
@@ -914,25 +1304,20 @@ export function DriverPosView({
     const handledCustomerId = selectedCustomer?.id ?? null;
     setBusy(true);
     try {
-      const response = await fetch("/api/driver/sales", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: buildSaleBody({}),
-      });
-      const payload = (await response.json()) as { sale?: SaleDto; message?: string };
-      if (!response.ok || !payload.sale) {
-        toast.error(payload.message ?? "Impossible de valider la vente.");
+      const result = await createSale(buildSaleInput());
+      if (!result.ok) {
+        toast.error(result.message ?? "Impossible de valider la vente.");
         return;
       }
 
-      setLastSale(payload.sale);
-      setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
+      setLastSale(result.sale);
+      setLastSalePhone(resolveCustomerPhone(result.sale.customer?.id));
       setOfflineTicketReference(null);
       resetForNextSale();
       if (handledCustomerId) {
         driverRuntime.markCustomerHandled(handledCustomerId);
       }
-      toast.success(`Vente ${payload.sale.invoiceNumber} validee.`);
+      toast.success(`Vente ${result.sale.invoiceNumber} validee.`);
       await Promise.allSettled([
         refreshContext(),
         driverRuntime.refreshCurrentTour(),
@@ -946,18 +1331,13 @@ export function DriverPosView({
     if (blockIfOffline()) return;
     setPreparing(true);
     try {
-      const response = await fetch("/api/driver/sales", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: buildSaleBody({ collectNow: false }),
-      });
-      const payload = (await response.json()) as { sale?: SaleDto; message?: string };
-      if (!response.ok || !payload.sale) {
-        toast.error(payload.message ?? "Impossible de preparer la facture.");
+      const result = await createSale(buildSaleInput(false));
+      if (!result.ok) {
+        toast.error(result.message ?? "Impossible de preparer la facture.");
         return;
       }
-      setLastSale(payload.sale);
-      setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
+      setLastSale(result.sale);
+      setLastSalePhone(resolveCustomerPhone(result.sale.customer?.id));
       setOfflineTicketReference(null);
       resetForNextSale();
       toast.success("Facture preparee. Encaissez-la depuis « Factures du jour ».");
@@ -976,27 +1356,20 @@ export function DriverPosView({
     if (blockIfOffline()) return;
     setCollecting(true);
     try {
-      const response = await fetch(`/api/driver/sales/${collectTarget.id}/collect`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          paymentMethod: method,
-          paidAmount: collectPaidAmount,
-          reference: null,
-          ...(method === "BANK_TRANSFER"
-            ? { bankAccountingAccountId: bankAccountingAccountId ?? null }
-            : {}),
-        }),
+      const result = await collectSale({
+        saleId: collectTarget.id,
+        paymentMethod: method,
+        paidAmount: collectPaidAmount,
+        bankAccountingAccountId,
       });
-      const payload = (await response.json()) as { sale?: SaleDto; message?: string };
-      if (!response.ok || !payload.sale) {
-        toast.error(payload.message ?? "Impossible d'encaisser la facture.");
+      if (!result.ok) {
+        toast.error(result.message ?? "Impossible d'encaisser la facture.");
         return;
       }
-      setLastSale(payload.sale);
-      setLastSalePhone(resolveCustomerPhone(payload.sale.customer?.id));
+      setLastSale(result.sale);
+      setLastSalePhone(resolveCustomerPhone(result.sale.customer?.id));
       setOfflineTicketReference(null);
-      toast.success(`Facture ${payload.sale.invoiceNumber} encaissee.`);
+      toast.success(`Facture ${result.sale.invoiceNumber} encaissee.`);
       setCollectOpen(false);
       setCollectTarget(null);
       await Promise.allSettled([refreshPending(), driverRuntime.refreshCurrentTour()]);
@@ -1255,6 +1628,8 @@ export function DriverPosView({
                     onChange={setSelectedCustomer}
                     initialSuggestions={context.customers}
                     placeholder="Client comptoir"
+                    searchCustomers={searchCustomers}
+                    showAccountNumberInTrigger={showCustomerAccountNumberInTrigger}
                   />
                 </div>
 
@@ -1263,6 +1638,8 @@ export function DriverPosView({
                   onResolved={setSelectedCustomer}
                   placeholder="N° Client"
                   hideLabelOnMobile="lg"
+                  resolveCustomer={resolveCustomerByNumber}
+                  showResolvedConfirmation={showResolvedCustomerConfirmation}
                 />
 
                 <div className="space-y-2">
@@ -1391,7 +1768,7 @@ export function DriverPosView({
           if (collectTarget) printPending(collectTarget);
         }}
       />
-      <ReceiptPrint sale={lastSale} offlineReference={offlineTicketReference} />
+      <ReceiptPrint sale={lastSale} offlineReference={offlineTicketReference} identity={identity} />
       <OfflineSalesDialog
         open={offlineSalesDialogOpen}
         onOpenChange={setOfflineSalesDialogOpen}
@@ -1481,7 +1858,7 @@ function DriverInvoiceHeader({
           <ArrowLeft aria-hidden="true" className="h-4 w-4" />
           Point de vente
         </Link>
-        <NetworkStatusBadge />
+        <NetworkStatusBadge networkState={networkState} />
         {pendingOfflineCount > 0 ? (
           // "CORRECTION UX OFFLINE - 1. COMPTEUR CLIQUABLE": a real
           // <button>, styled exactly like the badge (base-ui's `render`

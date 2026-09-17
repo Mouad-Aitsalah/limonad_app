@@ -10,7 +10,7 @@ type LoginResult =
   | { success: true; user: CurrentUser }
   | { success: false; error: string };
 
-type AuthContextValue = {
+export type AuthContextValue = {
   currentUser: CurrentUser | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
@@ -18,7 +18,14 @@ type AuthContextValue = {
   refreshSession: () => Promise<void>;
 };
 
-const AuthContext = React.createContext<AuthContextValue | null>(null);
+// Exported (additive - every other export/behavior here is unchanged) so a
+// caller that must call a hook unconditionally per Rules of Hooks but cannot
+// guarantee an <AuthProvider> ancestor - see components/driver-pos/driver-
+// pos-view.tsx's own ÉTAPE 11 doc comment - can read it via the raw
+// React.useContext (which safely returns null with no provider) instead of
+// useAuth() below, which deliberately throws for every other caller. Same
+// pattern already used for DriverRuntimeContext (ÉTAPE 8).
+export const AuthContext = React.createContext<AuthContextValue | null>(null);
 
 async function fetchSessionUser(): Promise<CurrentUser | null> {
   const response = await fetch("/api/auth/session", {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCompanyIdentity } from "@/hooks/use-company-identity";
+import { useCompanyIdentity, type CompanyIdentity } from "@/hooks/use-company-identity";
 import { formatCustomerCode } from "@/lib/customer-code";
 import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
 import { formatCurrency } from "@/lib/utils";
@@ -16,6 +16,21 @@ type ReceiptPrintProps = {
    * invoice, regardless of what `sale.displayNumber` happens to hold.
    */
   offlineReference?: string | null;
+  /**
+   * PHASE 1 "RESTAURATION DU POS CHAUFFEUR" - ÉTAPE 3: optional override for
+   * a caller that already has the organisation identity from elsewhere and
+   * doesn't have (or want) the cookie-authenticated `/api/organization/
+   * identity` fetch `useCompanyIdentity()` itself performs - the Android
+   * shell, whose own `useOrganizationIdentity(token)` already fetches the
+   * SAME data (same endpoint, same `{name, tradeName, logoUrl}` shape - see
+   * mobile/driver/src/lib/organization-identity.ts's `OrganizationIdentity`
+   * type) over Bearer instead of a cookie. Only `logoUrl` is actually read
+   * below. When omitted (both existing web call sites -
+   * driver-pos-view.tsx, pos-layout.tsx), behavior is byte-for-byte
+   * unchanged: this component still renders the shared useCompanyIdentity()
+   * hook's live value, exactly as before this prop existed.
+   */
+  identity?: CompanyIdentity | null;
 };
 
 // Nom affiché sous le logo sur le ticket / la facture imprimée du POS.
@@ -53,8 +68,28 @@ function formatReceiptAmount(value: number) {
   return formatCurrency(value).replace(/\s?DH$/, "");
 }
 
-export function ReceiptPrint({ sale, paperWidth = "80", offlineReference = null }: ReceiptPrintProps) {
-  const { identity } = useCompanyIdentity();
+export function ReceiptPrint({
+  sale,
+  paperWidth = "80",
+  offlineReference = null,
+  identity: identityProp,
+}: ReceiptPrintProps) {
+  // Rules of Hooks: called unconditionally on every render, exactly as
+  // before - only WHICH value gets used below depends on `identityProp`,
+  // never whether the hook itself runs. A caller that always passes
+  // `identity` (the shell) still pays for this hook's own fetch attempt
+  // running in the background; its result is simply never read then - see
+  // "7. REQUÊTE INUTILE" in this task's own report for why that fetch
+  // can't cleanly be skipped at this step without touching useCompanyIdentity
+  // itself (out of scope here).
+  const { identity: liveIdentity } = useCompanyIdentity();
+  // `identityProp` can legitimately BE `null` (the shell's own
+  // useOrganizationIdentity starts at null while its fetch is in flight,
+  // exactly like this hook's own initial state) - that is a genuinely
+  // PROVIDED value, never the same thing as "the prop was omitted". Only
+  // `undefined` (the prop truly absent from JSX) falls back to the hook -
+  // `??` would incorrectly treat an explicit `null` the same as omitted.
+  const identity = identityProp !== undefined ? identityProp : liveIdentity;
 
   if (!sale) return null;
 
