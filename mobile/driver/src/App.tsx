@@ -16,6 +16,7 @@ import { DriverClientsScreen } from "./screens/DriverClientsScreen";
 import { DriverLauncherScreen } from "./screens/DriverLauncherScreen";
 import { DriverSalesScreen } from "./screens/DriverSalesScreen";
 import { DriverStockScreen } from "./screens/DriverStockScreen";
+import { DriverTruckScreen } from "./screens/DriverTruckScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { MigrationPendingScreen } from "./screens/MigrationPendingScreen";
 import { OfflineSalesScreen } from "./screens/OfflineSalesScreen";
@@ -261,25 +262,19 @@ export function App() {
               />
             );
           }
-          // ÉTAPE 26 - "5. LES 6 APPLICATIONS" / "Mon camion": same
-          // MigrationPendingScreen placeholder as TOURNEE - business logic
-          // deliberately not implemented yet. Label passed explicitly
-          // ("Mon camion", matching the tile the driver just tapped) rather
-          // than navItemForHref("/driver").label ("Accueil", driverNavItems'
-          // own label for that href, meant for a different context) - only
-          // the icon (Home) is reused from there, so it stays the shared
-          // repo-root LucideIcon type MigrationPendingScreen's own `icon`
-          // prop expects (see that component's own doc comment).
-          case "CAMION": {
-            const item = navItemForHref("/driver");
+          // ÉTAPE 27 - "Mon camion": the historical /driver page (DriverHomeView
+          // + DriverTruckCard), online via GET /api/driver/truck, offline via
+          // the cached_truck table.
+          case "CAMION":
             return (
-              <MigrationPendingScreen
-                label="Mon camion"
-                icon={item.icon}
+              <DriverTruckScreen
+                token={token}
+                offlineContext={offlineContext}
+                deviceOnline={online}
                 onBack={() => setScreen("HOME")}
+                onNavigate={setScreen}
               />
             );
-          }
           default:
             return (
               <DriverLauncherScreen

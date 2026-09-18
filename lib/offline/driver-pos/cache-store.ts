@@ -1,7 +1,9 @@
 "use client";
 
 import { nowIso, withDatabase, withTransaction } from "./database";
-import type { CachedCustomer, CachedProduct, CachedTruckStock } from "./types";
+import type { TruckDto } from "@/types/operations-dto";
+
+import type { CachedCustomer, CachedProduct, CachedTruck, CachedTruckStock } from "./types";
 
 type Scope = { organizationId: string; driverId: string };
 
@@ -143,6 +145,75 @@ export async function getCachedTruckStock(scope: Scope): Promise<CachedTruckStoc
   return rows.map(mapStockRow);
 }
 
+/**
+ * ÉTAPE 27 - "MON CAMION": upserts this driver's truck snapshot, or removes
+ * it when the server reports no truck (`null`) so an unassigned driver never
+ * keeps seeing a stale truck offline. Touches only cached_truck.
+ */
+export async function saveCachedTruck(scope: Scope, truck: TruckDto | null): Promise<boolean> {
+  const result = await withDatabase(async (db) => {
+    if (!truck) {
+      await db.run(
+        `DELETE FROM cached_truck WHERE organizationId = ? AND driverId = ?`,
+        [scope.organizationId, scope.driverId],
+        false,
+      );
+      return true;
+    }
+    await db.run(
+      `INSERT INTO cached_truck (
+         organizationId, driverId, truckId, code, registration, brand, model,
+         capacity, status, active, depotId, depotCode, depotName,
+         createdAt, updatedAt, syncedAt
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(organizationId, driverId) DO UPDATE SET
+         truckId = excluded.truckId,
+         code = excluded.code,
+         registration = excluded.registration,
+         brand = excluded.brand,
+         model = excluded.model,
+         capacity = excluded.capacity,
+         status = excluded.status,
+         active = excluded.active,
+         depotId = excluded.depotId,
+         depotCode = excluded.depotCode,
+         depotName = excluded.depotName,
+         createdAt = excluded.createdAt,
+         updatedAt = excluded.updatedAt,
+         syncedAt = excluded.syncedAt`,
+      [
+        scope.organizationId,
+        scope.driverId,
+        truck.id,
+        truck.code,
+        truck.registration,
+        truck.brand ?? null,
+        truck.model ?? null,
+        truck.capacity ?? null,
+        truck.status,
+        truck.active ? 1 : 0,
+        truck.depot.id,
+        truck.depot.code,
+        truck.depot.name,
+        truck.createdAt,
+        truck.updatedAt,
+        nowIso(),
+      ],
+      false,
+    );
+    return true;
+  });
+  return result ?? false;
+}
+
+export async function getCachedTruck(scope: Scope): Promise<CachedTruck | null> {
+  const rows = await queryRows(
+    `SELECT * FROM cached_truck WHERE organizationId = ? AND driverId = ?`,
+    [scope.organizationId, scope.driverId],
+  );
+  return rows.length > 0 ? mapTruckRow(rows[0]) : null;
+}
+
 // --- internal helpers -------------------------------------------------
 
 async function queryRows(
@@ -186,6 +257,31 @@ function mapCustomerRow(row: Record<string, unknown>): CachedCustomer {
     phone: (row.phone as string | null) ?? null,
     status: String(row.status),
     syncedAt: String(row.syncedAt),
+  };
+}
+
+function mapTruckRow(row: Record<string, unknown>): CachedTruck {
+  return {
+    organizationId: String(row.organizationId),
+    driverId: String(row.driverId),
+    syncedAt: String(row.syncedAt),
+    truck: {
+      id: String(row.truckId),
+      code: String(row.code),
+      registration: String(row.registration),
+      brand: (row.brand as string | null) ?? null,
+      model: (row.model as string | null) ?? null,
+      capacity: row.capacity === null || row.capacity === undefined ? null : Number(row.capacity),
+      status: String(row.status),
+      active: Number(row.active) !== 0,
+      depot: {
+        id: String(row.depotId),
+        code: String(row.depotCode),
+        name: String(row.depotName),
+      },
+      createdAt: String(row.createdAt),
+      updatedAt: String(row.updatedAt),
+    },
   };
 }
 

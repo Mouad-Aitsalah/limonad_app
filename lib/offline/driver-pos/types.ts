@@ -8,6 +8,8 @@
  * hold a real offline sale + its outbox entry.
  */
 
+import type { TruckDto } from "@/types/operations-dto";
+
 /** V1 offline sales are CASH-only, per the validated audit. */
 export type OfflinePaymentMethod = "CASH";
 
@@ -99,6 +101,14 @@ export type CachedTruckStock = {
   reservedQuantity: number;
   availableQuantity: number;
   lastSyncedAt: string;
+};
+
+/** ÉTAPE 27 - the truck snapshot behind "Mon camion" (see schema.ts v4). */
+export type CachedTruck = {
+  organizationId: string;
+  driverId: string;
+  truck: TruckDto;
+  syncedAt: string;
 };
 
 export type OfflineSaleLineInput = {

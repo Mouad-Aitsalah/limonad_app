@@ -1,6 +1,7 @@
 import { hydrateDriverOfflineCache } from "@/lib/offline/driver-pos";
 import type { DriverPosContextDto } from "@/types/operations-dto";
 
+import { refreshDriverTruckCache } from "./driver-truck-data-source";
 import { mobileFetch } from "./mobile-fetch";
 
 type OrganizationIdentity = { name: string; tradeName: string | null; logoUrl: string | null };
@@ -51,5 +52,13 @@ export async function refreshOfflineContextFromServer(params: {
     userName: params.userName,
     context: params.driverPosContext,
     skipCustomersCache: true,
+  });
+
+  // ÉTAPE 27 - keep cached_truck ("Mon camion") warm on every online boot/
+  // login too. Best-effort: refreshDriverTruckCache never throws and a miss
+  // simply leaves the previous cached row in place.
+  await refreshDriverTruckCache(params.token, {
+    organizationId: params.organizationId,
+    driverId: params.driverPosContext.driver.id,
   });
 }

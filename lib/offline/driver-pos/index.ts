@@ -18,9 +18,11 @@ export {
 export {
   getCachedCustomers,
   getCachedProducts,
+  getCachedTruck,
   getCachedTruckStock,
   saveCachedCustomers,
   saveCachedProducts,
+  saveCachedTruck,
   saveCachedTruckStock,
 } from "./cache-store";
 
@@ -67,6 +69,7 @@ export type {
 export type {
   CachedCustomer,
   CachedProduct,
+  CachedTruck,
   CachedTruckStock,
   DriverOfflineContext,
   OfflinePaymentMethod,

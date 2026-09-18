@@ -18,8 +18,6 @@ export type Screen =
   | "VENTES"
   | "CLIENTS"
   | "TOURNEE"
-  // ÉTAPE 26 - "5. LES 6 APPLICATIONS": "Mon camion" (href "/driver" in
-  // driverNavItems/MobileLauncher's own appearance override) - same
-  // MigrationPendingScreen placeholder pattern as TOURNEE above, business
-  // logic deliberately not implemented yet (its own later étape).
+  // ÉTAPE 26/27 - "Mon camion" (href "/driver" in driverNavItems/
+  // MobileLauncher's own appearance override) - DriverTruckScreen.
   | "CAMION";

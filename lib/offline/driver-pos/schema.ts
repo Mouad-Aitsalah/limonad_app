@@ -191,6 +191,37 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `ALTER TABLE offline_sale_lines ADD COLUMN priceToken TEXT`,
     ],
   },
+  {
+    // ÉTAPE 27 - "MON CAMION": one row per (organizationId, driverId) holding
+    // the fields DriverTruckCard/TruckDto actually need to render offline.
+    // A brand-new table (CREATE IF NOT EXISTS) - never touches any existing
+    // cache/sales/outbox row. Written only by the shell's truck refresh
+    // (see mobile/driver's driver-truck-data-source.ts), never by
+    // hydrateDriverOfflineCache (DriverPosContextDto.truck has no brand/
+    // model/capacity/depot).
+    version: 4,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS cached_truck (
+        organizationId TEXT NOT NULL,
+        driverId TEXT NOT NULL,
+        truckId TEXT NOT NULL,
+        code TEXT NOT NULL,
+        registration TEXT NOT NULL,
+        brand TEXT,
+        model TEXT,
+        capacity REAL,
+        status TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        depotId TEXT NOT NULL,
+        depotCode TEXT NOT NULL,
+        depotName TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        syncedAt TEXT NOT NULL,
+        PRIMARY KEY (organizationId, driverId)
+      )`,
+    ],
+  },
 ];
 
 /** Highest version defined above - passed to the plugin's own
@@ -210,4 +241,5 @@ export const EXPECTED_TABLES = [
   "offline_sale_lines",
   "sync_outbox",
   "offline_metadata",
+  "cached_truck",
 ];
