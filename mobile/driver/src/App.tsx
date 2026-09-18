@@ -14,6 +14,7 @@ import { refreshOfflineContextFromServer } from "./lib/refresh-offline-context";
 import type { Screen } from "./navigation";
 import { DriverClientsScreen } from "./screens/DriverClientsScreen";
 import { DriverHomeScreen } from "./screens/DriverHomeScreen";
+import { DriverStockScreen } from "./screens/DriverStockScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { MigrationPendingScreen } from "./screens/MigrationPendingScreen";
 import { OfflineSalesScreen } from "./screens/OfflineSalesScreen";
@@ -232,14 +233,17 @@ export function App() {
               />
             );
           case "STOCK":
+            return (
+              <DriverStockScreen
+                token={token}
+                offlineContext={offlineContext}
+                deviceOnline={online}
+                onBack={() => setScreen("HOME")}
+              />
+            );
           case "VENTES":
           case "TOURNEE": {
-            const href =
-              screen === "STOCK"
-                ? "/driver/stock"
-                : screen === "VENTES"
-                  ? "/driver/ventes"
-                  : "/driver/tournee";
+            const href = screen === "VENTES" ? "/driver/ventes" : "/driver/tournee";
             const item = navItemForHref(href);
             return (
               <MigrationPendingScreen

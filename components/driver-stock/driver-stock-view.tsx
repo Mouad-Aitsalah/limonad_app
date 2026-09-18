@@ -12,7 +12,17 @@ import {
 import type { DriverTruckStockDto } from "@/lib/server/driver-stock";
 import { formatCurrency } from "@/lib/utils";
 
-export function DriverStockView({ stock }: { stock: DriverTruckStockDto }) {
+/**
+ * ÉTAPE 23 - narrowed to only the members this component actually reads
+ * (never `sessionUser`/`driver` - see the JSX below) so the Android shell can
+ * supply a stock snapshot reconstructed from its own offline cache without
+ * fabricating a fake CurrentUser. The web page (app/driver/stock/page.tsx)
+ * still passes the full DriverTruckStockDto unchanged - a structural subtype,
+ * so nothing there needed to change.
+ */
+export type DriverStockViewStock = Pick<DriverTruckStockDto, "truck" | "location" | "levels">;
+
+export function DriverStockView({ stock }: { stock: DriverStockViewStock }) {
   const rows = stock.levels.filter((level) => level.quantity > 0);
   const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
   const totalValue = rows.reduce((sum, row) => sum + row.stockValue, 0);
