@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -16,11 +16,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useAuth } from "@/hooks/use-auth";
+import { AuthContext } from "@/hooks/use-auth";
 import { DESKTOP_MEDIA_QUERY } from "@/lib/auth/browser-home-route";
 import { getDefaultRouteForRole } from "@/lib/auth/default-route";
 import { roleLabels } from "@/lib/roles";
 import { cn } from "@/lib/utils";
+import type { UserRole } from "@/types/auth";
 
 type TileAppearance = { label?: string; icon?: LucideIcon; order?: number };
 
@@ -77,21 +78,21 @@ const tileColors = [
 
 type LauncherLink = ReturnType<typeof getNavigationLinks>[number];
 
-function TileGrid({ items }: { items: LauncherLink[] }) {
+/** ÉTAPE 26 - "2. ADAPTER LA NAVIGATION": omitted (every existing web call
+ *  site) -> today's exact <Link href> behavior. When supplied (the shell,
+ *  which has no Next router), every tile becomes a plain button that calls
+ *  `onNavigate` with the SAME href string the Link would have navigated to -
+ *  the shell maps that href to its own Screen union, byte-for-byte the same
+ *  pattern already established for DriverHomeView's own `onNavigate` prop
+ *  (see components/driver/driver-home-view.tsx). */
+function TileGrid({ items, onNavigate }: { items: LauncherLink[]; onNavigate?: (href: string) => void }) {
   return (
     <div className="grid grid-cols-3 gap-x-3 gap-y-5 sm:gap-x-6 sm:gap-y-7">
       {items.map((item, index) => {
         const design = appearance[item.href];
         const Icon = design?.icon ?? item.icon;
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            prefetch={false}
-            title={item.label}
-            aria-label={item.label}
-            className="group flex min-w-0 touch-manipulation flex-col items-center gap-2 rounded-2xl px-1 py-1 text-center focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
-          >
+        const tile = (
+          <>
             <span className={cn(
               "flex size-[4.25rem] items-center justify-center rounded-[22px] bg-linear-to-br text-white shadow-[0_6px_14px_rgba(16,32,56,0.13)] ring-1 ring-black/5 transition-transform group-hover:-translate-y-0.5 group-active:scale-95 motion-reduce:transition-none sm:size-20 sm:rounded-3xl",
               tileColors[(design?.order ?? index) % tileColors.length],
@@ -101,6 +102,31 @@ function TileGrid({ items }: { items: LauncherLink[] }) {
             <span className="w-full break-words text-xs font-medium leading-4 text-foreground sm:text-sm sm:leading-5">
               {design?.label ?? item.label}
             </span>
+          </>
+        );
+        const tileClassName =
+          "group flex min-w-0 touch-manipulation flex-col items-center gap-2 rounded-2xl px-1 py-1 text-center focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary";
+        return onNavigate ? (
+          <button
+            key={item.href}
+            type="button"
+            title={item.label}
+            aria-label={item.label}
+            onClick={() => onNavigate(item.href)}
+            className={tileClassName}
+          >
+            {tile}
+          </button>
+        ) : (
+          <Link
+            key={item.href}
+            href={item.href}
+            prefetch={false}
+            title={item.label}
+            aria-label={item.label}
+            className={tileClassName}
+          >
+            {tile}
           </Link>
         );
       })}
@@ -108,9 +134,45 @@ function TileGrid({ items }: { items: LauncherLink[] }) {
   );
 }
 
-export function MobileLauncher() {
-  const { currentUser, logout } = useAuth();
+export type MobileLauncherCurrentUser = { role: UserRole };
+
+export function MobileLauncher({
+  currentUser: currentUserProp,
+  onLogout,
+  onNavigate,
+}: {
+  /** ÉTAPE 26 - "1. AUTH/UTILISATEUR": omitted (every existing web call
+   *  site) -> the live useAuth()-equivalent session, byte-for-byte as before
+   *  this prop existed. The shell (always role "driver", no <AuthProvider>
+   *  ancestor) injects its own already-known role instead of relying on
+   *  useAuth()'s cookie-session fetch - same reasoning as DriverSalesView's
+   *  own `currentUser` prop. */
+  currentUser?: MobileLauncherCurrentUser | null;
+  /** ÉTAPE 26 - "2. DÉCONNEXION": omitted (every existing web call site) ->
+   *  today's exact logout()-then-router.replace("/login") behavior. When
+   *  supplied, this COMPLETELY REPLACES that (the shell owns both revoking
+   *  its own Bearer session AND the post-logout screen switch - see
+   *  DriverLauncherScreen.tsx/App.tsx's own handleLogout) - `router.replace`
+   *  is never reached in that case. */
+  onLogout?: () => void | Promise<void>;
+  /** ÉTAPE 26 - "2. ADAPTER LA NAVIGATION": forwarded as-is to every
+   *  TileGrid - see that component's own doc comment. */
+  onNavigate?: (href: string) => void;
+} = {}) {
+  // Rules of Hooks: useRouter()/AuthContext are still called unconditionally
+  // on every render, exactly like useAuth()/useDriverRuntime() elsewhere in
+  // this codebase - only WHICH value ends up used depends on the props. On
+  // the shell, next/navigation resolves to a harmless shim (see that file's
+  // own doc comment) whose router.replace is never actually reached, since
+  // onLogout is always supplied there; AuthContext safely resolves to null
+  // instead of throwing when there is no <AuthProvider> ancestor (see
+  // DriverSalesView's own identical `AuthContext` doc comment).
   const router = useRouter();
+  const liveAuth = useContext(AuthContext);
+  const liveCurrentUser: MobileLauncherCurrentUser | null = liveAuth?.currentUser
+    ? { role: liveAuth.currentUser.role }
+    : null;
+  const currentUser = currentUserProp !== undefined ? currentUserProp : liveCurrentUser;
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
 
@@ -136,7 +198,11 @@ export function MobileLauncher() {
     setLoggingOut(true);
     setLogoutError("");
     try {
-      await logout();
+      if (onLogout) {
+        await onLogout();
+        return;
+      }
+      await liveAuth?.logout();
       router.replace("/login");
     } catch {
       setLogoutError("Déconnexion impossible. Veuillez réessayer.");
@@ -180,14 +246,14 @@ export function MobileLauncher() {
           <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Mes applications</h2>
           <LayoutGrid aria-hidden="true" className="size-4 text-muted-foreground/70" />
         </div>
-        <TileGrid items={featured} />
+        <TileGrid items={featured} onNavigate={onNavigate} />
         {additional.length > 0 && (
           <details className="group/tools mt-7 border-t border-border/70 pt-2">
             <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-2 rounded-lg text-sm font-semibold focus-visible:outline-2 focus-visible:outline-primary [&::-webkit-details-marker]:hidden">
               Toutes les applications
               <ChevronDown aria-hidden="true" className="size-4 transition-transform group-open/tools:rotate-180" />
             </summary>
-            <div className="pt-3"><TileGrid items={additional} /></div>
+            <div className="pt-3"><TileGrid items={additional} onNavigate={onNavigate} /></div>
           </details>
         )}
       </nav>

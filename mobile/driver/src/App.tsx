@@ -13,7 +13,7 @@ import { logoutMobile, type MobileUser } from "./lib/mobile-auth";
 import { refreshOfflineContextFromServer } from "./lib/refresh-offline-context";
 import type { Screen } from "./navigation";
 import { DriverClientsScreen } from "./screens/DriverClientsScreen";
-import { DriverHomeScreen } from "./screens/DriverHomeScreen";
+import { DriverLauncherScreen } from "./screens/DriverLauncherScreen";
 import { DriverSalesScreen } from "./screens/DriverSalesScreen";
 import { DriverStockScreen } from "./screens/DriverStockScreen";
 import { LoginScreen } from "./screens/LoginScreen";
@@ -261,15 +261,30 @@ export function App() {
               />
             );
           }
+          // ÉTAPE 26 - "5. LES 6 APPLICATIONS" / "Mon camion": same
+          // MigrationPendingScreen placeholder as TOURNEE - business logic
+          // deliberately not implemented yet. Label passed explicitly
+          // ("Mon camion", matching the tile the driver just tapped) rather
+          // than navItemForHref("/driver").label ("Accueil", driverNavItems'
+          // own label for that href, meant for a different context) - only
+          // the icon (Home) is reused from there, so it stays the shared
+          // repo-root LucideIcon type MigrationPendingScreen's own `icon`
+          // prop expects (see that component's own doc comment).
+          case "CAMION": {
+            const item = navItemForHref("/driver");
+            return (
+              <MigrationPendingScreen
+                label="Mon camion"
+                icon={item.icon}
+                onBack={() => setScreen("HOME")}
+              />
+            );
+          }
           default:
             return (
-              <DriverHomeScreen
-                bootState={bootState}
-                online={online}
-                token={token}
+              <DriverLauncherScreen
                 onNavigate={setScreen}
                 onLogout={() => void handleLogout()}
-                logoutPending={logoutPending}
               />
             );
         }
