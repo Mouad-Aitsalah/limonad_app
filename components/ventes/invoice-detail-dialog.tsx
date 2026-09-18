@@ -25,6 +25,8 @@ import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
 
+export type InvoiceDetailFetchOutcome = { ok: true; sale: SaleDto } | { ok: false; message: string };
+
 type InvoiceDetailDialogProps = {
   // The list row that triggered opening the dialog - used for the `net`
   // value (a sales-history aggregation, not part of the plain sale record)
@@ -40,7 +42,31 @@ type InvoiceDetailDialogProps = {
    * endpoint a driver session is actually allowed to call.
    */
   fetchBase?: string;
+  /**
+   * ÉTAPE 25 - "9. DÉTAIL D'UNE VENTE": optional transport override, same
+   * "omitted -> today's exact fetch(`${fetchBase}/${id}`)" pattern already
+   * established for DriverPosView/DriverClientsView/DriverStockView. The
+   * Android shell supplies a Bearer-authenticated version (reusing the
+   * already-CORS-enabled GET /api/driver/sales/[id], via the shell's
+   * existing fetchDriverSaleById) instead of this relative, cookie-only
+   * fetch, which cannot work cross-origin. Every existing web call site
+   * (this prop omitted) is byte-for-byte unchanged.
+   */
+  fetchSale?: (id: string) => Promise<InvoiceDetailFetchOutcome>;
 };
+
+async function defaultFetchSale(fetchBase: string, id: string): Promise<InvoiceDetailFetchOutcome> {
+  try {
+    const response = await fetch(`${fetchBase}/${id}`);
+    const body = (await response.json()) as { sale?: SaleDto; message?: string };
+    if (!response.ok || !body.sale) {
+      return { ok: false, message: body.message ?? "Impossible de charger le detail de la commande." };
+    }
+    return { ok: true, sale: body.sale };
+  } catch {
+    return { ok: false, message: "Impossible de charger le detail de la commande." };
+  }
+}
 
 /**
  * Phase 3: the Commandes list only ever carries the light
@@ -57,6 +83,7 @@ export function InvoiceDetailDialog({
   open,
   onOpenChange,
   fetchBase = "/api/sales",
+  fetchSale,
 }: InvoiceDetailDialogProps) {
   const [sale, setSale] = React.useState<SaleDto | null>(null);
   const [errorFor, setErrorFor] = React.useState<{ id: string; message: string } | null>(null);
@@ -64,28 +91,19 @@ export function InvoiceDetailDialog({
   React.useEffect(() => {
     if (!open || !listItem) return;
     let cancelled = false;
-    fetch(`${fetchBase}/${listItem.id}`)
-      .then(async (response) => {
-        const body = (await response.json()) as { sale?: SaleDto; message?: string };
-        if (cancelled) return;
-        if (!response.ok || !body.sale) {
-          setErrorFor({
-            id: listItem.id,
-            message: body.message ?? "Impossible de charger le detail de la commande.",
-          });
-          return;
-        }
-        setSale(body.sale);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setErrorFor({ id: listItem.id, message: "Impossible de charger le detail de la commande." });
-        }
-      });
+    const load = fetchSale ?? ((id: string) => defaultFetchSale(fetchBase, id));
+    load(listItem.id).then((outcome) => {
+      if (cancelled) return;
+      if (!outcome.ok) {
+        setErrorFor({ id: listItem.id, message: outcome.message });
+        return;
+      }
+      setSale(outcome.sale);
+    });
     return () => {
       cancelled = true;
     };
-  }, [open, listItem, fetchBase]);
+  }, [open, listItem, fetchBase, fetchSale]);
 
   // Never render a previous invoice's data under a new/closed listItem -
   // derived directly instead of resetting state from the effect above (see

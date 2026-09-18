@@ -7,10 +7,13 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { InvoiceDetailDialog } from "@/components/ventes/invoice-detail-dialog";
-import { useAuth } from "@/hooks/use-auth";
-import { useCompanyIdentity } from "@/hooks/use-company-identity";
-import { getOfflineSales, type OfflineSaleWithLines } from "@/lib/offline/driver-pos";
+import {
+  InvoiceDetailDialog,
+  type InvoiceDetailFetchOutcome,
+} from "@/components/ventes/invoice-detail-dialog";
+import { AuthContext } from "@/hooks/use-auth";
+import { useCompanyIdentity, type CompanyIdentity } from "@/hooks/use-company-identity";
+import { getOfflineSales, type OfflineSaleWithLines, type SyncStatus } from "@/lib/offline/driver-pos";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
 import type {
@@ -21,10 +24,10 @@ import type {
 } from "@/types/operations-dto";
 
 // Phase 3 - "14. MES VENTES": a today's-sales row is either a real,
-// server-persisted sale or a still-local, PENDING_SYNC offline one - never
-// the same shape, so the list merges both instead of forcing an offline
-// sale into SaleDto (which would need a fake id/invoiceNumber it must never
-// have - see this task's own "20. NUMÉROTATION").
+// server-persisted sale or a still-local offline one - never the same
+// shape, so the list merges both instead of forcing an offline sale into
+// SaleDto (which would need a fake id/invoiceNumber it must never have -
+// see this task's own "20. NUMÉROTATION").
 type DisplayRow = { kind: "server"; sale: SaleDto } | { kind: "offline"; sale: OfflineSaleWithLines };
 
 function isToday(iso: string): boolean {
@@ -46,6 +49,17 @@ const PAYMENT_LABELS: Record<string, string> = {
   BANK_TRANSFER: "Virement",
   CHECK: "Chèque",
   MIXED: "Mixte",
+};
+
+// ÉTAPE 25B - the real SyncStatus (lib/offline/driver-pos/types.ts) has
+// exactly these 5 values - reused verbatim, never renamed/extended. Labels
+// match components/... OfflineSalesScreen's own established French copy.
+const OFFLINE_STATUS_LABEL: Record<Exclude<SyncStatus, "LOCAL_DRAFT">, string> = {
+  PENDING_SYNC: "En attente",
+  SYNCING: "Synchronisation...",
+  SYNCED: "Synchronisée",
+  SYNC_ERROR: "Erreur de synchronisation",
+  REQUIRES_REVIEW: "À vérifier",
 };
 
 function formatDayLong(day: string): string {
@@ -88,10 +102,123 @@ function toListItem(sale: SaleDto): SaleHistoryListItemDto {
   };
 }
 
-export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
+// ÉTAPE 25I - "9. DÉTAIL D'UNE VENTE": a SYNCED offline sale already has a
+// real serverSaleId/officialDisplayNumber - this is only a transient
+// skeleton shown while InvoiceDetailDialog's own fetchSale(id) loads the
+// REAL SaleDto (same "net"/"articleCount" on-the-fly-computed pattern as
+// toListItem above). Never persisted, never shown beyond that brief
+// loading flash - status/origin/createdByUserName are reasonable
+// placeholders for a CASH offline sale (the only kind this app creates
+// offline - see lib/offline/driver-pos/types.ts), not invented ground
+// truth. Offline (no network), the dialog's own existing error state
+// ("Impossible de charger le detail...") is what actually surfaces to the
+// user - no separate disable/networkState plumbing needed for this.
+function toListItemFromOfflineSale(sale: OfflineSaleWithLines): SaleHistoryListItemDto {
+  const number = sale.officialDisplayNumber ?? sale.localReference;
+  return {
+    id: sale.serverSaleId ?? sale.localId,
+    invoiceNumber: number,
+    displayNumber: number,
+    posSessionId: null,
+    status: "PAID",
+    origin: "DRIVER",
+    customer: null,
+    driver: null,
+    articleCount: sale.lines.reduce((sum, line) => sum + line.quantity, 0),
+    totalTTC: sale.totalTTC,
+    net: sale.totalTTC,
+    paidAmount: sale.paidAmount,
+    creditAmount: sale.creditAmount,
+    paymentMethod: sale.paymentMethod,
+    createdByUserName: "",
+    createdAt: sale.soldAt,
+    updatedAt: sale.syncedAt ?? sale.soldAt,
+  };
+}
+
+/**
+ * ÉTAPE 25 - "1. AUTH/UTILISATEUR": this component only ever reads
+ * `organizationId`/`driverId` off the session (see the offline-sales effect
+ * below) - narrowed here the same way DriverPosCurrentUser already was for
+ * DriverPosView. The live useAuth() CurrentUser is a structural superset
+ * (both fields nullable there too), so the web path is unaffected.
+ */
+export type DriverSalesCurrentUser = {
+  organizationId: string | null;
+  driverId: string | null;
+};
+
+async function defaultFetchCustomers(): Promise<CustomerDto[]> {
+  try {
+    const response = await fetch("/api/driver/customers", { cache: "no-store" });
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { customers?: CustomerDto[] };
+    return payload.customers ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export function DriverSalesView({
+  data,
+  currentUser,
+  identity,
+  fetchCustomers,
+  fetchSaleDetail,
+  fetchOfflineSales,
+}: {
+  data: DriverTodaySalesDto;
+  /** ÉTAPE 25 - "1. AUTH/UTILISATEUR": omitted (every existing web call
+   *  site) -> the live useAuth() session, byte-for-byte as before this prop
+   *  existed. The shell injects its own already-hydrated
+   *  {organizationId, driverId} instead of relying on this hook's own
+   *  cookie-session fetch. `null` is a meaningful, real value (no session
+   *  yet) - never treated the same as omitted, same reasoning as
+   *  DriverPosView's own `currentUser` prop. */
+  currentUser?: DriverSalesCurrentUser | null;
+  /** ÉTAPE 25 - "2. COMPANY IDENTITY": same principle for
+   *  useCompanyIdentity() - see DriverPosView's own `identity` prop. */
+  identity?: CompanyIdentity | null;
+  /** ÉTAPE 25 - "3. CUSTOMER LOADER": omitted -> defaultFetchCustomers
+   *  (byte-for-byte today's relative fetch). The shell supplies a
+   *  Bearer-authenticated fetch online, or getCachedCustomers() offline -
+   *  never a second customer cache. */
+  fetchCustomers?: () => Promise<CustomerDto[]>;
+  /** ÉTAPE 25 - "4./9. DÉTAIL D'UNE VENTE": forwarded as-is to
+   *  InvoiceDetailDialog's own `fetchSale` prop - see that component's own
+   *  doc comment. Omitted -> its default relative fetchBase behavior. */
+  fetchSaleDetail?: (id: string) => Promise<InvoiceDetailFetchOutcome>;
+  /** ÉTAPE 25 - "5. OFFLINE SALES LOADER": omitted (every existing web call
+   *  site) -> the exact current behavior (getOfflineSales() filtered to
+   *  PENDING_SYNC + today, see isToday above). When provided, this
+   *  COMPLETELY REPLACES that internal fetch+filter - the caller decides
+   *  exactly which local sales to merge in (e.g. the shell, offline, passes
+   *  every status for the current business day - see ÉTAPE 25B/C/G's own
+   *  doc comments in mobile/driver/src/lib/driver-sales-data-source.ts for
+   *  why online vs offline need different filters to avoid ever double-
+   *  counting a sale already present in `data.sales`). */
+  fetchOfflineSales?: () => Promise<OfflineSaleWithLines[]>;
+}) {
   const { day, sales, stats } = data;
-  const { identity } = useCompanyIdentity();
-  const { currentUser } = useAuth();
+  const liveIdentityResult = useCompanyIdentity();
+  // Rules of Hooks: called unconditionally on every render, exactly as
+  // before this step - only WHICH value ends up used depends on the prop,
+  // never whether the hook itself runs. Same pattern already established
+  // for DriverPosView/DriverClientsView. AuthContext read directly (not
+  // useAuth()) so a missing <AuthProvider> ancestor (the shell) safely
+  // resolves to null instead of throwing - see DriverPosView's own ÉTAPE 11
+  // doc comment for the identical discovered incompatibility.
+  const liveCurrentUser = React.useContext(AuthContext)?.currentUser ?? null;
+  const resolvedCurrentUser: DriverSalesCurrentUser | null =
+    currentUser !== undefined
+      ? currentUser
+      : liveCurrentUser
+        ? { organizationId: liveCurrentUser.organizationId, driverId: liveCurrentUser.driverId ?? null }
+        : null;
+  const resolvedIdentity = identity !== undefined ? identity : liveIdentityResult.identity;
+  const organizationId = resolvedCurrentUser?.organizationId ?? null;
+  const driverId = resolvedCurrentUser?.driverId ?? null;
+
   const [selectedSale, setSelectedSale] = React.useState<SaleHistoryListItemDto | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [sharingSaleId, setSharingSaleId] = React.useState<string | null>(null);
@@ -105,28 +232,36 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
   const [customerById, setCustomerById] = React.useState<Map<string, CustomerDto>>(new Map());
   React.useEffect(() => {
     let active = true;
-    fetch("/api/driver/customers", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : { customers: [] }))
-      .then((payload: { customers?: CustomerDto[] }) => {
+    const load = fetchCustomers ?? defaultFetchCustomers;
+    load()
+      .then((customers) => {
         if (!active) return;
-        setCustomerById(new Map((payload.customers ?? []).map((customer) => [customer.id, customer])));
+        setCustomerById(new Map(customers.map((customer) => [customer.id, customer])));
       })
       .catch(() => {});
     return () => {
       active = false;
     };
-  }, []);
+  }, [fetchCustomers]);
 
-  // Phase 3 - "14. MES VENTES": today's still-local PENDING_SYNC sales,
-  // read straight from SQLite (see this task's own "TEST C" - they must
-  // still be here after closing and reopening this screen without closing
-  // the app). Never touches `sales`/`stats` above, which stay exactly what
-  // the server returned.
+  // Phase 3 - "14. MES VENTES": today's still-local sales, read straight
+  // from SQLite (see this task's own "TEST C" - they must still be here
+  // after closing and reopening this screen without closing the app).
+  // Never touches `sales`/`stats` above, which stay exactly what the
+  // server returned.
   const [offlineSales, setOfflineSales] = React.useState<OfflineSaleWithLines[]>([]);
   React.useEffect(() => {
     let active = true;
-    const organizationId = currentUser?.organizationId ?? null;
-    const driverId = currentUser?.driverId ?? null;
+    if (fetchOfflineSales) {
+      fetchOfflineSales()
+        .then((allSales) => {
+          if (active) setOfflineSales(allSales);
+        })
+        .catch(() => {});
+      return () => {
+        active = false;
+      };
+    }
     if (!organizationId || !driverId) return;
     getOfflineSales({ organizationId, driverId })
       .then((allSales) => {
@@ -139,7 +274,7 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
     return () => {
       active = false;
     };
-  }, [currentUser]);
+  }, [organizationId, driverId, fetchOfflineSales]);
 
   const rows = React.useMemo<DisplayRow[]>(() => {
     const serverRows: DisplayRow[] = sales.map((sale) => ({ kind: "server", sale }));
@@ -157,7 +292,7 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
     try {
       const result = await shareInvoicePdf({
         sale,
-        identity,
+        identity: resolvedIdentity,
         customerPhone: sale.customer ? customerById.get(sale.customer.id)?.phone ?? null : null,
       });
       if (result.method === "download") {
@@ -175,6 +310,16 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
 
   function openDetail(sale: SaleDto) {
     setSelectedSale(toListItem(sale));
+    setDetailOpen(true);
+  }
+
+  // ÉTAPE 25I - only a SYNCED sale has a real serverSaleId to fetch by - a
+  // still-local PENDING_SYNC/SYNCING/SYNC_ERROR/REQUIRES_REVIEW one never
+  // opens a detail dialog (nothing server-side exists yet to show), exactly
+  // like today's OfflineSaleRow already never did.
+  function openOfflineSaleDetail(sale: OfflineSaleWithLines) {
+    if (!sale.serverSaleId) return;
+    setSelectedSale(toListItemFromOfflineSale(sale));
     setDetailOpen(true);
   }
 
@@ -218,6 +363,7 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
                       ? customerById.get(row.sale.customerId)?.name ?? "Client comptoir"
                       : "Client comptoir"
                   }
+                  onOpenDetail={row.sale.serverSaleId ? () => openOfflineSaleDetail(row.sale) : undefined}
                 />
               ) : (
               // A <div role="button"> here, not a real <button> - it wraps
@@ -304,27 +450,37 @@ export function DriverSalesView({ data }: { data: DriverTodaySalesDto }) {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         fetchBase="/api/driver/sales"
+        fetchSale={fetchSaleDetail}
       />
     </div>
   );
 }
 
-// Phase 3 - "14. MES VENTES": a still-local, PENDING_SYNC sale - no
-// server id, so unlike a real sale row it never opens InvoiceDetailDialog
-// (fetchBase="/api/driver/sales" has nothing to fetch for a local id) and
-// never offers WhatsApp sharing (see "17. WHATSAPP OFFLINE" - the official
-// PDF must stay disabled until this sale is actually SYNCED).
+// Phase 3 - "14. MES VENTES": a still-local offline sale - no server id
+// (or, once SYNCED, a real one - see onOpenDetail). Never offers WhatsApp
+// sharing (see "17. WHATSAPP OFFLINE" / ÉTAPE 25J - the official PDF needs
+// the FULL SaleDto, which this row never has locally, only after opening
+// the detail dialog fetches it) - conserving today's exact restriction
+// rather than inventing a fetch-then-share flow.
 function OfflineSaleRow({
   sale,
   customerName,
+  onOpenDetail,
 }: {
   sale: OfflineSaleWithLines;
   customerName: string;
+  /** ÉTAPE 25G/I - only ever set for a SYNCED sale with a real
+   *  serverSaleId - see DriverSalesView's own openOfflineSaleDetail. */
+  onOpenDetail?: () => void;
 }) {
-  return (
-    <div className="w-full rounded-2xl border border-dashed border-amber-200 bg-amber-50/40 p-3 text-left">
+  const displayNumber = sale.officialDisplayNumber ?? sale.localReference;
+  const statusLabel = OFFLINE_STATUS_LABEL[sale.syncStatus as Exclude<SyncStatus, "LOCAL_DRAFT">] ?? sale.syncStatus;
+  const statusIcon = sale.syncStatus === "SYNCED" ? "✓ " : sale.syncStatus === "PENDING_SYNC" ? "⏳ " : "";
+
+  const content = (
+    <>
       <div className="flex items-start justify-between gap-2">
-        <span className="font-semibold text-foreground tabular-nums">{sale.localReference}</span>
+        <span className="font-semibold text-foreground tabular-nums">{displayNumber}</span>
         <span className="shrink-0 font-semibold text-foreground tabular-nums">
           {formatCurrency(sale.totalTTC)}
         </span>
@@ -332,17 +488,49 @@ function OfflineSaleRow({
       <p className="mt-0.5 truncate text-sm text-muted-foreground">{customerName}</p>
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          {formatTime(sale.createdAtLocal)}
+          {formatTime(sale.soldAt)}
           {" · "}
           {PAYMENT_LABELS[sale.paymentMethod] ?? sale.paymentMethod}
         </p>
         <Badge
           variant="outline"
-          className="border-amber-300 bg-amber-100 px-1.5 py-0 text-[10px] font-normal text-amber-800"
+          className={
+            sale.syncStatus === "SYNCED"
+              ? "border-emerald-200 bg-emerald-50 px-1.5 py-0 text-[10px] font-normal text-emerald-800"
+              : sale.syncStatus === "SYNC_ERROR" || sale.syncStatus === "REQUIRES_REVIEW"
+                ? "border-red-200 bg-red-50 px-1.5 py-0 text-[10px] font-normal text-red-700"
+                : "border-amber-300 bg-amber-100 px-1.5 py-0 text-[10px] font-normal text-amber-800"
+          }
         >
-          ⏳ En attente
+          {statusIcon}
+          {statusLabel}
         </Badge>
       </div>
+    </>
+  );
+
+  if (!onOpenDetail) {
+    return (
+      <div className="w-full rounded-2xl border border-dashed border-amber-200 bg-amber-50/40 p-3 text-left">
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpenDetail}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpenDetail();
+        }
+      }}
+      className="w-full cursor-pointer rounded-2xl border border-border bg-card p-3 text-left transition hover:border-emerald-200 hover:shadow-[0_6px_18px_rgba(16,185,129,0.08)]"
+    >
+      {content}
     </div>
   );
 }
