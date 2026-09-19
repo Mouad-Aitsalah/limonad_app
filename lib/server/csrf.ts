@@ -66,6 +66,38 @@ export function rejectUntrustedOrigin(request: Request): NextResponse | null {
   return null;
 }
 
+// Deliberately the SAME pattern lib/server/auth.ts's resolveSessionToken uses
+// to decide a request is Bearer-authenticated - so "this request skips the
+// cookie-CSRF check" and "this request is authenticated by its Bearer token,
+// never by the cookie" can never disagree (a bare "Bearer " with no token
+// matches neither, and therefore still goes through the CSRF check).
+const BEARER_AUTHORIZATION_PATTERN = /^Bearer\s+(.+)$/i;
+
+/** True only when the request carries a well-formed `Authorization: Bearer
+ *  <token>` header - the exact condition under which resolveSessionToken
+ *  authenticates from that header ALONE and never falls back to the cookie. */
+export function hasBearerAuthorization(request: Request): boolean {
+  const header = request.headers.get("authorization");
+  return header !== null && BEARER_AUTHORIZATION_PATTERN.test(header.trim());
+}
+
+/**
+ * ÉTAPE 28A - rejectUntrustedOrigin for routes the mobile shell also calls.
+ * The origin check defends the COOKIE session against a forged cross-site
+ * request riding the browser's ambient cookie. A Bearer-authenticated request
+ * uses no cookie at all (resolveSessionToken never falls back to it when a
+ * Bearer header is present), so there is nothing ambient to forge - the same
+ * reasoning app/api/driver/sales/route.ts already applies inline. A request
+ * WITHOUT a Bearer header (the whole web app) goes through
+ * rejectUntrustedOrigin exactly as before. The Bearer token itself is still
+ * fully validated downstream (session-hash lookup) - this never authenticates
+ * anything, it only decides whether the cookie-CSRF check is relevant.
+ */
+export function rejectUntrustedCookieOrigin(request: Request): NextResponse | null {
+  if (hasBearerAuthorization(request)) return null;
+  return rejectUntrustedOrigin(request);
+}
+
 function originOf(headerValue: string | null): string | null {
   if (!headerValue) return null;
   try {
