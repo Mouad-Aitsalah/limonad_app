@@ -67,10 +67,8 @@ export function ProductsTable({
         <TableRow>
           <TableHead>Photo</TableHead>
           <TableHead>Reference</TableHead>
-          <TableHead>Code-barres</TableHead>
           <TableHead>Designation</TableHead>
           <TableHead>Categorie</TableHead>
-          <TableHead>Marque</TableHead>
           <TableHead>Fournisseur</TableHead>
           <TableHead className="text-right">Prix achat TTC</TableHead>
           <TableHead className="text-right">Prix vente TTC</TableHead>
@@ -95,15 +93,9 @@ export function ProductsTable({
               <TableCell className="font-medium text-foreground">
                 {product.reference}
               </TableCell>
-              <TableCell className="text-muted-foreground tabular-nums">
-                {product.barcode ?? "-"}
-              </TableCell>
               <TableCell className="text-foreground">{product.name}</TableCell>
               <TableCell className="text-muted-foreground">
                 {product.category.name}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {product.brand?.name ?? "-"}
               </TableCell>
               <TableCell className="text-muted-foreground">
                 {product.supplier?.name ?? "-"}

@@ -70,12 +70,12 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
         imageUrl={product.imageUrl}
         alt={`Photo du produit ${product.designation}`}
         fit="cover"
-        className="aspect-[3/2] w-full rounded-xl max-lg:aspect-square max-lg:w-[68px] max-lg:shrink-0 max-lg:rounded-[18px]"
+        className="aspect-[30/23] w-full rounded-xl max-lg:aspect-auto max-lg:h-[78px] max-lg:w-[68px] max-lg:shrink-0 max-lg:rounded-[18px]"
         imageClassName="transition-transform duration-200 group-hover:scale-[1.03]"
       />
 
       <div className="mt-1.5 flex flex-1 flex-col px-0.5 max-lg:mt-0.5 max-lg:w-full max-lg:flex-none max-lg:px-0">
-        <p className="line-clamp-2 pr-12 text-[12px] font-medium leading-snug text-foreground max-lg:pr-0 max-lg:text-center max-lg:text-[11px] max-lg:font-semibold max-lg:leading-[13px]">
+        <p className="line-clamp-2 min-h-[2.75em] pr-12 text-[14px] font-medium leading-snug text-foreground max-lg:min-h-[34px] max-lg:pr-0 max-lg:text-center max-lg:text-[13px] max-lg:font-semibold max-lg:leading-[17px]">
           {product.designation}
         </p>
         {product.reference ? (
