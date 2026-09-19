@@ -92,7 +92,7 @@ export function DriverTourScreen({ token, offlineContext, deviceOnline, onBack }
   if (state.kind === "ready") {
     return (
       <div onClickCapture={interceptBackLink}>
-        <DriverTourRuntimeProvider token={token}>
+        <DriverTourRuntimeProvider token={token} deviceOnline={deviceOnline}>
           <DriverTourView currentTour={state.tour} readOnly />
         </DriverTourRuntimeProvider>
       </div>
