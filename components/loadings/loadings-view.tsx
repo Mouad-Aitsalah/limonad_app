@@ -8,6 +8,7 @@ import {
   PackageCheck,
   Plus,
   RefreshCw,
+  Save,
   Search,
   Truck,
   UserRound,
@@ -683,7 +684,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
               </div>
 
               {selectedDriver ? (
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 max-lg:hidden md:grid-cols-2 xl:grid-cols-4">
                   <InfoCard
                     icon={UserRound}
                     label="Chauffeur"
@@ -720,7 +721,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
             </CardContent>
           </Card>
 
-          <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+          <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)] max-lg:[--card-spacing:--spacing(3)]">
             <CardContent className="space-y-5">
               {!selectedDriver ? (
                 <p className="text-sm text-muted-foreground">
@@ -735,7 +736,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                 </p>
               ) : (
                 <>
-                  <section className="space-y-4 rounded-2xl border border-border bg-muted/10 p-4">
+                  <section className="space-y-4 rounded-2xl border border-border bg-muted/10 p-4 max-lg:hidden">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="space-y-1">
                         <p className="text-sm font-medium text-foreground">
@@ -779,16 +780,22 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                     </div>
 
                     <div className="overflow-x-auto rounded-2xl border border-border">
-                      <Table>
+                      <Table className="max-lg:table-fixed">
                         <TableHeader>
                           <TableRow>
-                            <TableHead>Produit</TableHead>
-                            <TableHead className="text-right">Stock depot</TableHead>
-                            <TableHead className="text-right">Charge initiale</TableHead>
-                            <TableHead className="text-right">Rechargee</TableHead>
-                            <TableHead className="text-right">Restante theorique</TableHead>
-                            <TableHead className="text-right">Restante reelle</TableHead>
-                            <TableHead className="text-right">Action</TableHead>
+                            <TableHead className={`${MOBILE_HEAD} max-lg:w-[30%] max-lg:px-2`}>Produit</TableHead>
+                            <TableHead className="text-right max-lg:hidden">Stock depot</TableHead>
+                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[23%] max-lg:text-center`}>
+                              <ResponsiveText desktop="Charge initiale" mobile="Charge" />
+                            </TableHead>
+                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[23%] max-lg:text-center`}>
+                              <ResponsiveText desktop="Rechargee" mobile="Recharge" />
+                            </TableHead>
+                            <TableHead className="text-right max-lg:hidden">Restante theorique</TableHead>
+                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[23%] max-lg:text-center`}>
+                              <ResponsiveText desktop="Restante reelle" mobile="Stock réel" />
+                            </TableHead>
+                            <TableHead className="text-right max-lg:hidden">Action</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -802,9 +809,11 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                           ) : (
                             draftLines.map((line) => (
                               <TableRow key={line.productId}>
-                                <TableCell>
-                                  <div className="font-medium">{line.productName}</div>
-                                  <div className="text-xs text-muted-foreground">
+                                <TableCell className="max-lg:px-2 max-lg:py-2 max-lg:whitespace-normal">
+                                  <div className="font-medium max-lg:text-[13px] max-lg:leading-tight max-lg:break-words">
+                                    {line.productName}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground max-lg:mt-0.5 max-lg:text-[10px] max-lg:leading-tight max-lg:break-words">
                                     {line.productReference}
                                     {line.productBarcode ? ` - ${line.productBarcode}` : ""}
                                     {` - ${line.productUnit}`}
@@ -812,7 +821,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                                 </TableCell>
                                 <TableCell
                                   className={
-                                    "text-right tabular-nums" +
+                                    "text-right tabular-nums max-lg:hidden" +
                                     (line.depotAvailableQuantity < 0
                                       ? " font-medium text-destructive"
                                       : "")
@@ -825,10 +834,11 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                                 >
                                   {line.depotAvailableQuantity}
                                 </TableCell>
-                                <TableCell className="w-[140px]">
+                                <TableCell className="w-[140px] max-lg:w-auto max-lg:px-1 max-lg:py-2">
                                   <Input
                                     type="number"
                                     min={0}
+                                    className={MOBILE_INPUT}
                                     value={String(line.initialLoadQuantity)}
                                     disabled={loadingIsLocked}
                                     onFocus={(event) => event.currentTarget.select()}
@@ -839,10 +849,11 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                                     }
                                   />
                                 </TableCell>
-                                <TableCell className="w-[140px]">
+                                <TableCell className="w-[140px] max-lg:w-auto max-lg:px-1 max-lg:py-2">
                                   <Input
                                     type="number"
                                     min={0}
+                                    className={MOBILE_INPUT}
                                     value={String(line.reloadedQuantity)}
                                     disabled={loadingIsLocked}
                                     onFocus={(event) => event.currentTarget.select()}
@@ -853,13 +864,14 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                                     }
                                   />
                                 </TableCell>
-                                <TableCell className="text-right tabular-nums">
+                                <TableCell className="text-right tabular-nums max-lg:hidden">
                                   {truckLevelsByProductId[line.productId] ?? 0}
                                 </TableCell>
-                                <TableCell className="w-[160px]">
+                                <TableCell className="w-[160px] max-lg:w-auto max-lg:px-1 max-lg:py-2">
                                   <Input
                                     type="number"
                                     min={0}
+                                    className={MOBILE_INPUT}
                                     placeholder="A saisir"
                                     value={
                                       line.actualRemainingQuantity === null
@@ -877,7 +889,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                                     }
                                   />
                                 </TableCell>
-                                <TableCell className="text-right">
+                                <TableCell className="text-right max-lg:hidden">
                                   <Button
                                     type="button"
                                     variant="ghost"
@@ -912,8 +924,8 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                         </p>
                       </div>
 
-                      <div className="grid gap-3 lg:grid-cols-[minmax(260px,2.2fr)_140px_140px_140px_110px]">
-                        <div className="relative">
+                      <div className="grid gap-3 max-lg:grid-cols-3 lg:grid-cols-[minmax(260px,2.2fr)_140px_140px_140px_110px]">
+                        <div className="relative max-lg:col-span-3">
                           <Field label="Recherche produit">
                             <div className="relative">
                               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -973,7 +985,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                           ) : null}
                         </div>
 
-                        <Field label="Charge initiale">
+                        <Field label={<ResponsiveText desktop="Charge initiale" mobile="Charge" />}>
                           <Input
                             ref={initialLoadRef}
                             type="number"
@@ -990,7 +1002,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                           />
                         </Field>
 
-                        <Field label="Rechargee">
+                        <Field label={<ResponsiveText desktop="Rechargee" mobile="Recharge" />}>
                           <Input
                             ref={reloadedRef}
                             type="number"
@@ -1007,7 +1019,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                           />
                         </Field>
 
-                        <Field label="Restante reelle">
+                        <Field label={<ResponsiveText desktop="Restante reelle" mobile="Stock réel" />}>
                           <Input
                             ref={actualRemainingRef}
                             type="number"
@@ -1024,7 +1036,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                           />
                         </Field>
 
-                        <div className="flex items-end">
+                        <div className="flex items-end max-lg:col-span-3">
                           <Button
                             type="button"
                             variant="outline"
@@ -1045,16 +1057,34 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                   )}
 
                   {!loadingIsLocked ? (
-                    <div className="flex flex-wrap gap-2">
-                      <Button type="button" variant="outline" disabled={busy} onClick={saveDraft}>
-                        <RefreshCw className="h-4 w-4" />
-                        Enregistrer le brouillon
-                      </Button>
-                      <Button type="button" disabled={busy} onClick={closeLoading}>
-                        <Lock className="h-4 w-4" />
-                        Fermer le chargement
-                      </Button>
-                    </div>
+                    <>
+                      {/* Mobile: keeps the last rows clear of the fixed button bar below
+                          (bar height + the same bottom safe-area inset the bar adds). */}
+                      <div aria-hidden="true" className="h-[calc(5.5rem+env(safe-area-inset-bottom))] lg:hidden" />
+                      <div className="grid grid-cols-2 gap-2 max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 max-lg:border-t max-lg:border-border max-lg:bg-background/95 max-lg:px-3 max-lg:pt-2 max-lg:pb-[max(0.5rem,env(safe-area-inset-bottom))] max-lg:shadow-[0_-6px_20px_rgba(15,23,42,0.08)] max-lg:backdrop-blur lg:flex lg:flex-wrap">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={saveDraft}
+                          className="max-lg:h-auto max-lg:min-h-11 max-lg:px-2 max-lg:py-2 max-lg:text-[13px] max-lg:leading-tight max-lg:whitespace-normal"
+                        >
+                          <RefreshCw className="h-4 w-4 max-lg:hidden" />
+                          <Save aria-hidden="true" className="hidden h-4 w-4 shrink-0 max-lg:block" />
+                          <ResponsiveText desktop="Enregistrer le brouillon" mobile="Enregistrer le chargement" />
+                        </Button>
+                        <Button
+                          type="button"
+                          disabled={busy}
+                          onClick={closeLoading}
+                          className="max-lg:h-auto max-lg:min-h-11 max-lg:px-2 max-lg:py-2 max-lg:text-[13px] max-lg:leading-tight max-lg:whitespace-normal"
+                        >
+                          <Lock className="h-4 w-4 max-lg:hidden" />
+                          <X aria-hidden="true" className="hidden h-4 w-4 shrink-0 max-lg:block" />
+                          Fermer le chargement
+                        </Button>
+                      </div>
+                    </>
                   ) : null}
                 </>
               )}
@@ -1187,7 +1217,24 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+// Mobile (< lg) table look: compact header cells and inputs so Produit + Charge +
+// Recharge + Stock reel fit the phone width with no horizontal scroll. Every
+// class is `max-lg:`-scoped - the desktop table is unchanged.
+const MOBILE_HEAD =
+  "max-lg:h-9 max-lg:px-0.5 max-lg:text-[0.58rem] max-lg:leading-tight max-lg:tracking-normal max-lg:whitespace-normal";
+const MOBILE_INPUT = "max-lg:h-9 max-lg:rounded-xl max-lg:px-1 max-lg:text-center max-lg:text-sm";
+
+/** Same element, two wordings: the desktop label from lg up, the short mobile one below. */
+function ResponsiveText({ desktop, mobile }: { desktop: string; mobile: string }) {
+  return (
+    <>
+      <span className="max-lg:hidden">{desktop}</span>
+      <span className="lg:hidden">{mobile}</span>
+    </>
+  );
+}
+
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
       <Label>{label}</Label>
