@@ -361,3 +361,23 @@ body {
     gap: 0.8mm;
   }
 }
+
+/**
+ * POS UI - light "site" look for the shell's Point de vente only. Scoped to
+ * the wrapper PosScreen renders (.pos-light), so no other screen changes: the
+ * page/field background becomes white (the app-wide --background is the
+ * bluish #eef4f9) and every card gets a thin border + a very soft shadow, like
+ * the web POS. Colors, radii and layout still come from the reused
+ * DriverPosView classes - nothing here touches behavior.
+ */
+.pos-light {
+  --background: #ffffff;
+  background: #ffffff;
+}
+
+.pos-light [data-slot="card"] {
+  border: 1px solid var(--border);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 6px 18px rgba(15, 23, 42, 0.05);
+}

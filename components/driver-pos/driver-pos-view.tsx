@@ -71,7 +71,6 @@ import {
   type DriverPosCacheCounts,
   type LoadDriverPosContextParams,
   type NetworkState,
-  type OfflineDbDiagnostic,
   type OfflineSaleWithLines,
   type SyncBatchResult,
 } from "@/lib/offline/driver-pos";
@@ -452,11 +451,6 @@ export function DriverPosView({
   const [cacheDiagnostic, setCacheDiagnostic] = React.useState<
     { products: number; customers: number; stock: number } | "unavailable" | null
   >(null);
-  // TEMPORARY dev diagnostic (Phase 3 bug hunt - "no such table:
-  // offline_sales") - the migrated schema's actual user_version and
-  // per-table presence, read once on mount. Remove once the migration path
-  // is confirmed solid on every device.
-  const [dbDiagnostic, setDbDiagnostic] = React.useState<OfflineDbDiagnostic | null>(null);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
   // Last product tapped in the mobile "Produits" launcher - drives the
@@ -753,12 +747,15 @@ export function DriverPosView({
     refreshOfflinePendingSales,
   ]);
 
-  // TEMPORARY dev diagnostic (Phase 3 bug hunt) - read once on mount, not
-  // re-read on every render; the schema version doesn't change while the
-  // app is running.
+  // Offline schema diagnostic (Phase 3 bug hunt): DEV console only - never
+  // rendered in the UI. Read once on mount; the schema version doesn't change
+  // while the app is running.
   React.useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
     queueMicrotask(() => {
-      void getOfflineDbDiagnostic().then(setDbDiagnostic);
+      void getOfflineDbDiagnostic().then((diagnostic) => {
+        if (diagnostic) console.log("[OFFLINE DB DIAGNOSTIC]", diagnostic);
+      });
     });
   }, []);
   // Stable for one sale attempt (F5): kept identical across a network retry
@@ -1533,7 +1530,6 @@ export function DriverPosView({
         onPrintLastSale={printLastSale}
         cacheSyncedAt={contextSource === "cache" ? cacheSyncedAt : null}
         cacheDiagnostic={cacheDiagnostic}
-        dbDiagnostic={dbDiagnostic}
         pendingOfflineCount={pendingOfflineCount}
         onOpenOfflineSales={() => setOfflineSalesDialogOpen(true)}
         networkState={networkState}
@@ -1790,7 +1786,6 @@ function DriverInvoiceHeader({
   onPrintLastSale,
   cacheSyncedAt,
   cacheDiagnostic,
-  dbDiagnostic,
   pendingOfflineCount,
   onOpenOfflineSales,
   networkState,
@@ -1813,9 +1808,6 @@ function DriverInvoiceHeader({
   cacheSyncedAt?: string | null;
   /** TEMPORARY dev diagnostic - see driver-pos-view.tsx's own state comment. */
   cacheDiagnostic?: { products: number; customers: number; stock: number } | "unavailable" | null;
-  /** TEMPORARY dev diagnostic (Phase 3 bug hunt) - see driver-pos-view.tsx's
-   *  own state comment. */
-  dbDiagnostic?: OfflineDbDiagnostic | null;
   /** Phase 3 - "15. COMPTEUR DE VENTES EN ATTENTE": count of local sales
    *  still PENDING_SYNC, read straight from SQLite. */
   pendingOfflineCount: number;
@@ -1917,17 +1909,6 @@ function DriverInvoiceHeader({
           {cacheDiagnostic === "unavailable"
             ? "Cache indisponible"
             : `Cache : ${cacheDiagnostic.products} produits · ${cacheDiagnostic.customers} clients · ${cacheDiagnostic.stock} stocks`}
-        </p>
-      ) : null}
-
-      {/* TEMPORARY dev diagnostic (Phase 3 bug hunt - "no such table:
-          offline_sales") - lets the migrated schema be checked on a real
-          device without DevTools. Remove once confirmed solid. */}
-      {dbDiagnostic ? (
-        <p className="text-[11px] text-muted-foreground">
-          {`Offline DB v${dbDiagnostic.userVersion} : ${Object.entries(dbDiagnostic.tables)
-            .map(([table, present]) => `${table} ${present ? "OK" : "MANQUANTE"}`)
-            .join(" · ")}`}
         </p>
       ) : null}
 

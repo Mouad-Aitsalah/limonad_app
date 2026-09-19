@@ -99,6 +99,15 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
   const effectiveOnline = deviceOnline && serverReachable;
   const identity = useOrganizationIdentity(token);
 
+  // Light "site" theme (see .pos-light in styles.css) for the whole time the
+  // POS is on screen. Also on <body>: the customer picker and the dialogs
+  // render in portals, outside this screen's own wrapper, and must not fall
+  // back to the app-wide bluish background. Purely visual.
+  React.useEffect(() => {
+    document.body.classList.add("pos-light");
+    return () => document.body.classList.remove("pos-light");
+  }, []);
+
   const markReachable = React.useCallback((kind: MobileFetchOutcome<unknown>["kind"]) => {
     setServerReachable(kind !== "network_error");
   }, []);
@@ -383,25 +392,29 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--background)", paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}>
-      {/* DriverPosView's own back link (DriverInvoiceHeader) is desktop-only
-          (lg:inline-flex) - never rendered at phone width, so this shell
-          keeps its own "Accueil" affordance here, exactly like the web app's
-          own /driver/pos page relies on its surrounding layout for phone
-          navigation. Everything else the old header row showed (network
-          badge, pending-sales badge, sync button, last-sync time, print
-          button) is now rendered by DriverPosView itself. */}
-      <div className="px-3 pt-3">
-        <button
-          type="button"
-          onClick={onBack}
-          className="-ml-2 inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
-        >
-          <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-          Accueil
-        </button>
-      </div>
+    <div className="pos-light min-h-dvh bg-background pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+      {/* Same mobile header as the web driver shell (components/mobile/
+          mobile-header.tsx + mobile-back-link.tsx): round back button + page
+          title. DriverPosView's own back link is desktop-only (lg:inline-flex)
+          so the phone needs this one; on the web the shell's <Link> does it,
+          here it is the shell's own onBack. Network badge, pending-sales
+          badge, sync button, last-sync time and print button are rendered by
+          DriverPosView itself. */}
+      <header className="sticky top-0 z-30 border-b border-border/60 bg-background/95 backdrop-blur-xl">
+        <div className="flex min-h-16 items-center gap-3 px-4 py-2">
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Retour a l'accueil"
+            className="flex size-11 shrink-0 touch-manipulation items-center justify-center rounded-2xl border border-border/70 bg-white text-foreground shadow-sm transition-colors hover:bg-accent/40"
+          >
+            <ArrowLeft aria-hidden="true" className="size-5" />
+          </button>
+          <p className="min-w-0 flex-1 text-base font-semibold leading-snug text-foreground">Point de vente</p>
+        </div>
+      </header>
 
+      <div className="px-4 py-5">
       <DriverPosView
         initialContext={context}
         currentUser={currentUser}
@@ -420,6 +433,7 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
         resolveCustomerByNumber={resolveCustomerByNumber}
         showResolvedCustomerConfirmation
       />
+      </div>
     </div>
   );
 }
