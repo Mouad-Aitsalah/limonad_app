@@ -222,6 +222,130 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       )`,
     ],
   },
+  {
+    // ÉTAPE 28C - "MA TOURNÉE": the current tour (CurrentDriverTourDto) of one
+    // driver, normalized. Four brand-new tables (CREATE IF NOT EXISTS) - never
+    // touches any existing cache/sales/outbox row. Always replaced as a whole,
+    // in one transaction, by tour-store.ts's saveCachedDriverTour.
+    //
+    // Why tables and not one JSON blob: customers keep latitude/longitude as
+    // real columns (proximity/itinerary work in later étapes reads them), and
+    // route points are APPENDED locally by the later GPS étapes - appending a
+    // row is cheap, rewriting a multi-thousand-point JSON array on every fix
+    // is not. JSON is used ONLY for the deeply nested, view-only, never
+    // queried pieces of the DTO (tour.loading / tour.stockSheet / tour.closure
+    // / startContext) - see the header table's own comments below.
+    version: 5,
+    statements: [
+      // One row per driver. tourId NULL = the server said "no active tour"
+      // (states "aucune tournee" / "prete a demarrer": message, canStart and
+      // startContextJson are then the whole payload) - that answer is cached
+      // too, so a tour that ended server-side is never shown as still running.
+      `CREATE TABLE IF NOT EXISTS cached_driver_tour (
+        organizationId TEXT NOT NULL,
+        driverId TEXT NOT NULL,
+        syncedAt TEXT NOT NULL,
+        message TEXT NOT NULL,
+        canStart INTEGER NOT NULL DEFAULT 0,
+        canReturn INTEGER NOT NULL DEFAULT 0,
+        startContextJson TEXT,
+        tourId TEXT,
+        tourCode TEXT,
+        tourDate TEXT,
+        tourStatus TEXT,
+        startedAt TEXT,
+        returnedAt TEXT,
+        closedAt TEXT,
+        depotId TEXT,
+        depotCode TEXT,
+        depotName TEXT,
+        truckId TEXT,
+        truckCode TEXT,
+        truckRegistration TEXT,
+        truckStatus TEXT,
+        tourDriverId TEXT,
+        driverEmployeeCode TEXT,
+        driverName TEXT,
+        createdByUserName TEXT,
+        tourCreatedAt TEXT,
+        tourUpdatedAt TEXT,
+        loadingJson TEXT,
+        stockSheetJson TEXT,
+        closureJson TEXT,
+        latestLatitude REAL,
+        latestLongitude REAL,
+        latestAccuracy REAL,
+        latestSpeed REAL,
+        latestHeading REAL,
+        latestRecordedAt TEXT,
+        proximityCustomerId TEXT,
+        proximityCustomerName TEXT,
+        proximityDistanceMeters REAL,
+        hasSummary INTEGER NOT NULL DEFAULT 0,
+        routePointCount REAL,
+        distanceMeters REAL,
+        customersNearby REAL,
+        customersArrived REAL,
+        customersDelivered REAL,
+        customersNoSale REAL,
+        salesCount REAL,
+        totalSalesTTC REAL,
+        theoreticalStockQuantity REAL,
+        stockCurrentQuantity REAL,
+        actualStockQuantity REAL,
+        discrepancyQuantity REAL,
+        totalAccessibleCustomers REAL,
+        PRIMARY KEY (organizationId, driverId)
+      )`,
+
+      // Tour-scoped ("in play") customers, in the server's own order.
+      `CREATE TABLE IF NOT EXISTS cached_driver_tour_customers (
+        organizationId TEXT NOT NULL,
+        driverId TEXT NOT NULL,
+        id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        code TEXT NOT NULL,
+        name TEXT NOT NULL,
+        phone TEXT,
+        address TEXT NOT NULL,
+        city TEXT NOT NULL,
+        latitude REAL,
+        longitude REAL,
+        distanceMeters REAL,
+        visitStatus TEXT NOT NULL,
+        lastEventAt TEXT,
+        noSaleReason TEXT,
+        PRIMARY KEY (organizationId, driverId, id)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS cached_driver_tour_route (
+        organizationId TEXT NOT NULL,
+        driverId TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        accuracy REAL,
+        speed REAL,
+        heading REAL,
+        recordedAt TEXT NOT NULL,
+        PRIMARY KEY (organizationId, driverId, seq)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS cached_driver_tour_stops (
+        organizationId TEXT NOT NULL,
+        driverId TEXT NOT NULL,
+        id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        startedAt TEXT NOT NULL,
+        endedAt TEXT,
+        durationSeconds REAL NOT NULL,
+        isActive INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (organizationId, driverId, id)
+      )`,
+    ],
+  },
 ];
 
 /** Highest version defined above - passed to the plugin's own
@@ -242,4 +366,8 @@ export const EXPECTED_TABLES = [
   "sync_outbox",
   "offline_metadata",
   "cached_truck",
+  "cached_driver_tour",
+  "cached_driver_tour_customers",
+  "cached_driver_tour_route",
+  "cached_driver_tour_stops",
 ];

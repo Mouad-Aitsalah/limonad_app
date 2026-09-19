@@ -1,7 +1,6 @@
 import * as React from "react";
 import { Toaster } from "sonner";
 
-import { driverNavItems } from "@/components/driver/driver-nav-items";
 import { getAnyDriverOfflineContext, isNetworkAvailable } from "@/lib/offline/driver-pos";
 import type { DriverOfflineContext } from "@/lib/offline/driver-pos";
 import type { DriverPosContextDto } from "@/types/operations-dto";
@@ -16,21 +15,12 @@ import { DriverClientsScreen } from "./screens/DriverClientsScreen";
 import { DriverLauncherScreen } from "./screens/DriverLauncherScreen";
 import { DriverSalesScreen } from "./screens/DriverSalesScreen";
 import { DriverStockScreen } from "./screens/DriverStockScreen";
+import { DriverTourScreen } from "./screens/DriverTourScreen";
 import { DriverTruckScreen } from "./screens/DriverTruckScreen";
 import { LoginScreen } from "./screens/LoginScreen";
-import { MigrationPendingScreen } from "./screens/MigrationPendingScreen";
 import { OfflineSalesScreen } from "./screens/OfflineSalesScreen";
 import { PosScreen } from "./screens/PosScreen";
 import { styles } from "./ui/styles";
-
-// ÉTAPE 19 - "4. NAVIGATION ANDROID": one lookup, driverNavItems itself as
-// the only source of truth for label/icon per historical route - never a
-// second, hand-typed copy of those labels.
-function navItemForHref(href: string) {
-  const item = driverNavItems.find((candidate) => candidate.href === href);
-  if (!item) throw new Error(`No driverNavItems entry for ${href}`);
-  return item;
-}
 
 /**
  * PHASE 5A.2 - shell orchestrator: bootstraps (SQLite + secure token +
@@ -252,16 +242,17 @@ export function App() {
                 onBack={() => setScreen("HOME")}
               />
             );
-          case "TOURNEE": {
-            const item = navItemForHref("/driver/tournee");
+          // ÉTAPE 28B/28C - "Ma tournee": the historical DriverTourView, READ-ONLY
+          // (no start/return/GPS/map yet), loaded over Bearer and cached in SQLite.
+          case "TOURNEE":
             return (
-              <MigrationPendingScreen
-                label={item.label}
-                icon={item.icon}
+              <DriverTourScreen
+                token={token}
+                offlineContext={offlineContext}
+                deviceOnline={online}
                 onBack={() => setScreen("HOME")}
               />
             );
-          }
           // ÉTAPE 27 - "Mon camion": the historical /driver page (DriverHomeView
           // + DriverTruckCard), online via GET /api/driver/truck, offline via
           // the cached_truck table.

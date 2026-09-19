@@ -59,7 +59,19 @@ const DriverTourMap = dynamic(
 
 const STOP_DETECTION_REFRESH_MS = 15_000;
 
-export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTourDto }) {
+export function DriverTourView({
+  currentTour,
+  readOnly = false,
+}: {
+  currentTour: CurrentDriverTourDto;
+  /** ÉTAPE 28B - omitted (the web app's only call site) -> every action works
+   *  exactly as before. The Android shell passes `true` while its own
+   *  Bearer/offline versions of start/return/arrive/no-sale/GPS are not built
+   *  yet (see mobile/driver's DriverTourScreen): each of those actions then
+   *  shows an info toast instead of issuing a same-origin `fetch` that has no
+   *  server behind it on the shell. */
+  readOnly?: boolean;
+}) {
   const router = useRouter();
   const {
     currentTour: runtimeCurrentTour,
@@ -201,7 +213,14 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
     setShowReturnConfirmation(false);
   }
 
+  function blockedByReadOnly() {
+    if (!readOnly) return false;
+    toast.info("Cette action sera disponible prochainement dans l'application Android.");
+    return true;
+  }
+
   async function startNewTour() {
+    if (blockedByReadOnly()) return;
     if (startingTourRef.current) {
       return;
     }
@@ -233,6 +252,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
   }
 
   async function confirmReturnTour() {
+    if (blockedByReadOnly()) return;
     if (endingTour) {
       return;
     }
@@ -268,6 +288,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
   }
 
   function openPos(customerId?: string) {
+    if (blockedByReadOnly()) return;
     const target = customerId
       ? `/driver/pos?customerId=${encodeURIComponent(customerId)}`
       : "/driver/pos";
@@ -275,6 +296,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
   }
 
   async function calculateItinerary(customer: DriverTourCustomerDto | null) {
+    if (blockedByReadOnly()) return;
     if (
       !customer ||
       customer.latitude === null ||
@@ -323,6 +345,7 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
   }
 
   async function markNoSale(customerId: string) {
+    if (blockedByReadOnly()) return;
     if (noSaleLoading) {
       return;
     }
@@ -449,7 +472,9 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
                     {state.canStart ? (
                       <button
                         type="button"
-                        onClick={() => setShowStartConfirmation(true)}
+                        onClick={() => {
+                          if (!blockedByReadOnly()) setShowStartConfirmation(true);
+                        }}
                         className="inline-flex h-12 items-center justify-center rounded-2xl bg-foreground px-5 text-sm font-medium text-background transition hover:opacity-90"
                       >
                         Commencer la tournee
@@ -527,7 +552,9 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
                     type="button"
                     variant="outline"
                     className="h-11 rounded-2xl bg-background/94 shadow-[0_14px_34px_rgba(15,23,42,0.14)] backdrop-blur"
-                    onClick={() => setQuickAddOpen(true)}
+                    onClick={() => {
+                      if (!blockedByReadOnly()) setQuickAddOpen(true);
+                    }}
                   >
                     <UserPlus className="h-4 w-4" />
                     Ajouter un client
@@ -548,7 +575,9 @@ export function DriverTourView({ currentTour }: { currentTour: CurrentDriverTour
                     returnButtonDisabled={endingTour}
                     onOpenCustomers={() => setCustomersSheetOpen(true)}
                     onStartTour={startNewTour}
-                    onReturnTour={() => setShowReturnConfirmation(true)}
+                    onReturnTour={() => {
+                      if (!blockedByReadOnly()) setShowReturnConfirmation(true);
+                    }}
                     formatAmount={formatCurrency}
                   />
                 </div>

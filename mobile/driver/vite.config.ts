@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // PHASE 5A.1 - "9. IMPORTS PARTAGÉS": the shell lives under mobile/driver/,
@@ -36,18 +36,24 @@ const nextLinkShimPath = path.resolve(__dirname, "src/shims/next-link.tsx");
 // same controlled-exception pattern as "next/image"/"next/link" above.
 const nextNavigationShimPath = path.resolve(__dirname, "src/shims/next-navigation.ts");
 
+// ÉTAPE 28B: components/driver-tour/driver-tour-view.tsx lazy-loads its Google
+// Maps canvas through "next/dynamic" - aliased below to a shim that only ever
+// renders the component's own `loading` placeholder (the map étape is later),
+// same controlled-exception pattern as the three shims above.
+const nextDynamicShimPath = path.resolve(__dirname, "src/shims/next-dynamic.tsx");
+
 // PHASE 5A.1 - "10. INTERDICTION DES MODULES SERVEUR": a build-time guard,
 // not just a convention. lib/offline/driver-pos/** is pure client code by
 // design (no Prisma, no next/headers, no server-only), so nothing the shell
 // legitimately needs should ever match these patterns - if one does, that is
 // exactly the mistake this plugin exists to catch before it ships in an APK.
-// "next/image", "next/link" and "next/navigation" are explicitly exempted
-// (see the three shim paths above) - every other next/* import (next/headers,
-// next/server, next/dynamic, bare "next", ...) stays forbidden.
+// "next/image", "next/link", "next/navigation" and "next/dynamic" are
+// explicitly exempted (see the four shim paths above) - every other next/*
+// import (next/headers, next/server, bare "next", ...) stays forbidden.
 const FORBIDDEN_SPECIFIER_PATTERNS: RegExp[] = [
   /^server-only$/,
   /^next$/,
-  /^next\/(?!image$|link$|navigation$)/,
+  /^next\/(?!image$|link$|navigation$|dynamic$)/,
   /^@prisma\//,
   /(^|\/)lib\/server\//,
   /(^|\/)lib\/generated\/prisma(\/|$)/,
@@ -68,14 +74,40 @@ function forbidServerImports(): Plugin {
   };
 }
 
-export default defineConfig({
+// ÉTAPE 28D - the shared map code (lib/google-maps-loader.ts,
+// components/driver-tour/driver-tour-map.tsx, ...) reads its two CLIENT-side
+// Google Maps settings from `process.env.NEXT_PUBLIC_GOOGLE_MAPS_*` - a Next.js
+// build-time substitution that does not exist in a Vite bundle (`process` is
+// undefined in the WebView: the module would throw at load). Rather than fork
+// those files, the exact same expressions are substituted here from the
+// shell's own VITE_* variables (see .env.example). Only VITE_-prefixed
+// variables are ever read (loadEnv's prefix filter) - never a server secret,
+// and GOOGLE_MAPS_ROUTES_API_KEY (server-side Routes API) is not needed by the
+// shell at all. Both values are public by nature (they end up in the JS the
+// browser downloads, on the web app as well) - protect them with Google Cloud
+// restrictions, not by hiding them. Unset -> "" -> the loader's own
+// "not configured" path.
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, __dirname, "VITE_");
+  return {
   root: __dirname,
   plugins: [forbidServerImports(), react(), tailwindcss()],
+  define: {
+    "process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY": JSON.stringify(env.VITE_GOOGLE_MAPS_API_KEY ?? ""),
+    "process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID": JSON.stringify(env.VITE_GOOGLE_MAPS_MAP_ID ?? ""),
+  },
   resolve: {
+    // ÉTAPE 28B: the repo root and this shell each install their own copy of
+    // "sonner" (2.0.7 vs 2.0.8). Shared components under components/ resolve
+    // it from the root, the shell's <Toaster/> from here - two separate toast
+    // stores, so every toast() fired by a reused component (POS, Clients, Ma
+    // tournee, ...) never reached the shell's Toaster. Dedupe forces ONE copy.
+    dedupe: ["sonner"],
     alias: {
       "next/image": nextImageShimPath,
       "next/link": nextLinkShimPath,
       "next/navigation": nextNavigationShimPath,
+      "next/dynamic": nextDynamicShimPath,
       "@": repoRoot,
     },
   },
@@ -92,4 +124,5 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,
   },
+  };
 });

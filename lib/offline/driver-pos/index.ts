@@ -26,6 +26,8 @@ export {
   saveCachedTruckStock,
 } from "./cache-store";
 
+export { getCachedDriverTour, saveCachedDriverTour } from "./tour-store";
+
 export {
   countPendingOfflineSales,
   createOfflineSale,
@@ -68,6 +70,7 @@ export type {
 
 export type {
   CachedCustomer,
+  CachedDriverTour,
   CachedProduct,
   CachedTruck,
   CachedTruckStock,

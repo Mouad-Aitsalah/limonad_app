@@ -63,6 +63,10 @@ export function DriverTourMap({
 
   const [mapReady, setMapReady] = React.useState(false);
   const [mapError, setMapError] = React.useState<string | null>(null);
+  // ÉTAPE 28D - bumped to re-run the Google Maps initialisation after a failed
+  // load (see the "online" effect below). 0 on the very first attempt, so the
+  // happy path is exactly what it always was.
+  const [loadAttempt, setLoadAttempt] = React.useState(0);
   const [detachedFromDriver, setDetachedFromDriver] = React.useState(false);
   const [recenterTick, setRecenterTick] = React.useState(0);
   const followDriver = gpsActive && !detachedFromDriver;
@@ -135,7 +139,21 @@ export function DriverTourMap({
       stopMarkersRef.current = [];
       infoWindowRef.current = null;
     };
-  }, []);
+  }, [loadAttempt]);
+
+  // ÉTAPE 28D - a map that failed to load (offline, timeout, ...) recovers on
+  // its own as soon as the device is back online, instead of staying on
+  // "Carte indisponible" until the screen is closed and reopened. Only armed
+  // while the error is showing, so a healthy map is never touched.
+  React.useEffect(() => {
+    if (!mapError) return;
+    const retry = () => {
+      setMapError(null);
+      setLoadAttempt((value) => value + 1);
+    };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [mapError]);
 
   React.useEffect(() => {
     const google = googleRef.current;
@@ -398,6 +416,7 @@ export function DriverTourMap({
           <div className="max-w-sm rounded-3xl border border-border bg-background p-5 shadow-[0_18px_46px_rgba(15,23,42,0.14)]">
             <p className="font-semibold text-foreground">Carte indisponible</p>
             <p className="mt-2 text-sm text-muted-foreground">{mapError}</p>
+            <UnavailableCustomerList customers={customers} onSelectCustomer={onSelectCustomer} />
           </div>
         </div>
       ) : null}
@@ -425,6 +444,62 @@ export function DriverTourMap({
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+const VISIT_STATUS_LABELS: Record<DriverTourCustomerDto["visitStatus"], string> = {
+  PENDING: "A visiter",
+  NEARBY: "Client proche",
+  ARRIVED: "Arrivee confirmee",
+  DELIVERED: "Client livre",
+  NO_SALE: "Sans achat",
+};
+
+/**
+ * ÉTAPE 28D - what "Carte indisponible" still offers when Google Maps cannot
+ * load (typically offline): the tour's geolocated customers with their
+ * coordinates, each one selectable exactly like a marker tap (same
+ * onSelectCustomer -> the historical SelectedCustomerCard). Coordinates are
+ * otherwise only ever visible as marker positions, so without this they would
+ * be unreachable whenever the map is down.
+ */
+function UnavailableCustomerList({
+  customers,
+  onSelectCustomer,
+}: {
+  customers: DriverTourCustomerDto[];
+  onSelectCustomer: (customerId: string) => void;
+}) {
+  const located = customers.filter((customer) => resolveCustomerPosition(customer) !== null);
+  if (located.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 border-t border-border/70 pt-3 text-left">
+      <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+        Clients geolocalises ({located.length})
+      </p>
+      <ul className="mt-2 max-h-56 space-y-1.5 overflow-y-auto pr-1">
+        {located.map((customer) => (
+          <li key={customer.id}>
+            <button
+              type="button"
+              onClick={() => onSelectCustomer(customer.id)}
+              className="w-full rounded-2xl border border-border/70 bg-muted/20 px-3 py-2 text-left transition-colors hover:bg-muted/50"
+            >
+              <span className="block truncate text-sm font-medium text-foreground">{customer.name}</span>
+              <span className="block text-xs text-muted-foreground">
+                {VISIT_STATUS_LABELS[customer.visitStatus] ?? "Client"} &bull;{" "}
+                <span className="tabular-nums">
+                  {customer.latitude!.toFixed(5)}, {customer.longitude!.toFixed(5)}
+                </span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

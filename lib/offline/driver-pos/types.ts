@@ -8,7 +8,7 @@
  * hold a real offline sale + its outbox entry.
  */
 
-import type { TruckDto } from "@/types/operations-dto";
+import type { CurrentDriverTourDto, TruckDto } from "@/types/operations-dto";
 
 /** V1 offline sales are CASH-only, per the validated audit. */
 export type OfflinePaymentMethod = "CASH";
@@ -108,6 +108,16 @@ export type CachedTruck = {
   organizationId: string;
   driverId: string;
   truck: TruckDto;
+  syncedAt: string;
+};
+
+/** ÉTAPE 28C - the current tour behind "Ma tournee" (see schema.ts v5). */
+export type CachedDriverTour = {
+  organizationId: string;
+  driverId: string;
+  /** The exact DTO GET /api/driver/tour returned when this was cached. */
+  tour: CurrentDriverTourDto;
+  /** ISO timestamp of that online fetch. */
   syncedAt: string;
 };
 
