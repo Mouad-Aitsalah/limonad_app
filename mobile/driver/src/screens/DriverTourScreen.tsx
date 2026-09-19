@@ -9,6 +9,7 @@ import { MOBILE_HOME_ROUTE } from "@/lib/auth/browser-home-route";
 import type { DriverOfflineContext, NetworkState } from "@/lib/offline/driver-pos";
 import type { CurrentDriverTourDto } from "@/types/operations-dto";
 
+import { createShellQuickCustomerCreator } from "../lib/driver-customer-api";
 import { loadShellDriverTour } from "../lib/driver-tour-data-source";
 import { DriverTourRuntimeProvider } from "../lib/driver-tour-runtime";
 
@@ -89,11 +90,16 @@ export function DriverTourScreen({ token, offlineContext, deviceOnline, onBack }
     }
   }
 
+  // "Ajouter un client" on the map opens the compact name + GPS modal
+  // (QuickAddCustomerDialog, inside DriverTourView); this is only its Bearer
+  // transport - the full "Mes clients" form is a different screen.
+  const createQuickCustomer = React.useMemo(() => createShellQuickCustomerCreator(token), [token]);
+
   if (state.kind === "ready") {
     return (
       <div onClickCapture={interceptBackLink}>
         <DriverTourRuntimeProvider token={token} deviceOnline={deviceOnline}>
-          <DriverTourView currentTour={state.tour} readOnly />
+          <DriverTourView currentTour={state.tour} readOnly createQuickCustomer={createQuickCustomer} />
         </DriverTourRuntimeProvider>
       </div>
     );

@@ -21,6 +21,36 @@ import type { CustomerDto } from "@/types/operations-dto";
 
 type LatLng = { latitude: number; longitude: number; accuracy?: number | null };
 
+/** What the quick-add form submits - the API body of POST /api/driver/customers/quick. */
+export type QuickCustomerInput = {
+  name: string;
+  latitude: number;
+  longitude: number;
+  locationAccuracy: number | null;
+};
+
+/** Outcome of creating the customer: the created customer, or a message to show. */
+export type QuickCustomerResult = { customer?: CustomerDto; message?: string };
+
+/** Transport for the creation request. Omitted (the web app) -> the same-origin,
+ *  cookie-authenticated fetch below; the Android shell injects a Bearer one. */
+export type QuickCustomerCreator = (input: QuickCustomerInput) => Promise<QuickCustomerResult>;
+
+const SAVE_ERROR_MESSAGE = "Impossible d'enregistrer le client.";
+
+const postQuickCustomer: QuickCustomerCreator = async (input) => {
+  const response = await fetch("/api/driver/customers/quick", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = (await response.json()) as { customer?: CustomerDto; message?: string };
+  if (!response.ok || !payload.customer) {
+    return { message: payload.message ?? SAVE_ERROR_MESSAGE };
+  }
+  return { customer: payload.customer };
+};
+
 type QuickAddCustomerDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -29,6 +59,8 @@ type QuickAddCustomerDialogProps = {
    *  when the browser GPS hasn't produced a fix yet. */
   fallbackPosition: { latitude: number; longitude: number } | null;
   onCreated: (customer: CustomerDto) => void;
+  /** See QuickCustomerCreator - omitted on the web, injected by the Android shell. */
+  createCustomer?: QuickCustomerCreator;
 };
 
 function readGpsSeed(
@@ -65,6 +97,7 @@ function QuickAddCustomerBody({
   fallbackPosition,
   onOpenChange,
   onCreated,
+  createCustomer,
 }: Omit<QuickAddCustomerDialogProps, "open">) {
   const [name, setName] = React.useState("");
   const [coords, setCoords] = React.useState<LatLng | null>(() =>
@@ -108,26 +141,21 @@ function QuickAddCustomerBody({
     setSubmitting(true);
     setError(null);
     try {
-      const response = await fetch("/api/driver/customers/quick", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: trimmed,
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          locationAccuracy: coords.accuracy ?? null,
-        }),
+      const result = await (createCustomer ?? postQuickCustomer)({
+        name: trimmed,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        locationAccuracy: coords.accuracy ?? null,
       });
-      const payload = (await response.json()) as { customer?: CustomerDto; message?: string };
-      if (!response.ok || !payload.customer) {
-        setError(payload.message ?? "Impossible d'enregistrer le client.");
+      if (!result.customer) {
+        setError(result.message ?? SAVE_ERROR_MESSAGE);
         return;
       }
       toast.success("Client ajouté");
-      onCreated(payload.customer);
+      onCreated(result.customer);
       onOpenChange(false);
     } catch {
-      setError("Impossible d'enregistrer le client.");
+      setError(SAVE_ERROR_MESSAGE);
     } finally {
       setSubmitting(false);
     }
@@ -220,6 +248,7 @@ export function QuickAddCustomerDialog({
   gps,
   fallbackPosition,
   onCreated,
+  createCustomer,
 }: QuickAddCustomerDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -238,6 +267,7 @@ export function QuickAddCustomerDialog({
             fallbackPosition={fallbackPosition}
             onOpenChange={onOpenChange}
             onCreated={onCreated}
+            createCustomer={createCustomer}
           />
         ) : null}
       </DialogContent>

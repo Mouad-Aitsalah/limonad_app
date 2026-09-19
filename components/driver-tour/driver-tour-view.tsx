@@ -10,7 +10,10 @@ import { DriverTourHeader } from "@/components/driver-tour/driver-tour-header";
 import { SelectedCustomerCard } from "@/components/driver-tour/selected-customer-card";
 import { TourMapActions } from "@/components/driver-tour/tour-map-actions";
 import { TourCustomersSheet } from "@/components/driver-tour/tour-customers-sheet";
-import { QuickAddCustomerDialog } from "@/components/driver-tour/quick-add-customer-dialog";
+import {
+  QuickAddCustomerDialog,
+  type QuickCustomerCreator,
+} from "@/components/driver-tour/quick-add-customer-dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -62,6 +65,7 @@ const STOP_DETECTION_REFRESH_MS = 15_000;
 export function DriverTourView({
   currentTour,
   readOnly = false,
+  createQuickCustomer,
 }: {
   currentTour: CurrentDriverTourDto;
   /** ÉTAPE 28B - omitted (the web app's only call site) -> every action works
@@ -71,6 +75,11 @@ export function DriverTourView({
    *  shows an info toast instead of issuing a same-origin `fetch` that has no
    *  server behind it on the shell. */
   readOnly?: boolean;
+  /** Transport for the "Ajouter un client" quick-add modal's creation request.
+   *  Omitted (the web app) -> the modal's own same-origin cookie fetch; the
+   *  Android shell passes a Bearer one. Not a tour action, so it is NOT gated
+   *  by `readOnly`. */
+  createQuickCustomer?: QuickCustomerCreator;
 }) {
   const router = useRouter();
   const {
@@ -552,9 +561,7 @@ export function DriverTourView({
                     type="button"
                     variant="outline"
                     className="h-11 rounded-2xl bg-background/94 shadow-[0_14px_34px_rgba(15,23,42,0.14)] backdrop-blur"
-                    onClick={() => {
-                      if (!blockedByReadOnly()) setQuickAddOpen(true);
-                    }}
+                    onClick={() => setQuickAddOpen(true)}
                   >
                     <UserPlus className="h-4 w-4" />
                     Ajouter un client
@@ -825,6 +832,7 @@ export function DriverTourView({
       <QuickAddCustomerDialog
         open={quickAddOpen}
         onOpenChange={setQuickAddOpen}
+        createCustomer={createQuickCustomer}
         gps={gps}
         fallbackPosition={
           state.latestPosition

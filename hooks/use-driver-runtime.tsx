@@ -654,7 +654,7 @@ function toNearbySuggestion(
  * existing one keeps its visitStatus/lastEventAt/noSaleReason/distance
  * untouched, only its identity/address/coordinates are refreshed.
  */
-function mergeCustomerIntoCurrentTour(
+export function mergeCustomerIntoCurrentTour(
   current: CurrentDriverTourDto,
   customer: CustomerDto,
 ): CurrentDriverTourDto {

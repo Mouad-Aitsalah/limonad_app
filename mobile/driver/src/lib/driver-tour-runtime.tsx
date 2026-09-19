@@ -1,8 +1,8 @@
 import * as React from "react";
 
 import { useDriverGeolocation, type DriverGpsPosition } from "@/hooks/use-driver-geolocation";
-import { DriverRuntimeContext } from "@/hooks/use-driver-runtime";
-import type { CurrentDriverTourDto } from "@/types/operations-dto";
+import { DriverRuntimeContext, mergeCustomerIntoCurrentTour } from "@/hooks/use-driver-runtime";
+import type { CurrentDriverTourDto, CustomerDto } from "@/types/operations-dto";
 
 import { sendGpsPoint } from "./driver-gps-sender";
 import { GpsSyncPill } from "./gps-sync-pill";
@@ -50,6 +50,12 @@ export function DriverTourRuntimeProvider({
   const [syncState, setSyncState] = React.useState<GpsSyncState>("IDLE");
 
   const setTour = React.useCallback((tour: CurrentDriverTourDto) => setCurrentTour(tour), []);
+
+  // A customer created from the map's quick-add modal must show up on the tour
+  // map right away: same merge the web runtime applies (markers + selection).
+  const upsertCustomer = React.useCallback((customer: CustomerDto) => {
+    setCurrentTour((previous) => (previous ? mergeCustomerIntoCurrentTour(previous, customer) : previous));
+  }, []);
 
   const refreshCurrentTour = React.useCallback(async () => {
     const outcome = await mobileFetch<{ currentTour?: CurrentDriverTourDto }>("/api/driver/tour", token);
@@ -129,7 +135,7 @@ export function DriverTourRuntimeProvider({
       nearbyCustomer: null,
       dismissNearbyCustomer: () => undefined,
       markCustomerHandled: () => undefined,
-      upsertCustomer: () => undefined,
+      upsertCustomer,
       refreshCustomers: async () => [],
       refreshCurrentTour,
       refreshRuntime: async () => {
@@ -138,7 +144,7 @@ export function DriverTourRuntimeProvider({
       hydrateCurrentTour: setTour,
       replaceCurrentTour: setTour,
     }),
-    [currentTour, gps, refreshCurrentTour, setTour],
+    [currentTour, gps, refreshCurrentTour, setTour, upsertCustomer],
   );
 
   return (

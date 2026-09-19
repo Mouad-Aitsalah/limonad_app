@@ -5,7 +5,9 @@ import { DriverClientsView } from "@/components/driver-clients/driver-clients-vi
 import { NetworkStatusBadge } from "@/components/driver-pos/network-status-badge";
 import type { DriverOfflineContext, NetworkState } from "@/lib/offline/driver-pos";
 
+import { createShellSaveCustomerRequest } from "../lib/driver-customer-api";
 import { createShellCustomersPageFetcher } from "../lib/driver-clients-data-source";
+import { DriverTourRuntimeProvider } from "../lib/driver-tour-runtime";
 import { refreshFullDriverCustomerCache } from "../lib/driver-pos-data-source";
 
 type DriverClientsScreenProps = {
@@ -16,8 +18,8 @@ type DriverClientsScreenProps = {
   onCreateSale: (customerId: string) => void;
 };
 
-const MANAGE_CUSTOMERS_UNAVAILABLE_MESSAGE =
-  "Créer ou modifier un client n'est pas encore disponible sur cette version de l'application.";
+const EDIT_CUSTOMER_UNAVAILABLE_MESSAGE =
+  "Modifier un client n'est pas encore disponible sur cette version de l'application.";
 
 /**
  * PHASE 1 "RESTAURATION DU POS CHAUFFEUR" - ÉTAPE 21: renders the SAME "Mes
@@ -33,11 +35,15 @@ const MANAGE_CUSTOMERS_UNAVAILABLE_MESSAGE =
  * OFFLINE" requirement ("le cache doit être le cache complet ... pas limité
  * aux 20 premières suggestions").
  *
- * Create/edit ("Nouveau client"/"Modifier"/"Ajouter la localisation") is
- * deliberately disabled here (disableCustomerManagement) - see driver-
- * clients-view.tsx's own doc comment on that prop for exactly why (no
- * Bearer/CORS path on POST /api/driver/customers yet, no GPS runtime in this
- * shell) - consultation/recherche only for this étape.
+ * "Nouveau client" opens the FULL creation form (DriverCustomerForm: every
+ * field, optional location with "Utiliser ma position actuelle") and saves it
+ * over Bearer (POST /api/driver/customers). It is a different screen from the
+ * map's compact "Ajouter un client" modal (name + GPS only), which lives in
+ * "Ma tournee" - the two are never merged. The form's location section needs a
+ * GPS runtime, hence the DriverTourRuntimeProvider around the view (GPS is only
+ * read when the driver taps the button - no tracking, no tour involved).
+ * Editing an existing customer ("Modifier" / "Ajouter la localisation") stays
+ * unavailable in this version (disableCustomerEditing).
  */
 export function DriverClientsScreen({
   token,
@@ -75,6 +81,8 @@ export function DriverClientsScreen({
     [token, offlineContext.organizationId, offlineContext.driverId],
   );
 
+  const saveCustomerRequest = React.useMemo(() => createShellSaveCustomerRequest(token), [token]);
+
   const networkState: NetworkState = !deviceOnline ? "OFFLINE" : serverReachable ? "ONLINE" : "SERVER_UNREACHABLE";
 
   return (
@@ -94,11 +102,14 @@ export function DriverClientsScreen({
       </header>
 
       <div className="px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        <DriverClientsView
-          fetchCustomersPage={fetchCustomersPage}
-          onCreateSale={onCreateSale}
-          disableCustomerManagement={MANAGE_CUSTOMERS_UNAVAILABLE_MESSAGE}
-        />
+        <DriverTourRuntimeProvider token={token} deviceOnline={deviceOnline}>
+          <DriverClientsView
+            fetchCustomersPage={fetchCustomersPage}
+            onCreateSale={onCreateSale}
+            saveCustomerRequest={saveCustomerRequest}
+            disableCustomerEditing={EDIT_CUSTOMER_UNAVAILABLE_MESSAGE}
+          />
+        </DriverTourRuntimeProvider>
       </div>
     </div>
   );

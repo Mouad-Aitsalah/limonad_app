@@ -6,7 +6,7 @@ import {
   getCustomersForCurrentDriver,
 } from "@/lib/server/driver-customers";
 import { OperationsServiceError } from "@/lib/server/depots";
-import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { rejectUntrustedCookieOrigin } from "@/lib/server/csrf";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { reportUnexpected } from "@/lib/server/report-error";
 
@@ -16,9 +16,9 @@ import { reportUnexpected } from "@/lib/server/report-error";
  * data-source.ts's refreshFullDriverCustomerCache) to refresh cached_
  * customers with every customer this driver is allowed to see - not just
  * GET /api/driver/pos's small, bounded preload. Same CORS wiring as
- * app/api/driver/pos/route.ts. POST (used only by the web app's own
- * same-origin /driver/clients today) is left untouched - the shell does not
- * call it, so it keeps its existing cookie/CSRF-only protection.
+ * app/api/driver/pos/route.ts. POST is the web /driver/clients form's save
+ * and, from the shell's "Nouveau client", also called with a Bearer - see the
+ * comment above POST.
  */
 export async function OPTIONS(request: Request) {
   return handleMobilePreflight(request);
@@ -39,25 +39,39 @@ export async function GET(request: Request) {
   }
 }
 
+// POST is now also called by the driver shell ("Mes clients" -> "Nouveau
+// client", full form) with `Authorization: Bearer`: same pattern as the other
+// /api/driver/* routes opened in ÉTAPE 28A - CORS for the Capacitor origin, and
+// the cookie-CSRF origin check skipped ONLY for a Bearer request (no ambient
+// credential to ride on). The web's cookie + CSRF behavior is unchanged.
 export async function POST(request: Request) {
-  const csrfRejection = rejectUntrustedOrigin(request);
-  if (csrfRejection) return csrfRejection;
+  const csrfRejection = rejectUntrustedCookieOrigin(request);
+  if (csrfRejection) return withMobileCors(request, csrfRejection);
   try {
     const body = await request.json();
-    return NextResponse.json(
-      { customer: await createCustomerForCurrentDriver(body, body.id) },
-      { status: body.id ? 200 : 201 },
+    return withMobileCors(
+      request,
+      NextResponse.json(
+        { customer: await createCustomerForCurrentDriver(body, body.id) },
+        { status: body.id ? 200 : 201 },
+      ),
     );
   } catch (error) {
     if (error instanceof AuthServiceError) {
-      return NextResponse.json({ message: error.message }, { status: error.status });
+      return withMobileCors(request, NextResponse.json({ message: error.message }, { status: error.status }));
     }
     if (error instanceof OperationsServiceError) {
-      return NextResponse.json(
-        { message: error.message, fieldErrors: error.fieldErrors },
-        { status: error.status },
+      return withMobileCors(
+        request,
+        NextResponse.json(
+          { message: error.message, fieldErrors: error.fieldErrors },
+          { status: error.status },
+        ),
       );
     }
-    return NextResponse.json({ message: "Impossible d'enregistrer le client." }, { status: 500 });
+    return withMobileCors(
+      request,
+      NextResponse.json({ message: "Impossible d'enregistrer le client." }, { status: 500 }),
+    );
   }
 }

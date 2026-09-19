@@ -33,6 +33,31 @@ import type {
 
 const SEARCH_DEBOUNCE_MS = 400;
 
+/** Outcome of saving a customer from the full form (POST /api/driver/customers). */
+export type SaveCustomerResponse = {
+  ok: boolean;
+  payload: {
+    customer?: CustomerDto;
+    message?: string;
+    fieldErrors?: Record<string, string>;
+  };
+};
+
+/** Transport for the full form's save request. Omitted (the web app) -> the
+ *  same-origin, cookie-authenticated fetch below; the Android shell injects a
+ *  Bearer one (POST /api/driver/customers accepts both). */
+export type SaveCustomerRequest = (body: Record<string, unknown>) => Promise<SaveCustomerResponse>;
+
+const postCustomer: SaveCustomerRequest = async (body) => {
+  const response = await fetch("/api/driver/customers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json()) as SaveCustomerResponse["payload"];
+  return { ok: response.ok, payload };
+};
+
 /**
  * PHASE 1 "RESTAURATION DU POS CHAUFFEUR" - ÉTAPE 21 - "1. UPSERT CUSTOMER
  * DANS LE RUNTIME": the only DriverRuntimeContextValue member this file
@@ -64,6 +89,8 @@ export function DriverClientsView({
   fetchCustomersPage,
   onCreateSale,
   disableCustomerManagement,
+  saveCustomerRequest,
+  disableCustomerEditing,
 }: {
   initialPage?: DriverCustomersPageDto;
   initialSelectedCustomerId?: string | null;
@@ -86,6 +113,14 @@ export function DriverClientsView({
    *  infrastructure this shell doesn't have (see Étape 21's own audit) -
    *  deliberately NOT solved here, never silently faked. */
   disableCustomerManagement?: string;
+  /** Android shell: see SaveCustomerRequest. Omitted -> today's same-origin fetch. */
+  saveCustomerRequest?: SaveCustomerRequest;
+  /** Android shell: a non-null string blocks ONLY editing an existing customer
+   *  ("Modifier la fiche" / "Ajouter la localisation") with this message -
+   *  "Nouveau client" (the full creation form) stays available. Omitted (the web
+   *  app) -> nothing is blocked. Unlike disableCustomerManagement, which blocks
+   *  every entry point, creation is not affected. */
+  disableCustomerEditing?: string;
 }) {
   // Rules of Hooks: useRouter() is still called unconditionally on every
   // render, exactly like useAuth()/useDriverRuntime() elsewhere - only
@@ -134,6 +169,10 @@ export function DriverClientsView({
       toast.error(disableCustomerManagement);
       return;
     }
+    if (disableCustomerEditing && customer) {
+      toast.error(disableCustomerEditing);
+      return;
+    }
     setEditing(customer);
     setFocusLocation(focusLoc);
     setShowForm(true);
@@ -154,17 +193,8 @@ export function DriverClientsView({
   }, [customers, guaranteedCustomer, selectedCustomerId]);
 
   async function saveCustomer(input: CustomerMutationInput, id?: string) {
-    const response = await fetch("/api/driver/customers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...input, id }),
-    });
-    const payload = (await response.json()) as {
-      customer?: CustomerDto;
-      message?: string;
-      fieldErrors?: Record<string, string>;
-    };
-    if (!response.ok || !payload.customer) {
+    const { ok, payload } = await (saveCustomerRequest ?? postCustomer)({ ...input, id });
+    if (!ok || !payload.customer) {
       toast.error(payload.message ?? "Impossible d'enregistrer le client.");
       return payload.fieldErrors ?? { form: payload.message ?? "Erreur inconnue." };
     }
