@@ -29,6 +29,8 @@ import {
   refreshFullDriverCustomerCache,
   syncPendingDriverSalesForShell,
 } from "../lib/driver-pos-data-source";
+import { createShellQuickCustomerCreator } from "../lib/driver-customer-api";
+import { apiUrl } from "../lib/api-base";
 import { mobileFetch, type MobileFetchOutcome } from "../lib/mobile-fetch";
 import { useOrganizationIdentity } from "../lib/organization-identity";
 import { styles } from "../ui/styles";
@@ -98,6 +100,10 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
   const [serverReachable, setServerReachable] = React.useState(deviceOnline);
   const effectiveOnline = deviceOnline && serverReachable;
   const identity = useOrganizationIdentity(token);
+  const createQuickCustomer = React.useMemo(
+    () => createShellQuickCustomerCreator(token),
+    [token],
+  );
 
   // Light "site" theme (see .pos-light in styles.css) for the whole time the
   // POS is on screen. Also on <body>: the customer picker and the dialogs
@@ -234,10 +240,19 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
   const createSale = React.useCallback<DriverPosCreateSale>(
     async (input) => {
       if (!token) return { ok: false, message: "Session expiree. Reconnectez-vous." };
-      const outcome = await mobileFetch<{ sale?: SaleDto; message?: string }>("/api/driver/sales", token, {
+      const endpoint = "/api/driver/sales";
+      console.log("[POS-CHECKOUT-DEBUG] BEFORE REQUEST", {
+        url: apiUrl(endpoint),
+        tourId: context?.tour?.id ?? null,
+      });
+      const outcome = await mobileFetch<{ sale?: SaleDto; message?: string }>(endpoint, token, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
+      });
+      console.log("[POS-CHECKOUT-DEBUG] RESPONSE", {
+        status: "status" in outcome ? outcome.status : null,
+        body: outcome,
       });
       markReachable(outcome.kind);
       if (outcome.kind === "ok" && outcome.data.sale) return { ok: true, sale: outcome.data.sale };
@@ -247,7 +262,7 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
       }
       return { ok: false, message: "Reponse serveur incomplete." };
     },
-    [token, markReachable],
+    [context?.tour?.id, token, markReachable],
   );
 
   const fetchPendingSales = React.useCallback<DriverPosFetchPendingSales>(async () => {
@@ -377,7 +392,9 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
     );
   }
 
-  if (!context.canSell) {
+  // POS != tournee: a stale server/cache flag must not block checkout after a
+  // tour is closed. Only an empty product catalogue is a real POS blocker.
+  if (!context.canSell && context.products.length === 0) {
     return (
       <main style={styles.page}>
         <BackHeader onBack={onBack} />
@@ -432,6 +449,7 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
         showCustomerAccountNumberInTrigger
         resolveCustomerByNumber={resolveCustomerByNumber}
         showResolvedCustomerConfirmation
+        createQuickCustomer={createQuickCustomer}
       />
       </div>
     </div>

@@ -17,6 +17,7 @@ import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { markCustomerDeliveredOnTour } from "@/lib/server/driver-tour";
+import { closeExpiredActiveToursAtCutoff } from "@/lib/server/tours";
 import { signOfflinePrice, verifyOfflinePriceToken } from "@/lib/server/offline-price-token";
 import {
   mapSaleToDto,
@@ -84,6 +85,7 @@ export async function getDriverPosContext(
   initialCustomerId?: string | null,
 ): Promise<DriverPosContextDto> {
   const user = await requireOrganizationUser(["driver"]);
+  await closeExpiredActiveToursAtCutoff(user.organizationId);
   if (!user.driverId) {
     return blockedContext("Aucun camion n'est affecte a votre compte.", {
       id: "",
@@ -202,12 +204,11 @@ export async function getDriverPosContext(
     : [];
   const levelByProductId = new Map(levels.map((level) => [level.productId, level]));
 
-  const canSell = Boolean(activeTour) && pageProducts.length > 0;
-  const message = !activeTour
-    ? "Demarrez votre tournee avant de vendre."
-    : pageProducts.length > 0
-      ? undefined
-      : "Aucun produit actif n'est disponible.";
+  // POS et tournee sont deux flux metier distincts. Une vente chauffeur peut
+  // donc etre creee sans tournee active (tourId restera null); lorsqu'une
+  // tournee existe, elle continue naturellement a etre associee au ticket.
+  const canSell = pageProducts.length > 0;
+  const message = pageProducts.length > 0 ? undefined : "Aucun produit actif n'est disponible.";
 
   return {
     canSell,
@@ -273,6 +274,7 @@ export async function createDriverSale(
   if (!user.driverId || !user.truckId) {
     throw new OperationsServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
+  await closeExpiredActiveToursAtCutoff(user.organizationId);
   // See createCounterSale for the collectNow contract. collectNow:false is
   // the driver "Préparer la facture" path: DRAFT sale, "BR-..." ref, stock
   // moved, no payment/accounting/official number until collectDriverSale.
@@ -326,14 +328,9 @@ export async function createDriverSale(
         throw new OperationsServiceError("Profil chauffeur ou camion invalide.", 403);
       }
 
-      // F3 (Phase 2 audit): a driver sale is only ever allowed while their
-      // truck has a genuinely IN_PROGRESS tour. Scoped by driverId AND
-      // truckId AND organizationId (all session-derived, never from the
-      // client) so this can only ever match this driver's own tour in their
-      // own organization - never another driver's or another org's. Once
-      // "Fin de tournee" moves the tour to WAITING_FOR_CLOSURE (or it never
-      // started at all), this query returns nothing and the sale is refused
-      // below, before any stock is touched.
+      // A tour is optional for a driver sale. When present, it is still
+      // resolved exclusively from the authenticated driver/truck scope; the
+      // client never supplies tourId.
       const activeTour = await tx.tour.findFirst({
         where: {
           organizationId: user.organizationId,
@@ -348,12 +345,9 @@ export async function createDriverSale(
         },
         orderBy: { startedAt: "desc" },
       });
-      if (!activeTour) {
-        throw new OperationsServiceError(
-          "Aucune tournee active. Demarrez votre tournee avant de vendre.",
-          409,
-        );
-      }
+      console.log("[POS-SERVER-DEBUG] activeTour", {
+        id: activeTour?.id ?? null,
+      });
       if (
         !driver.truck.stockLocation ||
         driver.truck.stockLocation.type !== "TRUCK" ||
@@ -361,6 +355,10 @@ export async function createDriverSale(
       ) {
         throw new OperationsServiceError("Stock camion introuvable.", 404);
       }
+
+      console.log("[POS-SERVER-DEBUG] creating sale", {
+        tourId: activeTour?.id ?? null,
+      });
 
       const customer = parsed.data.customerId
         ? await tx.customer.findFirst({
@@ -585,9 +583,9 @@ export async function createDriverSale(
           depotId: driver.truck.depotId,
           driverId: driver.id,
           truckId: driver.truck.id,
-          // Always the tour found above, imposed server-side - the client
-          // never supplies tourId (driverSaleSchema has no such field).
-          tourId: activeTour.id,
+          // The client never supplies tourId. Keep the current active tour
+          // association when there is one, otherwise leave it nullable.
+          tourId: activeTour?.id ?? null,
           stockLocationId: driver.truck.stockLocation.id,
           subtotalHT,
           discountAmount,
@@ -688,7 +686,7 @@ export async function createDriverSale(
         });
       }
 
-      if (customer) {
+      if (customer && activeTour) {
         await markCustomerDeliveredOnTour(tx, activeTour.id, customer.id);
       }
 

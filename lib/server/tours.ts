@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { BUSINESS_DAY_TIME_ZONE } from "@/lib/business-day";
 import { roundMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import type { TourGetPayload } from "@/lib/generated/prisma/models/Tour";
@@ -171,6 +172,7 @@ export function mapTourToSummaryDto(tour: TourWithRelations): TourSummaryDto {
 
 export async function getTours(): Promise<TourDto[]> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  await closeExpiredActiveToursAtCutoff(currentUser.organizationId);
   const tours = await prisma.tour.findMany({
     where: { organizationId: currentUser.organizationId },
     include: tourInclude,
@@ -181,6 +183,7 @@ export async function getTours(): Promise<TourDto[]> {
 
 export async function getTourById(id: string): Promise<TourDto> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  await closeExpiredActiveToursAtCutoff(currentUser.organizationId);
   const tour = await getTourRecordById(id, currentUser.organizationId);
   if (!tour) throw new OperationsServiceError("Fiche journaliere introuvable.", 404);
   return mapTourToDto(tour);
@@ -457,6 +460,7 @@ export async function startTour(tourId: string): Promise<TourDto> {
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
+  await closeExpiredActiveToursAtCutoff(user.organizationId);
 
   const tour = await prisma.$transaction(
     async (tx) => {
@@ -510,6 +514,7 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
+  await closeExpiredActiveToursAtCutoff(user.organizationId);
 
   try {
     const tour = await withTourSerializableRetry(() =>
@@ -628,6 +633,7 @@ export async function markTourReturned(tourId: string): Promise<TourDto> {
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
+  await closeExpiredActiveToursAtCutoff(user.organizationId);
 
   const tour = await prisma.$transaction(async (tx) => {
     const existing = await tx.tour.findFirst({
@@ -674,6 +680,7 @@ export async function markCurrentDriverTourReturned(tourId?: string): Promise<To
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
+  await closeExpiredActiveToursAtCutoff(user.organizationId);
 
   if (tourId) return markTourReturned(tourId);
 
@@ -982,6 +989,7 @@ export async function getActiveTourForDriver(
   driverId: string,
   organizationId: string,
 ): Promise<TourDto | null> {
+  await closeExpiredActiveToursAtCutoff(organizationId);
   const tour = await prisma.tour.findFirst({
     where: {
       organizationId,
@@ -1009,6 +1017,7 @@ export async function getToursForDriver(
   driverId: string,
   organizationId: string,
 ): Promise<TourDto[]> {
+  await closeExpiredActiveToursAtCutoff(organizationId);
   const tours = await prisma.tour.findMany({
     where: { driverId, organizationId },
     include: tourInclude,
@@ -1021,6 +1030,7 @@ export async function getToursForTruck(
   truckId: string,
   organizationId: string,
 ): Promise<TourDto[]> {
+  await closeExpiredActiveToursAtCutoff(organizationId);
   const tours = await prisma.tour.findMany({
     where: { truckId, organizationId },
     include: tourInclude,
@@ -1033,6 +1043,65 @@ async function getTourRecordById(id: string, organizationId: string) {
   return prisma.tour.findFirst({
     where: { id, organizationId },
     include: tourInclude,
+  });
+}
+
+/**
+ * Request-driven server reconciliation for the daily tour/GPS cutoff.
+ *
+ * This is deliberately independent from the Android/WebView lifecycle: the
+ * first server request at or after 18:00 closes stale IN_PROGRESS tours. The
+ * conditional update is idempotent, so retries and concurrent requests do
+ * not create a second closure. POS calls this reconciliation before resolving
+ * its optional tour association as well.
+ */
+export async function closeExpiredActiveToursAtCutoff(
+  organizationId?: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: BUSINESS_DAY_TIME_ZONE,
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).format(now),
+  );
+  if (hour < 18) return 0;
+
+  return prisma.$transaction(async (tx) => {
+    const activeTours = await tx.tour.findMany({
+      where: {
+        ...(organizationId ? { organizationId } : {}),
+        status: "IN_PROGRESS",
+      },
+      select: { id: true, truckId: true },
+    });
+    if (activeTours.length === 0) return 0;
+
+    const closedAt = now;
+    const closed = await tx.tour.updateMany({
+      where: {
+        id: { in: activeTours.map((tour) => tour.id) },
+        status: "IN_PROGRESS",
+      },
+      data: {
+        status: "CLOSED",
+        returnedAt: closedAt,
+        closedAt,
+      },
+    });
+
+    if (closed.count > 0) {
+      await tx.truck.updateMany({
+        where: {
+          id: { in: activeTours.map((tour) => tour.truckId) },
+          status: "ON_TOUR",
+        },
+        data: { status: "AVAILABLE" },
+      });
+    }
+
+    return closed.count;
   });
 }
 

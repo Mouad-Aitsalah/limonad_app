@@ -7,6 +7,7 @@ import {
   CreditCard,
   LoaderCircle,
   MessageCircle,
+  Plus,
   Printer,
   RefreshCw,
   ShoppingCart,
@@ -48,6 +49,10 @@ import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product"
 import { ProductSearch } from "@/components/pos/product-search";
 import { type SupplierOption } from "@/components/pos/supplier-filter";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
+import {
+  QuickAddCustomerDialog,
+  type QuickCustomerCreator,
+} from "@/components/driver-tour/quick-add-customer-dialog";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
@@ -344,6 +349,7 @@ export function DriverPosView({
   showCustomerAccountNumberInTrigger,
   resolveCustomerByNumber,
   showResolvedCustomerConfirmation,
+  createQuickCustomer,
 }: {
   initialContext: DriverPosContextDto;
   initialCustomerId?: string | null;
@@ -395,6 +401,8 @@ export function DriverPosView({
    *  generalized CustomerNumberInput (\u00c9TAPE 5). */
   resolveCustomerByNumber?: CustomerNumberResolver;
   showResolvedCustomerConfirmation?: boolean;
+  /** Reuses the existing quick customer form; Android supplies its Bearer transport. */
+  createQuickCustomer?: QuickCustomerCreator;
 }) {
   // Rules of Hooks: every hook below is still called unconditionally, on
   // every render, exactly as before this step - only WHICH value ends up
@@ -471,6 +479,7 @@ export function DriverPosView({
   const [selectedCustomer, setSelectedCustomer] = React.useState<CustomerDto | null>(() =>
     resolveInitialCustomer(initialContext, initialCustomerId),
   );
+  const [quickAddCustomerOpen, setQuickAddCustomerOpen] = React.useState(false);
   const [paymentMethod, setPaymentMethod] = React.useState<PosPaymentMethodValue>("CASH");
   // BANK_TRANSFER only: chosen active 5141 account id (mandatory before a
   // bank-transfer sale). Only sent when paymentMethod === "BANK_TRANSFER".
@@ -1481,7 +1490,11 @@ export function DriverPosView({
     }
   }
 
-  if (!context.canSell) {
+  // POS != tournee: an old/lagging context may still carry canSell=false
+  // after a tour has been closed even though the product catalogue is valid.
+  // Only an actually empty catalogue can make this screen unavailable; the
+  // tour status must never block sales.
+  if (!context.canSell && context.products.length === 0) {
     return <StateCard message={context.message ?? "La vente est impossible."} />;
   }
 
@@ -1608,6 +1621,16 @@ export function DriverPosView({
                 </div>
                 <Badge variant="outline">{formatCurrency(totals.ttc)}</Badge>
               </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-center rounded-2xl"
+                onClick={() => setQuickAddCustomerOpen(true)}
+              >
+                <Plus aria-hidden="true" className="size-4" />
+                Ajouter un client
+              </Button>
 
               <div className="grid gap-3 max-lg:grid-cols-[7fr_3fr] max-lg:[&>*]:min-w-0 max-lg:[&>*:last-child]:col-span-2">
                 <div className="min-w-0">
@@ -1764,6 +1787,13 @@ export function DriverPosView({
         onPrint={() => {
           if (collectTarget) printPending(collectTarget);
         }}
+      />
+      <QuickAddCustomerDialog
+        open={quickAddCustomerOpen}
+        onOpenChange={setQuickAddCustomerOpen}
+        createCustomer={createQuickCustomer}
+        fallbackPosition={null}
+        onCreated={setSelectedCustomer}
       />
       <ReceiptPrint sale={lastSale} offlineReference={offlineTicketReference} identity={identity} />
       <OfflineSalesDialog
