@@ -8,10 +8,12 @@ export function getVisibleNavItems(role: UserRole | undefined): NavItem[] {
   if (!role) return [];
   if (role === "driver") return driverNavItems;
 
-  const allowed = (item: { roles?: UserRole[] }) =>
-    role === "super_admin"
+  const hiddenForCashier = new Set(["/dashboard", "/comptabilite/journal"]);
+  const allowed = (item: { roles?: UserRole[]; href?: string }) =>
+    !(role === "cashier" && item.href && hiddenForCashier.has(item.href)) &&
+    (role === "super_admin"
       ? item.roles?.includes(role) ?? false
-      : !item.roles || item.roles.includes(role);
+      : !item.roles || item.roles.includes(role));
 
   return navItems.filter(allowed).flatMap((item) => {
     const children = item.children?.filter(allowed);
