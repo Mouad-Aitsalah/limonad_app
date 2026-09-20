@@ -64,7 +64,7 @@ type QuickAddCustomerDialogProps = {
 };
 
 function readGpsSeed(
-  gps: QuickAddCustomerDialogProps["gps"],
+  gps: ReturnType<typeof useDriverGeolocation>,
   fallback: QuickAddCustomerDialogProps["fallbackPosition"],
 ): LatLng | null {
   const p = gps.reliablePosition ?? gps.lastKnownPosition;
@@ -135,6 +135,10 @@ function QuickAddCustomerBody({
     }
     if (!isUsableCoord(coords)) {
       setError("Placez le client sur la carte (position GPS indisponible).");
+      return;
+    }
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setError("La création d'un client nécessite une connexion Internet.");
       return;
     }
 

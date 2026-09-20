@@ -61,6 +61,7 @@ import {
   type PosProductRemoteSearch,
 } from "@/components/pos/use-pos-product-search";
 import { AuthContext } from "@/hooks/use-auth";
+import { useDriverGeolocation } from "@/hooks/use-driver-geolocation";
 import { useCompanyIdentity, type CompanyIdentity } from "@/hooks/use-company-identity";
 import { DriverRuntimeContext } from "@/hooks/use-driver-runtime";
 import { useNetworkState } from "@/hooks/use-network-status";
@@ -480,6 +481,10 @@ export function DriverPosView({
     resolveInitialCustomer(initialContext, initialCustomerId),
   );
   const [quickAddCustomerOpen, setQuickAddCustomerOpen] = React.useState(false);
+  const quickAddGps = useDriverGeolocation({
+    active: quickAddCustomerOpen,
+    onReliablePosition: () => {},
+  });
   const [paymentMethod, setPaymentMethod] = React.useState<PosPaymentMethodValue>("CASH");
   // BANK_TRANSFER only: chosen active 5141 account id (mandatory before a
   // bank-transfer sale). Only sent when paymentMethod === "BANK_TRANSFER".
@@ -1791,6 +1796,7 @@ export function DriverPosView({
       <QuickAddCustomerDialog
         open={quickAddCustomerOpen}
         onOpenChange={setQuickAddCustomerOpen}
+        gps={quickAddGps}
         createCustomer={createQuickCustomer}
         fallbackPosition={null}
         onCreated={setSelectedCustomer}
