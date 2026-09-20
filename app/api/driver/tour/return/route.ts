@@ -18,7 +18,11 @@ export async function POST(request: Request) {
   const csrfRejection = rejectUntrustedCookieOrigin(request);
   if (csrfRejection) return withMobileCors(request, csrfRejection);
   try {
-    return withMobileCors(request, NextResponse.json({ tour: await markCurrentDriverTourReturned() }));
+    const body = (await request.json().catch(() => null)) as { tourId?: unknown } | null;
+    const tourId = typeof body?.tourId === "string" && body.tourId.trim().length > 0
+      ? body.tourId.trim()
+      : undefined;
+    return withMobileCors(request, NextResponse.json({ tour: await markCurrentDriverTourReturned(tourId) }));
   } catch (error) {
     reportUnexpected(error, {
       route: "POST /api/driver/tour/return",

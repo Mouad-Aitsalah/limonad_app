@@ -21,7 +21,7 @@ export type SyncStatus =
   | "SYNC_ERROR"
   | "REQUIRES_REVIEW";
 
-export type OutboxOperation = "CREATE" | "UPDATE" | "DELETE";
+export type OutboxOperation = "CREATE" | "UPDATE" | "DELETE" | "RETURN";
 
 /**
  * One cached snapshot of "who this device is currently logged in as" for
@@ -196,6 +196,7 @@ export type SyncOutboxEntry = {
   entityType: string;
   entityLocalId: string;
   operation: OutboxOperation;
+  payloadJson: string | null;
   createdAt: string;
   attemptCount: number;
   nextAttemptAt: string | null;

@@ -37,6 +37,7 @@ export {
 } from "./sales-store";
 
 export {
+  deleteOutboxEntry,
   deleteOutboxEntriesForEntity,
   enqueueSyncOperation,
   getPendingOutboxEntries,

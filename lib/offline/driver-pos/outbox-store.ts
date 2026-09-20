@@ -16,19 +16,29 @@ export async function enqueueSyncOperation(entry: {
   entityType: string;
   entityLocalId: string;
   operation: OutboxOperation;
+  payloadJson?: string | null;
 }): Promise<boolean> {
   const result = await withDatabase(async (db) => {
+    const existing = await db.query(
+      `SELECT id FROM sync_outbox
+       WHERE entityType = ? AND entityLocalId = ? AND operation = ? AND lockedAt IS NULL
+       LIMIT 1`,
+      [entry.entityType, entry.entityLocalId, entry.operation],
+    );
+    if ((existing.values ?? []).length > 0) return true;
+
     await db.run(
       `INSERT INTO sync_outbox (
          id, entityType, entityLocalId, operation, createdAt,
-         attemptCount, nextAttemptAt, lastError, lockedAt
-       ) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL)`,
+         attemptCount, nextAttemptAt, lastError, lockedAt, payloadJson
+       ) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?)`,
       [
         `outbox_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         entry.entityType,
         entry.entityLocalId,
         entry.operation,
         nowIso(),
+        entry.payloadJson ?? null,
       ],
     );
     return true;
@@ -49,6 +59,14 @@ export async function enqueueSyncOperation(entry: {
 export async function deleteOutboxEntriesForEntity(entityLocalId: string): Promise<boolean> {
   const result = await withDatabase(async (db) => {
     await db.run(`DELETE FROM sync_outbox WHERE entityLocalId = ?`, [entityLocalId]);
+    return true;
+  });
+  return result ?? false;
+}
+
+export async function deleteOutboxEntry(id: string): Promise<boolean> {
+  const result = await withDatabase(async (db) => {
+    await db.run(`DELETE FROM sync_outbox WHERE id = ?`, [id]);
     return true;
   });
   return result ?? false;
@@ -75,5 +93,6 @@ function mapOutboxRow(row: Record<string, unknown>): SyncOutboxEntry {
     nextAttemptAt: (row.nextAttemptAt as string | null) ?? null,
     lastError: (row.lastError as string | null) ?? null,
     lockedAt: (row.lockedAt as string | null) ?? null,
+    payloadJson: (row.payloadJson as string | null) ?? null,
   };
 }

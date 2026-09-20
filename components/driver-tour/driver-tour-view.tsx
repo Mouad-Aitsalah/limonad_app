@@ -66,6 +66,7 @@ export function DriverTourView({
   currentTour,
   readOnly = false,
   createQuickCustomer,
+  returnTour,
 }: {
   currentTour: CurrentDriverTourDto;
   /** ÉTAPE 28B - omitted (the web app's only call site) -> every action works
@@ -75,6 +76,8 @@ export function DriverTourView({
    *  shows an info toast instead of issuing a same-origin `fetch` that has no
    *  server behind it on the shell. */
   readOnly?: boolean;
+  /** Android shell transport for the existing return action. */
+  returnTour?: () => Promise<{ currentTour: CurrentDriverTourDto; mode: "online" | "offline" }>;
   /** Transport for the "Ajouter un client" quick-add modal's creation request.
    *  Omitted (the web app) -> the modal's own same-origin cookie fetch; the
    *  Android shell passes a Bearer one. Not a tour action, so it is NOT gated
@@ -261,7 +264,10 @@ export function DriverTourView({
   }
 
   async function confirmReturnTour() {
-    if (blockedByReadOnly()) return;
+    if (readOnly && !returnTour) {
+      blockedByReadOnly();
+      return;
+    }
     if (endingTour) {
       return;
     }
@@ -269,6 +275,17 @@ export function DriverTourView({
     setEndingTour(true);
 
     try {
+      if (returnTour) {
+        const result = await returnTour();
+        resetTourUi(result.currentTour);
+        toast.success(
+          result.mode === "offline"
+            ? "Tour terminee hors ligne. Synchronisation en attente."
+            : "Tour terminee.",
+        );
+        return;
+      }
+
       const response = await fetch("/api/driver/tour/return", { method: "POST" });
       const payload = (await response.json()) as {
         tour?: unknown;
@@ -583,7 +600,8 @@ export function DriverTourView({
                     onOpenCustomers={() => setCustomersSheetOpen(true)}
                     onStartTour={startNewTour}
                     onReturnTour={() => {
-                      if (!blockedByReadOnly()) setShowReturnConfirmation(true);
+                      if (!readOnly || returnTour) setShowReturnConfirmation(true);
+                      else blockedByReadOnly();
                     }}
                     formatAmount={formatCurrency}
                   />

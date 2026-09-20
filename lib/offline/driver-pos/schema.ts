@@ -346,6 +346,14 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       )`,
     ],
   },
+  {
+    // Stores the immutable tour id for a return operation replayed after reconnect.
+    // Nullable and additive: existing outbox rows and all existing data remain unchanged.
+    version: 6,
+    statements: [
+      `ALTER TABLE sync_outbox ADD COLUMN payloadJson TEXT`,
+    ],
+  },
 ];
 
 /** Highest version defined above - passed to the plugin's own

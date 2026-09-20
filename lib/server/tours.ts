@@ -669,11 +669,13 @@ export async function markTourReturned(tourId: string): Promise<TourDto> {
   return mapTourToDto(tour);
 }
 
-export async function markCurrentDriverTourReturned(): Promise<TourDto> {
+export async function markCurrentDriverTourReturned(tourId?: string): Promise<TourDto> {
   const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
     throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
   }
+
+  if (tourId) return markTourReturned(tourId);
 
   const activeTour = await prisma.tour.findFirst({
     where: {

@@ -6,12 +6,15 @@ import { NetworkStatusBadge } from "@/components/driver-pos/network-status-badge
 import { toast } from "sonner";
 
 import { MOBILE_HOME_ROUTE } from "@/lib/auth/browser-home-route";
+import { getCachedDriverTour } from "@/lib/offline/driver-pos";
 import type { DriverOfflineContext, NetworkState } from "@/lib/offline/driver-pos";
 import type { CurrentDriverTourDto } from "@/types/operations-dto";
 
 import { createShellQuickCustomerCreator } from "../lib/driver-customer-api";
 import { loadShellDriverTour } from "../lib/driver-tour-data-source";
+import { returnShellDriverTour } from "../lib/driver-tour-actions";
 import { DriverTourRuntimeProvider } from "../lib/driver-tour-runtime";
+import { onDriverOfflineSyncCompleted } from "../lib/driver-offline-events";
 
 type DriverTourScreenProps = {
   token: string | null;
@@ -63,6 +66,18 @@ export function DriverTourScreen({ token, offlineContext, deviceOnline, onBack }
     };
   }, [token, offlineContext, deviceOnline, attempt]);
 
+  React.useEffect(() => {
+    return onDriverOfflineSyncCompleted((detail) => {
+      if (detail.syncedCount === 0) return;
+      void getCachedDriverTour({
+        organizationId: offlineContext.organizationId,
+        driverId: offlineContext.driverId,
+      }).then((cached) => {
+        if (cached) setState({ kind: "ready", tour: cached.tour, source: "cache", syncedAt: cached.syncedAt });
+      });
+    });
+  }, [offlineContext]);
+
   // The historical view has no "offline data" indicator of its own (and must
   // stay untouched), so tell the driver once when what is shown is the copy
   // saved on this device rather than a fresh answer.
@@ -95,11 +110,33 @@ export function DriverTourScreen({ token, offlineContext, deviceOnline, onBack }
   // transport - the full "Mes clients" form is a different screen.
   const createQuickCustomer = React.useMemo(() => createShellQuickCustomerCreator(token), [token]);
 
+  const returnTour = React.useCallback(async () => {
+    if (state.kind !== "ready") throw new Error("La tournee est encore en chargement.");
+    const result = await returnShellDriverTour({
+      token,
+      offlineContext,
+      currentTour: state.tour,
+      deviceOnline,
+    });
+    setState({
+      kind: "ready",
+      tour: result.currentTour,
+      source: result.mode === "offline" ? "cache" : "server",
+      syncedAt: result.mode === "offline" ? null : new Date().toISOString(),
+    });
+    return result;
+  }, [deviceOnline, offlineContext, state, token]);
+
   if (state.kind === "ready") {
     return (
       <div onClickCapture={interceptBackLink}>
         <DriverTourRuntimeProvider token={token} deviceOnline={deviceOnline}>
-          <DriverTourView currentTour={state.tour} readOnly createQuickCustomer={createQuickCustomer} />
+          <DriverTourView
+            currentTour={state.tour}
+            readOnly
+            createQuickCustomer={createQuickCustomer}
+            returnTour={returnTour}
+          />
         </DriverTourRuntimeProvider>
       </div>
     );
