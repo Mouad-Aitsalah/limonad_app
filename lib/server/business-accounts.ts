@@ -249,6 +249,7 @@ function customerBranch(organizationId: string): Prisma.Sql {
   return Prisma.sql`
     SELECT 'customer:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
            'CUSTOMER'::text AS type, phone, email, address, city,
+           NULL::text AS "logoUrl",
            latitude::float8 AS latitude, longitude::float8 AS longitude,
            "creditLimit"::float8 AS "creditLimit",
            "creditLimitEnabled"::boolean AS "creditLimitEnabled",
@@ -262,6 +263,7 @@ function supplierBranch(organizationId: string): Prisma.Sql {
   return Prisma.sql`
     SELECT 'supplier:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
            'SUPPLIER'::text AS type, phone, email, address, city,
+           "logoUrl",
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
            NULL::boolean AS "creditLimitEnabled",
@@ -277,6 +279,7 @@ function expenseBranch(organizationId: string): Prisma.Sql {
     SELECT 'expense:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
            'EXPENSE'::text AS type, NULL::text AS phone, NULL::text AS email,
            NULL::text AS address, NULL::text AS city,
+           NULL::text AS "logoUrl",
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
            NULL::boolean AS "creditLimitEnabled",
@@ -292,6 +295,7 @@ function treasuryBranch(organizationId: string): Prisma.Sql {
     SELECT 'treasury:' || id AS id, id AS "sourceId", code AS "accountNumber", name,
            'TREASURY'::text AS type, NULL::text AS phone, NULL::text AS email,
            NULL::text AS address, NULL::text AS city,
+           NULL::text AS "logoUrl",
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
            NULL::boolean AS "creditLimitEnabled",
@@ -307,6 +311,7 @@ function employeeBranch(organizationId: string): Prisma.Sql {
     SELECT 'employee-account:' || acc.id AS id, acc.id AS "sourceId", acc.code AS "accountNumber",
            acc.name, 'EMPLOYEE'::text AS type, NULL::text AS phone, NULL::text AS email,
            NULL::text AS address, NULL::text AS city,
+           NULL::text AS "logoUrl",
            NULL::float8 AS latitude, NULL::float8 AS longitude,
            NULL::float8 AS "creditLimit",
            NULL::boolean AS "creditLimitEnabled",
@@ -323,6 +328,7 @@ type RawAccountRow = {
   sourceId: string;
   accountNumber: string;
   name: string;
+  logoUrl: string | null;
   type: BusinessAccountListItem["type"];
   phone: string | null;
   email: string | null;
@@ -346,6 +352,7 @@ function mapRawRowToListItem(
     sourceId: row.sourceId,
     accountNumber: row.accountNumber,
     name: row.name,
+    logoUrl: row.logoUrl,
     type: row.type,
     phone: row.phone,
     creditLimit: row.creditLimit,

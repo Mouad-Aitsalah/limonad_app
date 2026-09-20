@@ -21,6 +21,11 @@ enum UserStatus {
   BLOCKED
 }
 
+enum AiConversationMessageRole {
+  USER
+  ASSISTANT
+}
+
 enum OrganizationStatus {
   ACTIVE
   INACTIVE
@@ -362,6 +367,7 @@ model User {
   cancelledExpenses            Expense[]             @relation("ExpenseCancelledBy")
   createdCustomerSettlements   CustomerSettlement[]  @relation("CustomerSettlementCreatedBy")
   cancelledCustomerSettlements CustomerSettlement[]  @relation("CustomerSettlementCancelledBy")
+  aiConversations              AiConversation[]      @relation("AiConversationCreatedBy")
   createdAt                    DateTime              @default(now())
   updatedAt                    DateTime              @updatedAt
 
@@ -450,8 +456,34 @@ model Organization {
   inventories          Inventory[]
   expenses             Expense[]
   customerSettlements  CustomerSettlement[]
+  aiConversations      AiConversation[]
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
+}
+
+model AiConversation {
+  organizationId  String
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id              String                 @id @default(cuid())
+  createdByUserId String
+  createdByUser   User                   @relation("AiConversationCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  title           String?
+  messages        AiConversationMessage[]
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@index([organizationId, createdByUserId, updatedAt(sort: Desc)])
+}
+
+model AiConversationMessage {
+  id             String                    @id @default(cuid())
+  conversationId String
+  conversation   AiConversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           AiConversationMessageRole
+  content        String
+  createdAt      DateTime                  @default(now())
+
+  @@index([conversationId, createdAt])
 }
 
 model Depot {
@@ -573,6 +605,7 @@ model Supplier {
   id             String       @id @default(cuid())
   code           String
   name           String
+  logoUrl        String?
   phone          String?
   email          String?
   address        String?

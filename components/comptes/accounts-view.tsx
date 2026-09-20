@@ -181,6 +181,7 @@ export function AccountsView({ initialPage, accountingAccounts }: AccountsViewPr
             sort={sort}
             onSortChange={handleSortChange}
             onEdit={setEditingAccount}
+            onLogoChanged={refreshAccounts}
           />
         </CardContent>
       </Card>

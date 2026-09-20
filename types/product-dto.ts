@@ -30,6 +30,7 @@ export interface ProductDto {
 export type ProductOptionDto = {
   id: string;
   name: string;
+  logoUrl?: string | null;
 };
 
 /**

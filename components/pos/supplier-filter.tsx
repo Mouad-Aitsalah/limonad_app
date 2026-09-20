@@ -13,7 +13,7 @@ import {
   ComboboxItem,
 } from "@/components/ui/combobox";
 
-export type SupplierOption = { id: string; name: string };
+export type SupplierOption = { id: string; name: string; logoUrl?: string | null };
 
 // Sentinel row so "Tous les fournisseurs" is an explicit choice in the list,
 // not only the empty/placeholder state.

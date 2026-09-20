@@ -226,7 +226,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
         salePrice: true,
         taxRate: true,
         defaultSupplierId: true,
-        defaultSupplier: { select: { name: true } },
+        defaultSupplier: { select: { name: true, logoUrl: true } },
       },
       orderBy: { name: "asc" },
       take: POS_PRODUCT_LIST_LIMIT + 1,
@@ -280,6 +280,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
       supplierId: product.defaultSupplierId,
       supplierName: product.defaultSupplier?.name ?? null,
+      supplierLogoUrl: product.defaultSupplier?.logoUrl ?? null,
     };
   });
 

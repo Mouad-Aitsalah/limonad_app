@@ -95,7 +95,7 @@ export function MobileSupplierPicker({
               {selected ? <Check aria-hidden="true" className="size-4" /> : null}
             </span>
             <span className="flex min-w-0 items-center gap-1.5">
-              <Truck aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+              <SupplierIcon supplier={supplier} />
               <span className={cn("truncate text-sm text-foreground", selected && "font-medium")}>
                 {supplier.name}
               </span>
@@ -105,4 +105,23 @@ export function MobileSupplierPicker({
       />
     </div>
   );
+}
+
+function SupplierIcon({ supplier }: { supplier: SupplierOption }) {
+  const [failed, setFailed] = React.useState(false);
+
+  if (supplier.logoUrl && !failed) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={supplier.logoUrl}
+        alt=""
+        loading="lazy"
+        className="size-9 shrink-0 rounded-lg border border-border bg-muted/40 object-contain p-0.5"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return <Truck aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />;
 }

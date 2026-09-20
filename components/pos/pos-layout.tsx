@@ -254,13 +254,17 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   // them. Null = "Tous les fournisseurs" = today's behaviour untouched.
   const [supplierFilter, setSupplierFilter] = React.useState<SupplierOption | null>(null);
   const supplierOptions = React.useMemo<SupplierOption[]>(() => {
-    const byId = new Map<string, string>();
+    const byId = new Map<string, SupplierOption>();
     for (const product of allKnownProducts) {
       if (product.supplierId && product.supplierName) {
-        byId.set(product.supplierId, product.supplierName);
+        byId.set(product.supplierId, {
+          id: product.supplierId,
+          name: product.supplierName,
+          logoUrl: product.supplierLogoUrl ?? null,
+        });
       }
     }
-    return Array.from(byId, ([id, name]) => ({ id, name })).sort((a, b) =>
+    return Array.from(byId.values()).sort((a, b) =>
       a.name.localeCompare(b.name, "fr"),
     );
   }, [allKnownProducts]);

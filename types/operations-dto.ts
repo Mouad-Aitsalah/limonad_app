@@ -595,6 +595,7 @@ export interface SupplierPartnerDto {
   id: string;
   code: string;
   name: string;
+  logoUrl?: string | null;
   phone?: string | null;
   email?: string | null;
   address?: string | null;
@@ -643,6 +644,7 @@ export interface DriverPosProductDto {
    *  mobile "Fournisseur" filter only - never affects visibility or stock. */
   supplierId?: string | null;
   supplierName?: string | null;
+  supplierLogoUrl?: string | null;
   /** PHASE 4A.1 - signed HMAC token attesting salePriceTTC was genuinely
    *  issued by the server just now (see lib/server/offline-price-token.ts).
    *  Cached offline alongside the price and frozen onto the offline sale

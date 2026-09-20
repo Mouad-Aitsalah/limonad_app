@@ -17,6 +17,7 @@ export type BusinessAccountListItem = {
   sourceId: string;
   accountNumber: string;
   name: string;
+  logoUrl?: string | null;
   type: BusinessAccountListType;
   phone: string | null;
   creditLimit: number | null;
