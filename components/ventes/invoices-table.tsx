@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Ban, Eye, FileX, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Ban, ChevronDown, ChevronRight, Eye, FileX, Loader2, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -28,12 +28,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { InvoiceDetailDialog } from "@/components/ventes/invoice-detail-dialog";
+import {
+  fetchInvoiceDetail,
+  InvoiceDetailDialog,
+} from "@/components/ventes/invoice-detail-dialog";
+import { InvoiceDetailInline } from "@/components/ventes/invoice-detail-inline";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
 import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency } from "@/lib/utils";
-import type { SaleHistoryListItemDto } from "@/types/operations-dto";
+import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
 
 type InvoicesTableProps = {
   invoices: SaleHistoryListItemDto[];
@@ -66,10 +70,36 @@ export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
     currentUser?.role === "admin" || currentUser?.role === "super_admin";
 
   const [viewingInvoice, setViewingInvoice] = React.useState<SaleHistoryListItemDto | null>(null);
+  const [expandedInvoiceId, setExpandedInvoiceId] = React.useState<string | null>(null);
+  const [expandedDetail, setExpandedDetail] = React.useState<
+    { id: string; sale: SaleDto } | { id: string; error: string } | null
+  >(null);
   const [cancelTarget, setCancelTarget] = React.useState<SaleHistoryListItemDto | null>(null);
   const [cancelling, setCancelling] = React.useState(false);
 
   const cancelIsDraft = cancelTarget?.status === "DRAFT";
+
+  React.useEffect(() => {
+    if (!expandedInvoiceId) return;
+
+    let cancelled = false;
+
+    fetchInvoiceDetail("/api/sales", expandedInvoiceId).then((outcome) => {
+      if (cancelled) return;
+      if (!outcome.ok) {
+        setExpandedDetail({ id: expandedInvoiceId, error: outcome.message });
+      } else {
+        setExpandedDetail({ id: expandedInvoiceId, sale: outcome.sale });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedInvoiceId]);
+
+  const expandedLoading =
+    expandedInvoiceId !== null && expandedDetail?.id !== expandedInvoiceId;
 
   async function confirmCancel() {
     if (!cancelTarget) return;
@@ -114,6 +144,9 @@ export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="w-10">
+              <span className="sr-only">Déplier</span>
+            </TableHead>
             <TableHead>Commande</TableHead>
             <TableHead>Date</TableHead>
             <TableHead>Client</TableHead>
@@ -134,8 +167,26 @@ export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
               CANCELLABLE_STATUSES.has(invoice.status) &&
               invoice.origin === "COUNTER";
             const isDraft = invoice.status === "DRAFT";
+            const expanded = expandedInvoiceId === invoice.id;
             return (
-              <TableRow key={invoice.id}>
+              <React.Fragment key={invoice.id}>
+                <TableRow>
+                <TableCell className="px-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`${expanded ? "Replier" : "Déplier"} la commande ${invoice.displayNumber}`}
+                    aria-expanded={expanded}
+                    onClick={() => setExpandedInvoiceId(expanded ? null : invoice.id)}
+                  >
+                    {expanded ? (
+                      <ChevronDown aria-hidden="true" className="h-4 w-4" />
+                    ) : (
+                      <ChevronRight aria-hidden="true" className="h-4 w-4" />
+                    )}
+                  </Button>
+                </TableCell>
                 <TableCell className="font-medium text-foreground">
                   {invoice.displayNumber}
                 </TableCell>
@@ -204,7 +255,26 @@ export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
-              </TableRow>
+                </TableRow>
+                {expanded ? (
+                  <TableRow>
+                    <TableCell colSpan={11} className="bg-muted/10 p-3 sm:p-4">
+                      {expandedLoading ? (
+                        <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                          Chargement du détail...
+                        </div>
+                      ) : expandedDetail && "error" in expandedDetail ? (
+                        <p className="py-8 text-center text-sm text-destructive">
+                          {expandedDetail.error}
+                        </p>
+                      ) : expandedDetail && "sale" in expandedDetail ? (
+                        <InvoiceDetailInline listItem={invoice} sale={expandedDetail.sale} />
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </React.Fragment>
             );
           })}
         </TableBody>

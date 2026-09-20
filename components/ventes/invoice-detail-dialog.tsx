@@ -55,7 +55,10 @@ type InvoiceDetailDialogProps = {
   fetchSale?: (id: string) => Promise<InvoiceDetailFetchOutcome>;
 };
 
-async function defaultFetchSale(fetchBase: string, id: string): Promise<InvoiceDetailFetchOutcome> {
+export async function fetchInvoiceDetail(
+  fetchBase: string,
+  id: string,
+): Promise<InvoiceDetailFetchOutcome> {
   try {
     const response = await fetch(`${fetchBase}/${id}`);
     const body = (await response.json()) as { sale?: SaleDto; message?: string };
@@ -91,7 +94,7 @@ export function InvoiceDetailDialog({
   React.useEffect(() => {
     if (!open || !listItem) return;
     let cancelled = false;
-    const load = fetchSale ?? ((id: string) => defaultFetchSale(fetchBase, id));
+    const load = fetchSale ?? ((id: string) => fetchInvoiceDetail(fetchBase, id));
     load(listItem.id).then((outcome) => {
       if (cancelled) return;
       if (!outcome.ok) {
