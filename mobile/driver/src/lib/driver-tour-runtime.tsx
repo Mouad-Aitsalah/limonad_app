@@ -1,10 +1,14 @@
 import * as React from "react";
+import { Capacitor } from "@capacitor/core";
 
 import { useDriverGeolocation, type DriverGpsPosition } from "@/hooks/use-driver-geolocation";
 import { DriverRuntimeContext, mergeCustomerIntoCurrentTour } from "@/hooks/use-driver-runtime";
+import { enqueueGpsPoint } from "@/lib/gps/gps-offline-queue";
+import { deriveClientPingId } from "@/lib/gps/gps-utils";
 import type { CurrentDriverTourDto, CustomerDto } from "@/types/operations-dto";
 
 import { sendGpsPoint } from "./driver-gps-sender";
+import { useDriverGpsRuntimeStatus } from "./driver-gps-status-context";
 import { GpsSyncPill } from "./gps-sync-pill";
 import { mobileFetch } from "./mobile-fetch";
 
@@ -23,15 +27,23 @@ type RuntimeValue = NonNullable<React.ContextType<typeof DriverRuntimeContext>>;
  * permission / denied / GPS off / timeout / accuracy / status classification all
  * come from it. It only runs while the tour is IN_PROGRESS AND this screen is
  * mounted - closing the app or leaving the screen stops it (no background GPS).
+ * This foreground watch feeds the on-screen map/proximity feature; it stays
+ * tour-scoped on purpose (a map with no tour has nothing to show).
  *
  * Sending: every reliable fix the hook releases (already throttled to one per
  * >=15 s or >=20 m, lib/gps/gps-config.ts) is POSTed to /location/batch over
  * Bearer (driver-gps-sender.ts). Offline, the watch keeps running (status stays
- * live) but nothing is sent AND nothing is stored: the fix is dropped - the
- * offline GPS queue is a later étape. One request in flight at a time.
+ * live) but the fix is queued locally (lib/gps/gps-offline-queue.ts) instead of
+ * sent, and flushed once back online.
  *
- * Still not the historical provider: no customer proximity feed, no native
- * background tracker, no GPS queue flush - each is a later étape.
+ * NEW RULE (GPS/tournee/chargement independence) - the GPS *badge* shown by
+ * DriverTourHeader must NOT be read from this tour-scoped foreground watch
+ * alone: on native platforms the real tracker is the App-level, clock-driven
+ * DriverGpsRuntime (driver-gps-runtime.tsx), which runs independently of any
+ * tour. `gps.status` exposed below is therefore overridden with that real
+ * background status on native platforms (see useDriverGpsRuntimeStatus),
+ * keeping this hook's own richer position/permission fields untouched for
+ * whatever still legitimately depends on the foreground watch itself.
  */
 export type GpsSyncState = "IDLE" | "SENDING" | "SYNCED" | "OFFLINE" | "ERROR" | "REJECTED" | "UNAUTHORIZED";
 
@@ -94,6 +106,17 @@ export function DriverTourRuntimeProvider({
       console.info("[gps] fix", position.latitude, position.longitude, position.recordedAt, `acc=${position.accuracy ?? "?"}`, `online=${onlineRef.current}`);
     }
     if (!onlineRef.current) {
+      const capturedAtMs = Date.parse(position.recordedAt);
+      void enqueueGpsPoint({
+        tourId: activeTourId,
+        clientPingId: deriveClientPingId("n", capturedAtMs, position.latitude, position.longitude),
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        speed: position.speed,
+        heading: position.heading,
+        capturedAt: position.recordedAt,
+      });
       setSyncState("OFFLINE");
       return;
     }
@@ -121,11 +144,16 @@ export function DriverTourRuntimeProvider({
   }, []);
 
   const isTourInProgress = currentTour?.tour?.status === "IN_PROGRESS";
-  const gps = useDriverGeolocation({
+  const foregroundGps = useDriverGeolocation({
     active: isTourInProgress,
     initialPosition: null,
     onReliablePosition: handleReliablePosition,
   });
+  const nativeGpsStatus = useDriverGpsRuntimeStatus();
+  const gps = React.useMemo(
+    () => (Capacitor.isNativePlatform() ? { ...foregroundGps, status: nativeGpsStatus } : foregroundGps),
+    [foregroundGps, nativeGpsStatus],
+  );
 
   const value = React.useMemo<RuntimeValue>(
     () => ({

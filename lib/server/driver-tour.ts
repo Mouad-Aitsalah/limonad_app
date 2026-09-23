@@ -20,7 +20,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { signTrackingToken } from "@/lib/server/tracking-token";
-import { getClaimableLoadingForTruck, getLoadingByTourId } from "@/lib/server/truck-loadings";
+import { getLoadingByTourId } from "@/lib/server/truck-loadings";
 import {
   getActiveTourForDriver,
   getTodayTourDate,
@@ -113,18 +113,15 @@ export async function getCurrentDriverTour(): Promise<CurrentDriverTourDto> {
       );
     }
 
-    const claimableLoading = await getClaimableLoadingForTruck(
-      prisma,
-      user.organizationId,
-      startContext.truck.id,
-    );
-
+    // NEW RULE (GPS/tournee/chargement independence): a chargement is no
+    // longer a precondition to start a tour - claimLoadingAndStartTour
+    // already tolerates having none. Whether or not the truck currently has
+    // a claimable loading no longer changes canStart or the message; it
+    // only used to gate this via getClaimableLoadingForTruck.
     return emptyCurrentTour(
-      claimableLoading
-        ? "Vous pouvez commencer une nouvelle tournee."
-        : "Aucune tournee prete avec chargement valide.",
+      "Vous pouvez commencer une nouvelle tournee.",
       startContext,
-      Boolean(claimableLoading),
+      true,
     );
   }
 
@@ -1213,17 +1210,22 @@ function mapVisitStatus(
 }
 
 function driverTourMessage(tour: TourDto) {
+  // NEW RULE (GPS/tournee/chargement independence): the tour's own status is
+  // what the driver needs to see first - a tour can now be IN_PROGRESS (or
+  // WAITING_FOR_CLOSURE) with no loading attached at all (see
+  // claimLoadingAndStartTour), which used to be unreachable and fell through
+  // to the "en preparation" branch below by mistake.
+  if (tour.status === "IN_PROGRESS") {
+    return "Votre tournee est en cours.";
+  }
+  if (tour.status === "WAITING_FOR_CLOSURE") {
+    return "Votre retour est enregistre. La tournee est en attente de cloture.";
+  }
   if (!tour.loading || tour.loading.status !== "VALIDATED") {
     return "Votre tournee est en preparation. Le chargement n'est pas encore valide.";
   }
   if (tour.status === "LOADED") {
     return "Votre chargement est pret. Vous pouvez demarrer la tournee.";
-  }
-  if (tour.status === "WAITING_FOR_CLOSURE") {
-    return "Votre retour est enregistre. La tournee est en attente de cloture.";
-  }
-  if (tour.status === "IN_PROGRESS") {
-    return "Votre tournee est en cours.";
   }
   throw new OperationsServiceError("Statut de tournee incompatible.", 409);
 }

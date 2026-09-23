@@ -32,6 +32,7 @@ function createMessage(role: ChatMessage["role"], content: string): ChatMessage 
 export function AssistantChat() {
   const [messages, setMessages] = React.useState<ChatMessage[]>([welcomeMessage]);
   const [message, setMessage] = React.useState("");
+  const [conversationId, setConversationId] = React.useState<string | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
@@ -53,10 +54,14 @@ export function AssistantChat() {
       const response = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmedMessage }),
+        body: JSON.stringify({
+          message: trimmedMessage,
+          ...(conversationId ? { conversationId } : {}),
+        }),
       });
       const data = (await response.json().catch(() => ({}))) as {
         response?: string;
+        conversationId?: string;
         message?: string;
       };
 
@@ -65,6 +70,7 @@ export function AssistantChat() {
         return;
       }
 
+      if (data.conversationId) setConversationId(data.conversationId);
       setMessages((current) => [
         ...current,
         createMessage("assistant", data.response ?? "Je n’ai pas pu générer de réponse."),

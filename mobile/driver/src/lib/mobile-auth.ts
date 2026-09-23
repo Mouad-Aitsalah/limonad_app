@@ -1,5 +1,5 @@
 import { apiUrl } from "./api-base";
-import { removeMobileAccessToken, saveMobileAccessToken } from "./secure-token-storage";
+import { removeMobileAccessToken, saveMobileAccessToken, saveMobileProfile } from "./secure-token-storage";
 
 /**
  * PHASE 5A.1/5A.2 - client side of the mobile Bearer auth flow (see
@@ -59,6 +59,12 @@ export async function loginMobile(email: string, password: string): Promise<Mobi
   }
 
   await saveMobileAccessToken(payload.accessToken);
+  await saveMobileProfile({
+    id: payload.user.id,
+    nom: payload.user.nom,
+    organizationId: payload.user.organizationId ?? null,
+    driverId: payload.user.driverId ?? null,
+  });
   return { success: true, accessToken: payload.accessToken, user: payload.user };
 }
 

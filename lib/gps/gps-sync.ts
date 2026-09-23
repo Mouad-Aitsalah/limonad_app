@@ -39,10 +39,15 @@ let lastFlushAt = 0;
 let backoffMs = BACKOFF_BASE_MS;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let resolveActiveTourId: (() => string | null) | null = null;
+let syncTransport: { endpoint?: string; headers?: Record<string, string> } = {};
 
 /** Called once by the driver runtime: how to read the currently active tour id. */
-export function configureGpsSync(resolver: () => string | null): void {
+export function configureGpsSync(
+  resolver: () => string | null,
+  transport: { endpoint?: string; headers?: Record<string, string> } = {},
+): void {
   resolveActiveTourId = resolver;
+  syncTransport = transport;
 }
 
 /**
@@ -111,9 +116,9 @@ export async function flushGpsQueue(
 
       let response: Response;
       try {
-        response = await fetch(BATCH_ENDPOINT, {
+        response = await fetch(syncTransport.endpoint ?? BATCH_ENDPOINT, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...(syncTransport.headers ?? {}) },
           credentials: "include",
           body: JSON.stringify({
             tourId,

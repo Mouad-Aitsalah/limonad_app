@@ -14,6 +14,10 @@ import { apiUrl } from "./api-base";
 
 const MOBILE_FETCH_TIMEOUT_MS = 10000;
 
+/** The network_error message a timed-out call carries - exported so callers can
+ *  tell "the server was too slow" from "no connection" without a new outcome kind. */
+export const MOBILE_FETCH_TIMEOUT_MESSAGE = "Delai d'attente depasse.";
+
 export type MobileFetchOutcome<T> =
   | { kind: "ok"; status: number; data: T }
   | { kind: "unauthorized" }
@@ -56,7 +60,7 @@ export async function mobileFetch<T = unknown>(
   } catch (error) {
     const message =
       error instanceof DOMException && error.name === "AbortError"
-        ? "Delai d'attente depasse."
+        ? MOBILE_FETCH_TIMEOUT_MESSAGE
         : error instanceof Error
           ? error.message
           : "Erreur reseau.";

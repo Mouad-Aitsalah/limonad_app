@@ -39,6 +39,19 @@ const config: CapacitorConfig = {
   android: {
     useLegacyBridge: true,
   },
+
+  plugins: {
+    CapacitorSQLite: {
+      // The plugin defaults to androidIsEncryption=true, which makes its native
+      // load() create an Android Keystore master key + EncryptedSharedPreferences
+      // ("sqlite_encrypted_shared_prefs") even though every COMDIS database is
+      // opened with mode "no-encryption" and no secret is ever stored. If that
+      // prefs file is restored from an Android backup without its Keystore key
+      // (VERIFICATION_FAILED), the plugin never initializes and every SQLite call
+      // fails with "CapacitorSQLitePlugin: null". Not needed -> off.
+      androidIsEncryption: false,
+    },
+  },
 };
 
 export default config;

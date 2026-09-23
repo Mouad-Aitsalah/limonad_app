@@ -30,11 +30,19 @@ function findByAccountNumber(customers: CustomerDto[], trimmed: string): Custome
  * `customers` list to fall back to. Fixed: it now takes the same cached
  * `context.customers` the picker uses and resolves locally via
  * customerAccountNumber(...) (the exact helper the server route itself
- * uses - lib/customer-code.ts - so "N deg client" means the same thing
- * online and offline). Offline (or no token), it resolves purely locally
- * with zero network attempt. Online, server-first behavior is unchanged,
- * but a failed lookup (non-ok response or network error) now falls back
- * to the local match instead of immediately showing "Client introuvable."
+ * uses - lib/customer-code.ts - so "N° client" means the same thing online
+ * and offline).
+ *
+ * BUG-05 "8. RÉSOLUTION AUTOMATIQUE" / "6. RECHERCHE ONLINE" follow-up: the
+ * local cache is now checked FIRST, unconditionally - online or offline. A
+ * customer already known locally resolves instantly with zero network wait
+ * even while online (the earlier version tried the server first every time
+ * it had a token, forcing a spinner/round-trip for a number that was
+ * already sitting in `customers`). The server is only ever consulted as a
+ * fallback for a genuine local cache miss - never trusted over an already-
+ * matched local row - and a failed/unreachable server there still falls
+ * back to nothing worse than "Client introuvable" (never a resynced sale,
+ * never a fabricated match).
  */
 export function ShellCustomerNumberInput({
   token,
@@ -70,15 +78,20 @@ export function ShellCustomerNumberInput({
       return;
     }
 
+    // "6./8." - local cache checked FIRST, unconditionally: a number
+    // already known on this device resolves instantly, online or offline,
+    // with zero network wait. The server is only ever a fallback for a
+    // genuine local cache miss (see this file's own doc comment).
+    const localMatch = findByAccountNumber(customers, trimmed);
+    if (localMatch) {
+      onResolved(localMatch);
+      toast.success(`Client ${localMatch.displayCode} - ${localMatch.name}`);
+      setError(null);
+      return;
+    }
+
     if (!online || !token) {
-      const localMatch = findByAccountNumber(customers, trimmed);
-      if (localMatch) {
-        onResolved(localMatch);
-        toast.success(`Client ${localMatch.displayCode} - ${localMatch.name}`);
-        setError(null);
-      } else {
-        setError("Client introuvable hors connexion.");
-      }
+      setError("Client introuvable hors connexion.");
       return;
     }
 
@@ -91,28 +104,14 @@ export function ShellCustomerNumberInput({
       });
       const body = (await response.json()) as { customer?: CustomerDto; message?: string };
       if (!response.ok || !body.customer) {
-        const localMatch = findByAccountNumber(customers, trimmed);
-        if (localMatch) {
-          onResolved(localMatch);
-          toast.success(`Client ${localMatch.displayCode} - ${localMatch.name}`);
-          setError(null);
-        } else {
-          setError(body.message ?? "Client introuvable.");
-        }
+        setError(body.message ?? "Client introuvable.");
         return;
       }
       onResolved(body.customer);
       toast.success(`Client ${body.customer.displayCode} - ${body.customer.name}`);
       setError(null);
     } catch {
-      const localMatch = findByAccountNumber(customers, trimmed);
-      if (localMatch) {
-        onResolved(localMatch);
-        toast.success(`Client ${localMatch.displayCode} - ${localMatch.name}`);
-        setError(null);
-      } else {
-        setError("Recherche impossible.");
-      }
+      setError("Recherche impossible.");
     } finally {
       setLoading(false);
     }
@@ -121,7 +120,7 @@ export function ShellCustomerNumberInput({
   return (
     <div className="flex flex-col gap-1">
       <Label htmlFor="shell-customer-number" className="text-xs text-muted-foreground">
-        N Client
+        N° Client
       </Label>
       <div className="relative">
         <Hash aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -130,7 +129,7 @@ export function ShellCustomerNumberInput({
           value={value}
           placeholder={placeholder}
           inputMode="numeric"
-          className={cn("h-9 pl-9", error && "border-destructive")}
+          className={cn("h-11 pl-9 text-base", error && "border-destructive")}
           onChange={(event) => {
             setValue(event.target.value);
             if (event.target.value.trim() === "") {
@@ -147,6 +146,16 @@ export function ShellCustomerNumberInput({
           onBlur={() => void lookup()}
         />
       </div>
+      {/* "7. N° CLIENT" - a persistent confirmation once the typed number
+          matches the currently-resolved customer, so the driver has more
+          than a transient toast to confirm who the sale is for - mutually
+          exclusive with `error` (both are cleared together on every
+          successful resolution and on every edit). */}
+      {!error && customer && value.trim() === customerAccountNumber(customer.code) ? (
+        <p className="text-xs font-medium text-emerald-700">
+          ✓ {customer.displayCode} — {customer.name}
+        </p>
+      ) : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );

@@ -7,9 +7,12 @@ import type { DriverPosContextDto } from "@/types/operations-dto";
 
 import { deriveRestingBootState, runBootSequence, type BootState } from "./lib/auth-state";
 import { syncPendingDriverSalesForShell } from "./lib/driver-pos-data-source";
-import { mobileFetch } from "./lib/mobile-fetch";
+import { syncPendingDriverTourReturnsForShell } from "./lib/driver-tour-sync";
+import { DriverGpsRuntime } from "./lib/driver-gps-runtime";
 import { logoutMobile, type MobileUser } from "./lib/mobile-auth";
+import { bootstrapOfflineData, type OfflineBootstrapError } from "./lib/offline-bootstrap";
 import { refreshOfflineContextFromServer } from "./lib/refresh-offline-context";
+import { getMobileProfile, type StoredMobileProfile } from "./lib/secure-token-storage";
 import type { Screen } from "./navigation";
 import { DriverClientsScreen } from "./screens/DriverClientsScreen";
 import { DriverLauncherScreen } from "./screens/DriverLauncherScreen";
@@ -36,6 +39,16 @@ export function App() {
   const [token, setToken] = React.useState<string | null>(null);
   const [screen, setScreen] = React.useState<Screen>("HOME");
   const [logoutPending, setLogoutPending] = React.useState(false);
+  // ÉTAPE OFFLINE-BOOTSTRAP - preparing this device's offline data (after a
+  // login, or when a valid token finds no offline_context). While "running" the
+  // UI shows a loading state, never the "no offline data" message; a failure is
+  // latched in "error" (with a classified message + Retry/Logout) so nothing
+  // loops and nothing fails silently.
+  const [bootstrap, setBootstrap] = React.useState<OfflineBootstrapState>({ kind: "idle" });
+  const [booted, setBooted] = React.useState(false);
+  const profileRef = React.useRef<StoredMobileProfile | null>(null);
+  const preloadedPosRef = React.useRef<DriverPosContextDto | null>(null);
+  const bootstrapInFlightRef = React.useRef(false);
 
   const hasBootedRef = React.useRef(false);
   // Kept in sync with bootState on every update (see updateBootState) so the
@@ -58,12 +71,19 @@ export function App() {
       const context = await getAnyDriverOfflineContext();
       if (!active) return;
       setOfflineContext(context);
+      profileRef.current = await getMobileProfile();
 
       const result = await runBootSequence({ online: isNetworkAvailable(), context });
       if (!active) return;
+      // A valid token with NO offline context: keep the POS context the boot
+      // check just fetched so the rebuild below does not repeat the call.
+      if (result.token && result.driverPosContext && !context) {
+        preloadedPosRef.current = result.driverPosContext;
+      }
       setToken(result.token);
       updateBootState(result.bootState);
       hasBootedRef.current = true;
+      setBooted(true);
 
       // CORRECTION CONTEXTE OFFLINE - the boot-time restoration check above
       // already fetched a full DriverPosContextDto when it succeeded; reuse
@@ -137,33 +157,74 @@ export function App() {
       { organizationId: offlineContext.organizationId, driverId: offlineContext.driverId },
       token,
     );
+    void syncPendingDriverTourReturnsForShell(offlineContext, token);
   }, [online, token, offlineContext]);
 
-  async function handleLoginSuccess(newToken: string, newUser: MobileUser) {
-    setToken(newToken);
-
-    // CORRECTION CONTEXTE OFFLINE - fetch the SAME full context
-    // (DriverPosContextDto) the web app's driver-pos page loads, then
-    // hydrate offline_context from it via the shared, unchanged
-    // hydrateDriverOfflineCache (see refresh-offline-context.ts). Requires
-    // organizationId/driverId, which every real driver login response
-    // carries; a role/account without them (see mobile-auth.ts's
-    // MobileUser) simply has no offline context to build yet.
-    if (newUser.organizationId && newUser.driverId) {
-      const posOutcome = await mobileFetch<{ context: DriverPosContextDto }>("/api/driver/pos", newToken);
-      if (posOutcome.kind === "ok") {
-        await refreshOfflineContextFromServer({
-          token: newToken,
-          organizationId: newUser.organizationId,
-          userId: newUser.id,
-          userName: newUser.nom,
-          driverPosContext: posOutcome.data.context,
-        });
-      }
+  const runBootstrapOnce = React.useCallback(async (authToken: string) => {
+    setBootstrap({ kind: "running" });
+    const profile = profileRef.current ?? (await getMobileProfile());
+    if (!profile) {
+      // Token from an older install that never stored the login profile: the
+      // user/org ids cannot be invented - a fresh login is the honest way out.
+      setBootstrap({
+        kind: "error",
+        error: {
+          stage: "profile",
+          kind: "no_driver_profile",
+          status: null,
+          message: "Profil utilisateur introuvable sur cet appareil. Deconnectez-vous puis reconnectez-vous.",
+        },
+      });
+      return;
     }
-
-    setOfflineContext(await getAnyDriverOfflineContext());
+    profileRef.current = profile;
+    const preloaded = preloadedPosRef.current;
+    preloadedPosRef.current = null;
+    const result = await bootstrapOfflineData({ token: authToken, profile, preloadedPosContext: preloaded });
+    if (!result.ok) {
+      setBootstrap({ kind: "error", error: result.error });
+      return;
+    }
+    setOfflineContext(result.context);
+    setBootstrap({ kind: "idle" });
     setScreen("HOME");
+  }, []);
+
+  const runBootstrap = React.useCallback(async (authToken: string) => {
+    // Single-flight: a double tap on Retry / a re-fired effect never starts two runs.
+    if (bootstrapInFlightRef.current) return;
+    bootstrapInFlightRef.current = true;
+    try {
+      await runBootstrapOnce(authToken);
+    } finally {
+      bootstrapInFlightRef.current = false;
+    }
+  }, [runBootstrapOnce]);
+
+  // Rebuilds the offline data whenever the device is online with a valid
+  // token but has none (relaunch after an interrupted/failed first login, or
+  // coming back online after starting offline without a cache). Never runs
+  // with an existing context (normal/offline start untouched), and never
+  // re-runs after a failure (bootstrap.kind stays "error" until Retry).
+  React.useEffect(() => {
+    if (!booted || !token || !online || offlineContext || bootstrap.kind !== "idle") return;
+    queueMicrotask(() => void runBootstrap(token));
+  }, [booted, token, online, offlineContext, bootstrap.kind, runBootstrap]);
+
+  async function handleLoginSuccess(newToken: string, newUser: MobileUser) {
+    if (import.meta.env.DEV) console.log("[OFFLINE BOOT] login success");
+    profileRef.current = {
+      id: newUser.id,
+      nom: newUser.nom,
+      organizationId: newUser.organizationId ?? null,
+      driverId: newUser.driverId ?? null,
+    };
+    preloadedPosRef.current = null;
+    // Loading state FIRST, then the token: the token flips the auth state to
+    // AUTHENTICATED, and that must never be visible without offline data.
+    setBootstrap({ kind: "running" });
+    setToken(newToken);
+    await runBootstrap(newToken);
   }
 
   async function handleLogout() {
@@ -172,6 +233,9 @@ export function App() {
       await logoutMobile(token);
     } finally {
       setToken(null);
+      setBootstrap({ kind: "idle" });
+      profileRef.current = null;
+      preloadedPosRef.current = null;
       setScreen("HOME");
       setLogoutPending(false);
     }
@@ -188,12 +252,39 @@ export function App() {
     );
   }
 
+  if (bootstrap.kind === "running") {
+    return <OfflineBootstrapView />;
+  }
+
+  if (bootstrap.kind === "error") {
+    return (
+      <NoLocalDataView
+        error={bootstrap.error}
+        online={online}
+        logoutPending={logoutPending}
+        onRetry={() => token && void runBootstrap(token)}
+        onLogout={() => void handleLogout()}
+      />
+    );
+  }
+
   if (bootState.kind === "LOGIN_REQUIRED" || bootState.kind === "SESSION_EXPIRED") {
     return <LoginScreen bootState={bootState} online={online} onLoginSuccess={handleLoginSuccess} />;
   }
 
   if (bootState.kind === "NO_OFFLINE_DATA" || !offlineContext) {
-    return <NoLocalDataView authenticated={bootState.kind === "AUTHENTICATED"} />;
+    // Online with a token: the effect above is about to (re)build the data -
+    // show progress, not a dead-end message.
+    if (token && online) return <OfflineBootstrapView />;
+    return (
+      <NoLocalDataView
+        error={null}
+        online={online}
+        logoutPending={logoutPending}
+        onRetry={() => token && void runBootstrap(token)}
+        onLogout={() => void handleLogout()}
+      />
+    );
   }
 
   // By elimination, bootState is now AUTHENTICATED or OFFLINE_CONTEXT_ONLY,
@@ -201,6 +292,7 @@ export function App() {
   return (
     <>
       <Toaster position="top-center" richColors />
+      <DriverGpsRuntime token={token} online={online}>
       {(() => {
         switch (screen) {
           case "OFFLINE_SALES":
@@ -275,31 +367,75 @@ export function App() {
             );
         }
       })()}
+      </DriverGpsRuntime>
     </>
   );
 }
 
-/**
- * "15. PREMIER LANCEMENT SANS CACHE" - and its edge-case sibling: a fresh
- * login that succeeded (AUTHENTICATED) but this device still has no local
- * SQLite context (either a non-driver account, or SQLite itself unavailable
- * in this environment - see database.ts's own fail-soft design). Never a
- * crash, never an infinite spinner - always this one clear message.
- */
-function NoLocalDataView({ authenticated }: { authenticated: boolean }) {
+type OfflineBootstrapState =
+  | { kind: "idle" }
+  | { kind: "running" }
+  | { kind: "error"; error: OfflineBootstrapError };
+
+/** Shown while the offline data is being prepared - a normal step, not an error. */
+function OfflineBootstrapView() {
   return (
     <main style={styles.page}>
       <header style={styles.header}>
         <h1 style={styles.title}>COMDIS Driver</h1>
       </header>
       <section style={styles.card}>
-        <p style={styles.muted}>
-          {authenticated
-            ? "Connecte, mais aucune donnee hors connexion n'est disponible sur cet appareil."
-            : "Aucune donnee hors connexion disponible."}
-          <br />
-          {authenticated ? "Reessayez une fois la mise en cache disponible." : "Connectez-vous une premiere fois avec Internet."}
+        <p style={{ ...styles.muted, display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
+          <span
+            aria-hidden="true"
+            className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent"
+          />
+          Preparation des donnees hors connexion...
         </p>
+      </section>
+    </main>
+  );
+}
+
+/**
+ * "15. PREMIER LANCEMENT SANS CACHE" - a valid session on a device that has no
+ * offline data (yet). Never a crash, never an infinite spinner, never a dead
+ * end: it says why (the classified bootstrap error, or "offline") and always
+ * offers Retry (needs Internet) and Logout (back to the login screen).
+ */
+function NoLocalDataView({
+  error,
+  online,
+  logoutPending,
+  onRetry,
+  onLogout,
+}: {
+  error: OfflineBootstrapError | null;
+  online: boolean;
+  logoutPending: boolean;
+  onRetry: () => void;
+  onLogout: () => void;
+}) {
+  return (
+    <main style={styles.page}>
+      <header style={styles.header}>
+        <h1 style={styles.title}>COMDIS Driver</h1>
+      </header>
+      <section style={styles.card}>
+        <p style={styles.cardTitle}>Donnees hors connexion indisponibles</p>
+        <p style={styles.muted}>
+          {error
+            ? error.message
+            : "Aucune donnee hors connexion n'est disponible sur cet appareil. Connectez-vous a Internet pour les preparer."}
+        </p>
+        <div style={styles.buttonRow}>
+          <button type="button" style={styles.primaryButton} onClick={onRetry} disabled={!online}>
+            Reessayer
+          </button>
+          <button type="button" style={styles.secondaryButton} onClick={onLogout} disabled={logoutPending}>
+            Se deconnecter
+          </button>
+        </div>
       </section>
     </main>
   );

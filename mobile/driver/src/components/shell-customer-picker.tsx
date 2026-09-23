@@ -2,6 +2,7 @@ import * as React from "react";
 import { Check, ChevronDown, User } from "lucide-react";
 
 import { MobileSelectionSheet } from "@/components/pos/mobile-selection-sheet";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { CustomerDto } from "@/types/operations-dto";
 
@@ -18,14 +19,33 @@ type ShellCustomerPickerProps = {
   placeholder?: string;
 };
 
+/**
+ * BUG-05 "RECHERCHE CLIENT PAR NOM OFFLINE": case- AND accent-insensitive
+ * (é/è/à/... fold to their plain letter, same technique PosScreen.tsx's own
+ * product search already uses - `normalize("NFD")` splits a diacritic off
+ * its base letter, then the combining-mark range is stripped). Deliberately
+ * NOT `toLocaleLowerCase("fr")` (the previous version) - a plain
+ * `toLowerCase()` has no locale-argument edge case to depend on and is
+ * exactly as correct for this use case, removing one more possible source
+ * of a WebView-specific inconsistency. `String(... ?? "")` guards every
+ * field so one row with an unexpected null/non-string value can never throw
+ * inside `.filter()` and silently blank out the WHOLE result list.
+ */
+function normalizeSearchValue(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
 function localFilter(customers: CustomerDto[], query: string): CustomerDto[] {
-  const normalized = query.trim().toLocaleLowerCase("fr");
+  const normalized = normalizeSearchValue(query);
   if (!normalized) return customers;
-  return customers.filter(
-    (customer) =>
-      customer.name.toLocaleLowerCase("fr").includes(normalized) ||
-      customer.displayCode.toLocaleLowerCase("fr").includes(normalized) ||
-      (customer.phone ?? "").toLocaleLowerCase("fr").includes(normalized),
+  return customers.filter((customer) =>
+    [customer.name, customer.displayCode, customer.code, customer.phone].some((field) =>
+      normalizeSearchValue(field).includes(normalized),
+    ),
   );
 }
 
@@ -89,7 +109,20 @@ export function ShellCustomerPicker({
     };
   }, [open, trimmedQuery, token, online]);
 
-  const localMatches = React.useMemo(() => localFilter(initialSuggestions, trimmedQuery), [initialSuggestions, trimmedQuery]);
+  const localMatches = React.useMemo(() => {
+    const results = localFilter(initialSuggestions, trimmedQuery);
+    // BUG-05 "6. DIAGNOSTICS DEV" - non sensitive: counts + the raw typed
+    // query only, never a customer's own name/phone/etc.
+    if (import.meta.env.DEV && trimmedQuery) {
+      console.log("[OFFLINE CUSTOMERS] local search", {
+        query: trimmedQuery,
+        available: initialSuggestions.length,
+        fields: ["name", "displayCode", "code", "phone"],
+        results: results.length,
+      });
+    }
+    return results;
+  }, [initialSuggestions, trimmedQuery]);
 
   // Only ever "awaiting" a real in-flight remote request - offline (or no
   // token), there is nothing to wait for, so this must never linger true.
@@ -107,8 +140,12 @@ export function ShellCustomerPicker({
   }
 
   return (
-    <div>
+    <div className="flex flex-col gap-1">
+      <Label htmlFor="shell-customer-picker-trigger" className="text-xs text-muted-foreground">
+        Client
+      </Label>
       <button
+        id="shell-customer-picker-trigger"
         type="button"
         aria-label="Client"
         aria-haspopup="dialog"
@@ -118,11 +155,17 @@ export function ShellCustomerPicker({
           }
           setOpen(true);
         }}
-        className="flex h-9 w-full items-center gap-2 rounded-lg border border-input bg-background px-3 text-sm transition-colors active:bg-accent"
+        className="flex h-11 w-full items-center gap-2 rounded-lg border border-input bg-background px-3 text-base transition-colors active:bg-accent"
       >
         <User aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
         <span className={cn("min-w-0 flex-1 truncate text-left", !value && "text-muted-foreground")}>
-          {value?.name ?? placeholder}
+          {/* BUG-05 "3. CLIENT COMPTOIR": a real customer never shows just
+              its bare name - the N° (displayCode) is already the label the
+              driver types into the field right below, so showing it here
+              too means the same identity reads the same way in both
+              places. No change when nothing is selected - the placeholder
+              ("Client comptoir" by default) stays exactly as-is. */}
+          {value ? `${value.displayCode} - ${value.name}` : placeholder}
         </span>
         <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
       </button>
@@ -130,7 +173,7 @@ export function ShellCustomerPicker({
       <MobileSelectionSheet<CustomerDto>
         open={open}
         title="Selectionner un client"
-        searchPlaceholder="Rechercher par nom ou N deg client..."
+        searchPlaceholder="Rechercher par nom, N° client ou telephone..."
         query={query}
         onQueryChange={setQuery}
         items={items}
@@ -151,7 +194,7 @@ export function ShellCustomerPicker({
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate text-sm font-medium text-foreground">{customer.name}</span>
               <span className="truncate text-xs text-muted-foreground">
-                N {customer.displayCode}
+                N° {customer.displayCode}
                 {customer.phone ? ` - ${customer.phone}` : ""}
               </span>
             </span>

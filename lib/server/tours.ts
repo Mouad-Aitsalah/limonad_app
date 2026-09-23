@@ -410,10 +410,17 @@ export async function cancelTour(id: string): Promise<TourDto> {
  * Claims whichever of the truck's loadings hasn't been claimed by another
  * tour yet (see getClaimableLoadingForTruck) and transitions the tour to
  * IN_PROGRESS. Shared by both places a tour can start - the driver's own
- * auto-create-and-start flow and an admin-prepared tour's startTour() -
- * so "a tour can only start once a real, not-yet-used chargement backs
- * it" is enforced identically everywhere, and each tour ends up with its
- * own distinct loading (never the one another tour already claimed).
+ * auto-create-and-start flow and an admin-prepared tour's startTour().
+ *
+ * NEW RULE (GPS/tournee/chargement independence): a chargement is no longer
+ * a precondition to start a tour. When the truck has a claimable loading it
+ * is still attached here (so the tour's stock bilan keeps working exactly
+ * as before); when it doesn't, the tour simply starts with no loading
+ * attached - `tour.loading` stays null, a valid state the rest of the
+ * driver-tour code (hydrateTourLoading, driverTourMessage) already tolerates.
+ * The truck's on-board stock in that case is legitimately empty/zero - see
+ * getDriverTourStartContext's own "stock camion a zero" warning, which
+ * already covers that without blocking anything.
  *
  * A tour that somehow already has a loading attached (e.g. created through
  * the tour-scoped lib/server/truck-loadings.ts#createLoading path) keeps
@@ -434,13 +441,12 @@ async function claimLoadingAndStartTour(
       tour.organizationId,
       tour.truckId,
     );
-    if (!claimableLoading) {
-      throw new OperationsServiceError("Aucune tournee prete avec chargement valide.", 409);
+    if (claimableLoading) {
+      await tx.truckLoading.update({
+        where: { id: claimableLoading.id },
+        data: { tourId: tour.id },
+      });
     }
-    await tx.truckLoading.update({
-      where: { id: claimableLoading.id },
-      data: { tourId: tour.id },
-    });
   }
 
   await tx.truck.update({

@@ -25,8 +25,25 @@ import { SecureStorage } from "@aparajita/capacitor-secure-storage";
  */
 
 const STORAGE_KEY = "comdis_driver_access_token";
+const PROFILE_KEY = "comdis_driver_profile";
 
 let webMemoryToken: string | null = null;
+let webMemoryProfile: StoredMobileProfile | null = null;
+
+/**
+ * ÉTAPE OFFLINE-BOOTSTRAP - the non-secret identity the login response carried
+ * (who logged in, which organization/driver profile). Kept next to the token
+ * (same adapter, same lifetime - removed with it) so a relaunch that finds a
+ * valid token but no offline_context can REBUILD that context from real server
+ * data: the POS context DTO carries the driver but not the user id / org id.
+ * No password, no token in here.
+ */
+export type StoredMobileProfile = {
+  id: string;
+  nom: string;
+  organizationId: string | null;
+  driverId: string | null;
+};
 
 function isNativePlatform(): boolean {
   return Capacitor.isNativePlatform();
@@ -58,13 +75,46 @@ export async function getMobileAccessToken(): Promise<string | null> {
 export async function removeMobileAccessToken(): Promise<void> {
   if (!isNativePlatform()) {
     webMemoryToken = null;
+    webMemoryProfile = null;
     return;
   }
   try {
     await SecureStorage.removeItem(STORAGE_KEY);
+    await SecureStorage.removeItem(PROFILE_KEY);
   } catch {
     // Already absent, or an OS error - removal must always look like it
     // succeeded to the caller (matches the server-side revokeSessionByToken
     // contract: logout must never appear to fail).
+  }
+}
+
+export async function saveMobileProfile(profile: StoredMobileProfile): Promise<void> {
+  if (!isNativePlatform()) {
+    webMemoryProfile = profile;
+    return;
+  }
+  try {
+    await SecureStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  } catch {
+    // Best-effort: a missing profile only means a later relaunch cannot rebuild
+    // the offline context by itself and asks for a fresh login instead.
+  }
+}
+
+export async function getMobileProfile(): Promise<StoredMobileProfile | null> {
+  if (!isNativePlatform()) return webMemoryProfile;
+  try {
+    const raw = await SecureStorage.getItem(PROFILE_KEY);
+    if (typeof raw !== "string") return null;
+    const parsed = JSON.parse(raw) as Partial<StoredMobileProfile> | null;
+    if (!parsed || typeof parsed.id !== "string" || typeof parsed.nom !== "string") return null;
+    return {
+      id: parsed.id,
+      nom: parsed.nom,
+      organizationId: typeof parsed.organizationId === "string" ? parsed.organizationId : null,
+      driverId: typeof parsed.driverId === "string" ? parsed.driverId : null,
+    };
+  } catch {
+    return null;
   }
 }

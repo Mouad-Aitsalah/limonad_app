@@ -68,6 +68,7 @@ let activeTourId: string | null = null;
 let starting = false;
 let tokenExpiresAtMs: number | null = null;
 let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let trackingOptions: { apiBaseUrl?: string; bearerToken?: string | null } | undefined;
 
 export function isNativeGpsPlatform(): boolean {
   return Capacitor.isNativePlatform();
@@ -81,14 +82,19 @@ export function isNativeGpsPlatform(): boolean {
 export async function startNativeTracking(
   tourId: string,
   onPosition?: (position: NativeGpsPosition) => void,
+  options?: { apiBaseUrl?: string; bearerToken?: string | null },
 ): Promise<boolean> {
   if (!isNativeGpsPlatform()) return false;
   if (activeTourId === tourId || starting) return true;
 
   starting = true;
   try {
-    const issued = await fetchTrackingToken();
-    if (!issued) return false;
+    trackingOptions = options;
+    const issued = await fetchTrackingToken(options);
+    if (!issued) {
+      trackingOptions = undefined;
+      return false;
+    }
 
     await BackgroundGeolocation.start(
       {
@@ -98,7 +104,7 @@ export async function startNativeTracking(
         stale: false,
         distanceFilter: DISTANCE_FILTER_METERS,
         minIntervalMs: MIN_INTERVAL_MS,
-        url: `${window.location.origin}/api/driver/tour/location/native`,
+        url: `${options?.apiBaseUrl ?? window.location.origin}/api/driver/tour/location/native`,
         headers: { Authorization: `Bearer ${issued.token}` },
       },
       (location, error) => {
@@ -139,6 +145,7 @@ export async function stopNativeTracking(): Promise<void> {
   if (!isNativeGpsPlatform() || activeTourId === null) return;
 
   activeTourId = null;
+  trackingOptions = undefined;
   try {
     await BackgroundGeolocation.stop();
   } catch (error) {
@@ -200,7 +207,7 @@ function scheduleTokenRefresh() {
 
 async function rotateTrackingToken(): Promise<void> {
   if (activeTourId === null) return;
-  const issued = await fetchTrackingToken();
+  const issued = await fetchTrackingToken(trackingOptions);
   if (!issued) {
     // Keep the existing (still valid for a bit) token, retry sooner.
     tokenRefreshTimer = setTimeout(() => {
@@ -220,9 +227,20 @@ async function rotateTrackingToken(): Promise<void> {
   scheduleTokenRefresh();
 }
 
-async function fetchTrackingToken(): Promise<{ token: string; expiresAtMs: number } | null> {
+async function fetchTrackingToken(options?: {
+  apiBaseUrl?: string;
+  bearerToken?: string | null;
+}): Promise<{ token: string; expiresAtMs: number } | null> {
   try {
-    const response = await fetch("/api/driver/tour/location-token", { method: "POST" });
+    const response = await fetch(
+      `${options?.apiBaseUrl ?? ""}/api/driver/tour/location-token`,
+      {
+        method: "POST",
+        headers: options?.bearerToken
+          ? { Authorization: `Bearer ${options.bearerToken}` }
+          : undefined,
+      },
+    );
     const payload = (await response.json()) as {
       token?: string;
       expiresAt?: string;

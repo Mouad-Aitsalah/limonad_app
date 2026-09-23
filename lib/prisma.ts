@@ -23,11 +23,37 @@ const prismaSchemaSignature = createHash("sha1")
   )
   .digest("hex");
 
+// PRISMA_DEBUG_QUERIES=1 (local diagnostics only, never set in a deployed
+// environment): logs every query with its own duration and a running
+// count/elapsed total, to see exactly which statement a slow transaction is
+// spending its time on instead of guessing from the code alone. Fully
+// opt-in and additive - the log array below is unchanged when the env var
+// is absent, so normal behavior (including production's ["error"]-only
+// logging) is untouched.
 function createPrismaClient() {
-  return new PrismaClient({
+  const debugQueries = process.env.PRISMA_DEBUG_QUERIES === "1";
+  const client = new PrismaClient({
     adapter,
-    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+    log: debugQueries
+      ? [{ emit: "event", level: "query" }, "error", "warn"]
+      : process.env.NODE_ENV === "development"
+        ? ["error", "warn"]
+        : ["error"],
   });
+  if (debugQueries) {
+    let count = 0;
+    const start = Date.now();
+    (client as unknown as { $on: (event: "query", cb: (e: { query: string; duration: number }) => void) => void }).$on(
+      "query",
+      (e) => {
+        count += 1;
+        console.log(
+          `[PRISMA #${count} +${Date.now() - start}ms dur=${e.duration}ms] ${e.query.slice(0, 140)}`,
+        );
+      },
+    );
+  }
+  return client;
 }
 
 const hasMatchingGlobalClient =
