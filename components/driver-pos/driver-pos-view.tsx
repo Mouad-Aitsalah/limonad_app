@@ -1597,9 +1597,6 @@ export function DriverPosView({
         </div>
       </div>
 
-      {mobileView === "products" && (
-        <MobileSelectedProduct product={mobileSelectedProduct} className="lg:hidden" />
-      )}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div
           className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4`}
@@ -1612,12 +1609,27 @@ export function DriverPosView({
               (`lg:static`) and renders exactly as before. */}
           <div className="sticky top-28 z-20 space-y-3 bg-background lg:static lg:top-auto lg:z-auto lg:space-y-0 lg:bg-transparent">
             <ProductSearch value={search} onChange={setSearch} />
-            <MobileSupplierPicker
-              className="lg:hidden"
-              suppliers={supplierOptions}
-              value={supplierFilter}
-              onChange={setSupplierFilter}
-            />
+            {/* Mobile only - the supplier filter's own trigger keeps its
+                exact height/behaviour, just sized to half the row instead of
+                the full width; the "produit ajoute" toast (previously a
+                `fixed` overlay near the bottom of the screen, covering part
+                of the grid) now renders in the other half of this SAME row -
+                never over the grid again. This wrapper keeps the 50/50 split
+                reserved even with no product to show, so the supplier
+                trigger's width never jumps. See MobileSelectedProduct's own
+                "inline" variant - the counter POS's separate pos-layout.tsx
+                still uses the original overlay, untouched. */}
+            <div className="flex items-stretch gap-2 lg:hidden">
+              <MobileSupplierPicker
+                className="min-w-0 flex-1 lg:hidden"
+                suppliers={supplierOptions}
+                value={supplierFilter}
+                onChange={setSupplierFilter}
+              />
+              <div className="min-w-0 flex-1">
+                <MobileSelectedProduct product={mobileSelectedProduct} variant="inline" />
+              </div>
+            </div>
           </div>
           <ProductGrid
             products={productTiles}
