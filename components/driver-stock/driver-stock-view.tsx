@@ -59,7 +59,11 @@ export function DriverStockView({ stock }: { stock: DriverStockViewStock }) {
         <MetricCard label="Valeur du stock" value={formatCurrency(totalValue)} />
       </div>
 
-      <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+      {/* Mobile card padding tightened (12px vs the default 24px) ONLY on
+          this instance via --card-spacing, same technique and same margin
+          this task applies to driver-clients-view.tsx's table card - not a
+          change to the shared Card component. Reverts to 24px at lg. */}
+      <Card className="[--card-spacing:--spacing(3)] ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:[--card-spacing:--spacing(6)]">
         <CardContent className="space-y-5">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
@@ -78,37 +82,42 @@ export function DriverStockView({ stock }: { stock: DriverStockViewStock }) {
           {rows.length === 0 ? (
             <EmptyState message="Aucun produit disponible dans votre camion." />
           ) : (
+            /* Mobile (<lg): Produit / Quantite only - Disponible, Valeur and
+               Derniere mise a jour stay in the DOM (data untouched) but
+               hidden via `hidden lg:table-cell`, same breakpoint convention
+               as driver-clients-view.tsx's own responsive table. Desktop
+               (>=lg) is byte-for-byte unchanged. */
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Produit</TableHead>
-                  <TableHead className="text-right">Quantite</TableHead>
-                  <TableHead className="text-right">Disponible</TableHead>
-                  <TableHead className="text-right">Valeur</TableHead>
-                  <TableHead className="text-right">Derniere mise a jour</TableHead>
+                  <TableHead className="px-2 lg:px-4">Produit</TableHead>
+                  <TableHead className="px-2 text-right lg:px-4">Quantite</TableHead>
+                  <TableHead className="hidden lg:table-cell lg:text-right">Disponible</TableHead>
+                  <TableHead className="hidden lg:table-cell lg:text-right">Valeur</TableHead>
+                  <TableHead className="hidden lg:table-cell lg:text-right">Derniere mise a jour</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((row) => (
                   <TableRow key={row.id}>
-                    <TableCell>
-                      <div className="font-medium text-foreground">
+                    <TableCell className="max-w-[52vw] px-2 lg:max-w-none lg:px-4">
+                      <div className="truncate font-medium text-foreground">
                         {row.productName}
                       </div>
-                      <div className="text-xs text-muted-foreground">
+                      <div className="truncate text-xs text-muted-foreground">
                         {row.productReference}
                       </div>
                     </TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">
+                    <TableCell className="px-2 text-right font-medium tabular-nums lg:px-4">
                       {row.quantity}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell className="hidden text-right tabular-nums lg:table-cell">
                       {row.availableQuantity}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell className="hidden text-right tabular-nums lg:table-cell">
                       {formatCurrency(row.stockValue)}
                     </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
+                    <TableCell className="hidden text-right text-muted-foreground lg:table-cell">
                       {new Date(row.updatedAt).toLocaleDateString("fr-FR")}
                     </TableCell>
                   </TableRow>

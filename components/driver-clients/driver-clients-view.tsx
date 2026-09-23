@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Edit, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -320,7 +320,12 @@ export function DriverClientsView({
         <Metric label="Ajoutes par vous" value={ownCreatedCount} />
       </div>
 
-      <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+      {/* Mobile card padding is tightened (12px vs the default 24px) ONLY on
+          this instance via the --card-spacing CSS var Card/CardContent
+          already read - not a change to the shared component - so the
+          compact 4-column table below has enough width at 360px. Reverts to
+          the normal 24px at lg, matching the untouched desktop table. */}
+      <Card className="[--card-spacing:--spacing(3)] ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:[--card-spacing:--spacing(6)]">
         <CardContent className="space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <Input
@@ -355,18 +360,30 @@ export function DriverClientsView({
             Page {pageIndex + 1} - {customers.length} sur cette page
           </p>
 
+          {/* Mobile (<lg): Nom / Code / Credit / Actions only - Telephone,
+              Adresse, Ville, Type and Statut stay in the DOM (data untouched)
+              but hidden via `hidden lg:table-cell`, exactly like the desktop
+              width breakpoint this app already uses elsewhere (e.g.
+              driver-pos-view.tsx). Desktop (>=lg) is byte-for-byte unchanged:
+              every `lg:table-cell` column reappears and no visible column
+              loses its original classes. */}
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Nom</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Telephone</TableHead>
-                <TableHead>Adresse</TableHead>
-                <TableHead>Ville</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Credit</TableHead>
-                <TableHead>Statut</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead className="px-1.5 lg:px-4">Nom</TableHead>
+                <TableHead className="px-1.5 lg:px-4">Code</TableHead>
+                <TableHead className="hidden lg:table-cell">Telephone</TableHead>
+                <TableHead className="hidden lg:table-cell">Adresse</TableHead>
+                <TableHead className="hidden lg:table-cell">Ville</TableHead>
+                <TableHead className="hidden lg:table-cell">Type</TableHead>
+                <TableHead className="px-1.5 text-right lg:px-4">Credit</TableHead>
+                <TableHead className="hidden lg:table-cell">Statut</TableHead>
+                <TableHead className="px-1.5 text-right lg:px-4">
+                  {/* Uppercase+tracked "Actions" is wider than the icon
+                      button itself and would force the column wide on
+                      mobile - the pencil icon is self-explanatory there. */}
+                  <span className="sr-only lg:not-sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -379,23 +396,47 @@ export function DriverClientsView({
                   )}
                   onClick={() => setSelectedCustomerId(customer.id)}
                 >
-                  <TableCell className="font-medium">{customer.name}</TableCell>
-                  <TableCell>{customer.code}</TableCell>
-                  <TableCell>{customer.phone}</TableCell>
-                  <TableCell className="max-w-[220px] truncate">{customer.address}</TableCell>
-                  <TableCell>{customer.city}</TableCell>
-                  <TableCell>{typeLabel(customer.type)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(customer.currentBalance)}</TableCell>
-                  <TableCell>
+                  <TableCell className="max-w-[28vw] truncate px-1.5 font-medium lg:max-w-none lg:px-4">
+                    {customer.name}
+                  </TableCell>
+                  <TableCell className="px-1.5 text-[0.84rem] lg:px-4 lg:text-[0.94rem]">{customer.code}</TableCell>
+                  <TableCell className="hidden lg:table-cell">{customer.phone}</TableCell>
+                  <TableCell className="hidden max-w-[220px] truncate lg:table-cell">{customer.address}</TableCell>
+                  <TableCell className="hidden lg:table-cell">{customer.city}</TableCell>
+                  <TableCell className="hidden lg:table-cell">{typeLabel(customer.type)}</TableCell>
+                  <TableCell className="px-1.5 text-right text-[0.84rem] tabular-nums lg:px-4 lg:text-[0.94rem]">
+                    {formatCurrency(customer.currentBalance)}
+                  </TableCell>
+                  <TableCell className="hidden lg:table-cell">
                     <Badge variant={customer.status === "BLOCKED" ? "destructive" : "secondary"}>
                       {customer.status}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="px-1.5 text-right lg:px-4">
+                    {/* Icon-only under lg (no room for the "Modifier" label
+                        next to Nom/Code/Credit at 360-390px) - same action,
+                        same disabled rule, same handler as the desktop
+                        text button it replaces below. */}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="lg:hidden"
+                      disabled={customer.creationOrigin !== "DRIVER"}
+                      aria-label={`Modifier ${customer.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedCustomerId(customer.id);
+                        openCustomerForm(customer, false);
+                      }}
+                    >
+                      <Edit className="h-3.5 w-3.5" />
+                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
+                      className="hidden lg:inline-flex"
                       disabled={customer.creationOrigin !== "DRIVER"}
                       onClick={(event) => {
                         event.stopPropagation();
