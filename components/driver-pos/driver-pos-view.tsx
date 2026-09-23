@@ -1556,31 +1556,45 @@ export function DriverPosView({
         onSyncPendingSales={() => void handleSyncPendingSales()}
       />
 
+      {/* Mobile catalogue header (tabs, then search+supplier below): sticky
+          so scrolling the product list never scrolls these controls away -
+          only the grid beneath them scrolls (still the page's own/window
+          scroll, no nested overflow container - see ProductGrid's sticky
+          wrapper below for why this is two stacked sticky blocks instead of
+          one). `top-16` reuses this same file's own existing convention for
+          "height of the shell's mobile header" (see `mobile-driver-pos-cart`'s
+          `scroll-mt-16` a few lines down). Entirely inert on desktop
+          (`lg:static lg:hidden`) - the tab row itself already only ever
+          existed on mobile. */}
       <div
-        className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1 lg:hidden"
-        role="tablist"
-        aria-label="Vues du point de vente chauffeur"
+        className="sticky top-16 z-20 bg-background lg:static lg:top-auto lg:z-auto lg:bg-transparent lg:hidden"
       >
-        <Button
-          type="button"
-          role="tab"
-          aria-selected={mobileView === "products"}
-          variant={mobileView === "products" ? "default" : "ghost"}
-          onClick={() => setMobileView("products")}
-          className="h-10 rounded-xl text-sm"
+        <div
+          className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1"
+          role="tablist"
+          aria-label="Vues du point de vente chauffeur"
         >
-          Les produits
-        </Button>
-        <Button
-          type="button"
-          role="tab"
-          aria-selected={mobileView === "cart"}
-          variant={mobileView === "cart" ? "default" : "ghost"}
-          onClick={() => setMobileView("cart")}
-          className="h-10 rounded-xl text-sm"
-        >
-          Panier ({totals.quantity})
-        </Button>
+          <Button
+            type="button"
+            role="tab"
+            aria-selected={mobileView === "products"}
+            variant={mobileView === "products" ? "default" : "ghost"}
+            onClick={() => setMobileView("products")}
+            className="h-10 rounded-xl text-sm"
+          >
+            Les produits
+          </Button>
+          <Button
+            type="button"
+            role="tab"
+            aria-selected={mobileView === "cart"}
+            variant={mobileView === "cart" ? "default" : "ghost"}
+            onClick={() => setMobileView("cart")}
+            className="h-10 rounded-xl text-sm"
+          >
+            Panier ({totals.quantity})
+          </Button>
+        </div>
       </div>
 
       {mobileView === "products" && (
@@ -1590,13 +1604,21 @@ export function DriverPosView({
         <div
           className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4`}
         >
-          <ProductSearch value={search} onChange={setSearch} />
-          <MobileSupplierPicker
-            className="lg:hidden"
-            suppliers={supplierOptions}
-            value={supplierFilter}
-            onChange={setSupplierFilter}
-          />
+          {/* Second tier of the sticky catalogue header - stacked right below
+              the tabs block above (top-16 + the tabs row's own rendered
+              height, 3rem, = top-28). Kept INSIDE this column (not hoisted
+              next to the tabs block) so its width still matches the left
+              grid column on desktop, where it is not sticky at all
+              (`lg:static`) and renders exactly as before. */}
+          <div className="sticky top-28 z-20 space-y-3 bg-background lg:static lg:top-auto lg:z-auto lg:space-y-0 lg:bg-transparent">
+            <ProductSearch value={search} onChange={setSearch} />
+            <MobileSupplierPicker
+              className="lg:hidden"
+              suppliers={supplierOptions}
+              value={supplierFilter}
+              onChange={setSupplierFilter}
+            />
+          </div>
           <ProductGrid
             products={productTiles}
             onAdd={addProductById}
