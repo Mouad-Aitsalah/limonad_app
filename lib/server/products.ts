@@ -7,6 +7,7 @@ import { computePriceTTC } from "@/lib/product-pricing";
 import { prisma } from "@/lib/prisma";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { toLightweightProductImageUrl } from "@/lib/server/product-image-url";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import type { DriverPosProductDto } from "@/types/operations-dto";
 import type {
@@ -492,6 +493,7 @@ export async function searchPosProducts(params: {
     barcode: true,
     name: true,
     imageUrl: true,
+    updatedAt: true,
     salePrice: true,
     taxRate: true,
     defaultSupplierId: true,
@@ -504,6 +506,7 @@ export async function searchPosProducts(params: {
     barcode: string | null;
     name: string;
     imageUrl: string | null;
+    updatedAt: Date;
     salePrice: Prisma.Decimal;
     taxRate: Prisma.Decimal;
     defaultSupplierId: string | null;
@@ -530,13 +533,17 @@ export async function searchPosProducts(params: {
         reference: product.reference,
         barcode: product.barcode,
         name: product.name,
-        imageUrl: product.imageUrl,
+        imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
         salePriceHT,
         salePriceTTC: computePriceTTC(salePriceHT, taxRate),
         taxRate,
         availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
         supplierId: product.defaultSupplierId,
         supplierName: product.defaultSupplier?.name ?? null,
+        // ÉTAPE PERF POS 1 scope is Product.imageUrl only - see
+        // lib/server/product-image-url.ts's own doc comment. supplierLogoUrl
+        // has the identical base64-in-a-text-column shape and is a known,
+        // separate follow-up (flagged in the perf audit), left untouched here.
         supplierLogoUrl: product.defaultSupplier?.logoUrl ?? null,
       };
     });

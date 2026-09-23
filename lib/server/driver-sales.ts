@@ -15,6 +15,7 @@ import {
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
+import { toLightweightProductImageUrl } from "@/lib/server/product-image-url";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { markCustomerDeliveredOnTour } from "@/lib/server/driver-tour";
 import { closeExpiredActiveToursAtCutoff } from "@/lib/server/tours";
@@ -161,6 +162,7 @@ export async function getDriverPosContext(
         barcode: true,
         name: true,
         imageUrl: true,
+        updatedAt: true,
         salePrice: true,
         taxRate: true,
         defaultSupplierId: true,
@@ -231,7 +233,7 @@ export async function getDriverPosContext(
         reference: product.reference,
         barcode: product.barcode,
         name: product.name,
-        imageUrl: product.imageUrl,
+        imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
         salePriceHT,
         salePriceTTC,
         taxRate,
