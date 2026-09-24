@@ -41,12 +41,34 @@ function downloadPdf(blob: Blob, fileName: string) {
  * Shares an already-persisted invoice as a real PDF. Native Capacitor uses an
  * app-cache URI and Android's share sheet; browsers use Web Share files when
  * available, otherwise they download the same generated PDF.
+ *
+ * FIX ANDROID PRINT BUTTON - `intent: "print"` reuses this exact
+ * generate-PDF-then-hand-to-native-Android pipeline for the "Imprimer"
+ * button (see driver-pos-view.tsx's own printSale) instead of the default
+ * "share via WhatsApp" wording - Android's WebView never implements
+ * `window.print()` (a silent no-op, unlike desktop/mobile-web browsers), so
+ * there is no in-app print pipeline to trigger there at all. Handing the
+ * SAME PDF to Android's native share sheet is the standard way an app
+ * without its own print pipeline reaches the OS's print framework: most
+ * devices list "Imprimer"/a connected printer alongside every other share
+ * target for a PDF file, and any target that doesn't print (a PDF viewer,
+ * a cloud drive) still lets the driver open/forward the exact same ticket -
+ * never a worse outcome than today's silent no-op. Unlike sharing, printing
+ * an in-progress cart preview (not yet a persisted sale) is completely
+ * normal - callers never gate this on `sale.id` the way canShareWhatsApp
+ * does.
  */
-export async function shareInvoicePdf(input: InvoicePdfInput): Promise<InvoiceShareResult> {
+export async function shareInvoicePdf(
+  input: InvoicePdfInput,
+  intent: "share" | "print" = "share",
+): Promise<InvoiceShareResult> {
   const fileName = getInvoicePdfFileName(input.sale.displayNumber);
   const blob = await generateInvoicePdf(input);
-  const title = `Facture ${input.sale.displayNumber}`;
-  const text = `Voici votre facture ${input.sale.displayNumber}.`;
+  const title =
+    intent === "print" ? `Ticket ${input.sale.displayNumber}` : `Facture ${input.sale.displayNumber}`;
+  const text =
+    intent === "print" ? undefined : `Voici votre facture ${input.sale.displayNumber}.`;
+  const dialogTitle = intent === "print" ? "Imprimer le ticket" : "Partager la facture PDF";
 
   if (Capacitor.isNativePlatform()) {
     const nativeFile = await Filesystem.writeFile({
@@ -63,7 +85,7 @@ export async function shareInvoicePdf(input: InvoicePdfInput): Promise<InvoiceSh
       title,
       text,
       files: [nativeFile.uri],
-      dialogTitle: "Partager la facture PDF",
+      dialogTitle,
     });
     return { fileName, method: "native" };
   }

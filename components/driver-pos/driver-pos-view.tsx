@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Capacitor } from "@capacitor/core";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -1390,13 +1391,33 @@ export function DriverPosView({
     }
   }
 
+  // FIX ANDROID PRINT BUTTON - Android's WebView never implements
+  // window.print() (a silent no-op there, unlike every desktop/mobile-web
+  // browser this app also runs in) - on native Capacitor this hands the
+  // SAME sale off to shareInvoicePdf's already-shipped PDF+native-share-sheet
+  // pipeline (see that function's own "intent: print" doc comment) instead,
+  // so "Imprimer" actually reaches Android's print framework. Desktop/mobile
+  // web is byte-for-byte unchanged: window.print() only, exactly as before.
+  async function printSale(sale: SaleDto) {
+    if (!Capacitor.isNativePlatform()) {
+      window.setTimeout(() => window.print(), 0);
+      return;
+    }
+    try {
+      await shareInvoicePdf({ sale, identity, customerPhone: lastSalePhone }, "print");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      toast.error(error instanceof Error ? error.message : "Impossible de preparer le ticket a imprimer.");
+    }
+  }
+
   function printLastSale() {
     if (!lastSale) {
       toast.error("Aucune facture a imprimer.");
       return;
     }
 
-    window.setTimeout(() => window.print(), 0);
+    void printSale(lastSale);
   }
 
   // "Imprimer" from the driver cart: same behaviour as the counter POS.
@@ -1414,57 +1435,60 @@ export function DriverPosView({
         ? context.bankAccounts.find((account) => account.id === bankAccountId) ?? null
         : null;
     setOfflineTicketReference(null);
-    setLastSale(
-      buildPreviewSale({
-        displayNumber: lastSale?.displayNumber ?? "—",
-        createdByUserName: context.driver.name,
-        customer: selectedCustomer
-          ? {
-              id: selectedCustomer.id,
-              code: selectedCustomer.code,
-              name: selectedCustomer.name,
-            }
-          : null,
-        driver: { id: context.driver.id, name: context.driver.name },
-        truck: context.truck
-          ? {
-              id: context.truck.id,
-              code: context.truck.code,
-              registration: context.truck.registration,
-            }
-          : null,
-        tour: context.tour
-          ? {
-              id: context.tour.id,
-              code: context.tour.code,
-              status: context.tour.status,
-              date: "",
-            }
-          : null,
-        paymentMethod,
-        bankAccount,
-        lines: cartRows.map((row) => ({
-          productId: row.productId,
-          productReference: row.product.reference,
-          productName: row.product.name,
-          quantity: row.quantity,
-          unitPriceHT: row.product.salePriceHT,
-          // Driver POS has no discount input yet (discountRate is always 0
-          // here) - renamed only for lib/pos-preview-sale.ts's shared type,
-          // no behaviour change. See lib/pos-discount.ts.
-          discountUnitAmount: row.discountRate,
-          taxRate: row.product.taxRate,
-        })),
-      }),
-    );
-    window.setTimeout(() => window.print(), 0);
+    const previewSale = buildPreviewSale({
+      displayNumber: lastSale?.displayNumber ?? "—",
+      createdByUserName: context.driver.name,
+      customer: selectedCustomer
+        ? {
+            id: selectedCustomer.id,
+            code: selectedCustomer.code,
+            name: selectedCustomer.name,
+          }
+        : null,
+      driver: { id: context.driver.id, name: context.driver.name },
+      truck: context.truck
+        ? {
+            id: context.truck.id,
+            code: context.truck.code,
+            registration: context.truck.registration,
+          }
+        : null,
+      tour: context.tour
+        ? {
+            id: context.tour.id,
+            code: context.tour.code,
+            status: context.tour.status,
+            date: "",
+          }
+        : null,
+      paymentMethod,
+      bankAccount,
+      lines: cartRows.map((row) => ({
+        productId: row.productId,
+        productReference: row.product.reference,
+        productName: row.product.name,
+        quantity: row.quantity,
+        unitPriceHT: row.product.salePriceHT,
+        // Driver POS has no discount input yet (discountRate is always 0
+        // here) - renamed only for lib/pos-preview-sale.ts's shared type,
+        // no behaviour change. See lib/pos-discount.ts.
+        discountUnitAmount: row.discountRate,
+        taxRate: row.product.taxRate,
+      })),
+    });
+    setLastSale(previewSale);
+    // FIX ANDROID PRINT BUTTON - printSale needs the sale value itself, not
+    // the React state setter above (which would still read the previous
+    // render's `lastSale` if called synchronously here) - see printSale's
+    // own doc comment.
+    void printSale(previewSale);
   }
 
   function printPending(sale: SaleDto) {
     setLastSale(sale);
     setLastSalePhone(resolveCustomerPhone(sale.customer?.id));
     setOfflineTicketReference(null);
-    window.setTimeout(() => window.print(), 0);
+    void printSale(sale);
   }
 
   // Sharing is available only for an already-persisted, non-draft invoice;

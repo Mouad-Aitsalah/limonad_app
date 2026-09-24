@@ -1,10 +1,12 @@
 import * as React from "react";
 import { Toaster } from "sonner";
 
+import { configureNativeMediaAuth } from "@/lib/native-media-auth";
 import { getAnyDriverOfflineContext, isNetworkAvailable } from "@/lib/offline/driver-pos";
 import type { DriverOfflineContext } from "@/lib/offline/driver-pos";
 import type { DriverPosContextDto } from "@/types/operations-dto";
 
+import { API_BASE_URL } from "./lib/api-base";
 import { deriveRestingBootState, runBootSequence, type BootState } from "./lib/auth-state";
 import { syncPendingDriverSalesForShell } from "./lib/driver-pos-data-source";
 import { syncPendingDriverTourReturnsForShell } from "./lib/driver-tour-sync";
@@ -61,6 +63,16 @@ export function App() {
     bootStateRef.current = next;
     setBootState(next);
   }
+
+  // FIX ANDROID POS PHOTOS - components/products/product-media.tsx (shared
+  // with the web app) reads this to fetch /api/products/[id]/image itself,
+  // Bearer-authenticated, only when Capacitor.isNativePlatform() - see
+  // lib/native-media-auth.ts's own doc comment for why a plain <img> cannot
+  // do this on Android. Kept in sync with the same token every other shell
+  // fetch already uses (mobile-fetch.ts) - never a separate auth source.
+  React.useEffect(() => {
+    configureNativeMediaAuth({ apiBaseUrl: API_BASE_URL, token });
+  }, [token]);
 
   // "8. RESTAURATION AU DÉMARRAGE" - the ONE place a network call may run
   // automatically, and only when a stored token exists and the device
