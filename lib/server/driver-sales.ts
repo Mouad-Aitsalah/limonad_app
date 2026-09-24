@@ -166,7 +166,7 @@ export async function getDriverPosContext(
         salePrice: true,
         taxRate: true,
         defaultSupplierId: true,
-        defaultSupplier: { select: { name: true } },
+        defaultSupplier: { select: { name: true, logoUrl: true } },
       },
       orderBy: { name: "asc" },
       take: POS_PRODUCT_LIST_LIMIT + 1,
@@ -241,6 +241,14 @@ export async function getDriverPosContext(
         availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
         supplierId: product.defaultSupplierId,
         supplierName: product.defaultSupplier?.name ?? null,
+        // MOD 2 (logos fournisseurs POS chauffeur) - same Supplier.logoUrl
+        // field already shown on /comptes and already threaded through for
+        // the counter POS (lib/server/products.ts) - only this driver
+        // context was missing it. A data: URI (or null) either way, so it
+        // needs no Android-specific handling (unlike Product.imageUrl - see
+        // lib/server/product-image-url.ts's own doc comment on that
+        // distinction).
+        supplierLogoUrl: product.defaultSupplier?.logoUrl ?? null,
         // PHASE 4A.1 - see offline-price-token.ts's own doc comment. Issued
         // fresh on every context fetch (online only) - the offline cache
         // just carries whatever it was last given.

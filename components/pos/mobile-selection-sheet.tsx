@@ -26,6 +26,11 @@ export type MobileSelectionSheetProps<T> = {
   emptyMessage: string;
   /** Optional discreet line under the search (e.g. "Recherche..."). */
   statusMessage?: string | null;
+  /** Per-row vertical padding override (a Tailwind `py-*` class) - omitted
+   *  (every existing caller) keeps today's exact `py-3.5` row height. Added
+   *  for the driver POS's own supplier sheet only (see MobileSupplierPicker's
+   *  own doc comment) - never changes the counter POS or the client picker. */
+  itemPaddingClassName?: string;
 };
 
 /**
@@ -49,6 +54,7 @@ export function MobileSelectionSheet<T>({
   onClose,
   emptyMessage,
   statusMessage,
+  itemPaddingClassName,
 }: MobileSelectionSheetProps<T>) {
   const searchRef = React.useRef<HTMLInputElement>(null);
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
@@ -147,7 +153,8 @@ export function MobileSelectionSheet<T>({
                     onClick={() => onSelect(item)}
                     aria-current={selected ? "true" : undefined}
                     className={cn(
-                      "flex w-full items-center gap-3 px-4 py-3.5 text-left transition-transform duration-100 active:scale-[0.99] active:bg-accent",
+                      "flex w-full items-center gap-3 px-4 text-left transition-transform duration-100 active:scale-[0.99] active:bg-accent",
+                      itemPaddingClassName ?? "py-3.5",
                       selected && "bg-accent/50",
                     )}
                   >

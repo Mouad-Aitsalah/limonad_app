@@ -804,14 +804,21 @@ export function DriverPosView({
   // can only ever narrow to products that ARE in the truck stock - it never
   // pulls in global catalogue products. Null = "Tous les fournisseurs".
   const [supplierFilter, setSupplierFilter] = React.useState<SupplierOption | null>(null);
+  // MOD 2 (logos fournisseurs POS chauffeur) - same pattern as the counter
+  // POS's own supplierOptions (components/pos/pos-layout.tsx) - only that
+  // one already carried logoUrl through.
   const supplierOptions = React.useMemo<SupplierOption[]>(() => {
-    const byId = new Map<string, string>();
+    const byId = new Map<string, SupplierOption>();
     for (const product of allKnownProducts) {
       if (product.supplierId && product.supplierName) {
-        byId.set(product.supplierId, product.supplierName);
+        byId.set(product.supplierId, {
+          id: product.supplierId,
+          name: product.supplierName,
+          logoUrl: product.supplierLogoUrl ?? null,
+        });
       }
     }
-    return Array.from(byId, ([id, name]) => ({ id, name })).sort((a, b) =>
+    return Array.from(byId.values()).sort((a, b) =>
       a.name.localeCompare(b.name, "fr"),
     );
   }, [allKnownProducts]);
@@ -1672,6 +1679,13 @@ export function DriverPosView({
                 suppliers={supplierOptions}
                 value={supplierFilter}
                 onChange={setSupplierFilter}
+                // MOD 1 (espacement sélecteur fournisseur chauffeur) - ~double
+                // the row's total height (measured: 48px -> 100px, a no-logo
+                // row) via py-3.5 (0.875rem) -> py-10 (2.5rem). Driver POS
+                // only - the counter POS's own MobileSupplierPicker call site
+                // (components/pos/pos-layout.tsx) omits this prop, so its row
+                // height stays byte-for-byte unchanged.
+                itemPaddingClassName="py-10"
               />
               <div className="min-w-0 flex-1">
                 <MobileSelectedProduct product={mobileSelectedProduct} variant="inline" />

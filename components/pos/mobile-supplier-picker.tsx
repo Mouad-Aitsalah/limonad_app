@@ -20,6 +20,10 @@ type MobileSupplierPickerProps = {
   /** Applied to the trigger wrapper (`lg:hidden` counter, unused on driver
    *  where the parent block is already `xl:hidden`). */
   className?: string;
+  /** Forwarded as-is to MobileSelectionSheet - see that prop's own doc
+   *  comment. Omitted (the counter POS's own call site) -> today's row
+   *  height, byte-for-byte unchanged. */
+  itemPaddingClassName?: string;
 };
 
 /**
@@ -34,6 +38,7 @@ export function MobileSupplierPicker({
   value,
   onChange,
   className,
+  itemPaddingClassName,
 }: MobileSupplierPickerProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -89,6 +94,7 @@ export function MobileSupplierPicker({
         }}
         onClose={closeSheet}
         emptyMessage="Aucun fournisseur trouvé"
+        itemPaddingClassName={itemPaddingClassName}
         renderItem={(supplier, selected) => (
           <>
             <span className="flex size-5 shrink-0 items-center justify-center text-primary">
