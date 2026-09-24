@@ -515,22 +515,38 @@ export async function startTour(tourId: string): Promise<TourDto> {
   return mapTourToDto(tour);
 }
 
-export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
-  const user = await requireOrganizationUser(["driver"]);
-  if (!user.driverId || !user.truckId) {
-    throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
+/**
+ * AUTO-TOURNEE 08:00-18:00 - the actual create-or-resume-and-start
+ * transaction, extracted from createAndStartTourForCurrentDriver (below,
+ * still the session-authenticated entry point for the existing POST
+ * /api/driver/tour/start) so getCurrentDriverTour can drive the exact same
+ * logic from an already-resolved driver/org/truck (no second session
+ * lookup) as part of a normal read - see that function's own doc comment.
+ * Gated on isWithinDriverTourAutoWindow so NEITHER caller can ever create or
+ * start a tour outside 08:00-18:00, server-side, regardless of which
+ * client/device asked or what its own clock says.
+ */
+export async function createAndStartTourForDriver(params: {
+  organizationId: string;
+  createdByUserId: string;
+  driverId: string;
+  truckId: string;
+}): Promise<TourDto> {
+  const { organizationId, createdByUserId, driverId, truckId } = params;
+  await closeExpiredActiveToursAtCutoff(organizationId);
+  if (!isWithinDriverTourAutoWindow()) {
+    throw new OperationsServiceError(
+      "La tournee ne peut demarrer qu'entre 08:00 et 18:00.",
+      409,
+    );
   }
-  await closeExpiredActiveToursAtCutoff(user.organizationId);
 
   try {
     const tour = await withTourSerializableRetry(() =>
       prisma.$transaction(
         async (tx) => {
           const driver = await tx.driver.findFirst({
-            where: {
-              id: user.driverId,
-              organizationId: user.organizationId,
-            },
+            where: { id: driverId, organizationId },
             select: {
               id: true,
               active: true,
@@ -548,13 +564,13 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
             },
           });
 
-          if (!driver?.active || !driver.truck || driver.truckId !== user.truckId) {
+          if (!driver?.active || !driver.truck || driver.truckId !== truckId) {
             throw new OperationsServiceError("Profil chauffeur ou camion invalide.", 403);
           }
 
           const existingDriverTour = await tx.tour.findFirst({
             where: {
-              organizationId: user.organizationId,
+              organizationId,
               driverId: driver.id,
               status: "IN_PROGRESS",
             },
@@ -567,7 +583,7 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
 
           const existingTruckTour = await tx.tour.findFirst({
             where: {
-              organizationId: user.organizationId,
+              organizationId,
               truckId: driver.truck.id,
               status: "IN_PROGRESS",
             },
@@ -586,7 +602,7 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
           // blocked by an earlier, already-finished one.
           const resumableTour = await tx.tour.findFirst({
             where: {
-              organizationId: user.organizationId,
+              organizationId,
               truckId: driver.truck.id,
               status: { in: ["DRAFT", "PREPARED", "LOADED"] },
             },
@@ -604,14 +620,14 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
           const today = getTodayTourDate();
           const newTour = await tx.tour.create({
             data: {
-              organizationId: user.organizationId,
-              code: await nextTourCode(tx, user.organizationId, today),
+              organizationId,
+              code: await nextTourCode(tx, organizationId, today),
               date: today,
               depotId: driver.truck.depotId,
               truckId: driver.truck.id,
               driverId: driver.id,
               status: "PREPARED",
-              createdByUserId: user.id,
+              createdByUserId,
             },
             select: { id: true, organizationId: true, truckId: true },
           });
@@ -632,6 +648,19 @@ export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
   } catch (error) {
     throw mapTourError(error);
   }
+}
+
+export async function createAndStartTourForCurrentDriver(): Promise<TourDto> {
+  const user = await requireOrganizationUser(["driver"]);
+  if (!user.driverId || !user.truckId) {
+    throw new AuthServiceError("Aucun camion n'est affecte a votre compte.", 403);
+  }
+  return createAndStartTourForDriver({
+    organizationId: user.organizationId,
+    createdByUserId: user.id,
+    driverId: user.driverId,
+    truckId: user.truckId,
+  });
 }
 
 export async function markTourReturned(tourId: string): Promise<TourDto> {
@@ -1109,6 +1138,49 @@ export async function closeExpiredActiveToursAtCutoff(
 
     return closed.count;
   });
+}
+
+/**
+ * AUTO-TOURNEE 08:00-18:00 - the single server-side source of truth for
+ * "is a driver tour allowed to be running right now", mirroring
+ * closeExpiredActiveToursAtCutoff's own Intl/BUSINESS_DAY_TIME_ZONE pattern
+ * (Africa/Casablanca, DST-safe) rather than any client's local clock. Used
+ * both to gate auto-start (getCurrentDriverTour, below) and to keep the
+ * existing manual POST /api/driver/tour/start endpoint from ever creating a
+ * tour outside the window (a stale/misbehaving client, clock drift, etc.).
+ */
+const DRIVER_TOUR_AUTO_START_HOUR = 8;
+const DRIVER_TOUR_AUTO_STOP_HOUR = 18;
+
+export function isWithinDriverTourAutoWindow(now: Date = new Date()): boolean {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: BUSINESS_DAY_TIME_ZONE,
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).format(now),
+  );
+  return hour >= DRIVER_TOUR_AUTO_START_HOUR && hour < DRIVER_TOUR_AUTO_STOP_HOUR;
+}
+
+/**
+ * AUTO-TOURNEE 08:00-18:00 - the driver's own tour for today's business day
+ * (lib/business-day.ts), ANY status - used once there is no longer an
+ * IN_PROGRESS tour to show (auto-closed at 18:00 or never auto-started
+ * today) but the screen still needs to display what DID happen today
+ * ("Tournee terminee" with real start/end/summary) instead of a blank
+ * empty state. Never creates anything - a pure read.
+ */
+export async function getTodaysTourForDriver(
+  driverId: string,
+  organizationId: string,
+): Promise<TourDto | null> {
+  const tour = await prisma.tour.findFirst({
+    where: { organizationId, driverId, date: getTodayTourDate() },
+    include: tourInclude,
+    orderBy: [{ createdAt: "desc" }],
+  });
+  return tour ? mapTourToDto(tour) : null;
 }
 
 async function validateTourInput(input: TourMutationInput) {

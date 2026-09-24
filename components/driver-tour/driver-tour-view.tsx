@@ -110,7 +110,6 @@ export function DriverTourView({
   } | null>(null);
   const [routeLoading, setRouteLoading] = React.useState(false);
   const [noSaleLoading, setNoSaleLoading] = React.useState(false);
-  const [showStartConfirmation, setShowStartConfirmation] = React.useState(false);
   const [showReturnConfirmation, setShowReturnConfirmation] = React.useState(false);
   const [clockNow, setClockNow] = React.useState(() => Date.now());
   const startingTourRef = React.useRef(false);
@@ -221,7 +220,6 @@ export function DriverTourView({
     if (nextTour.latestPosition) {
       gps.reset(nextTour.latestPosition);
     }
-    setShowStartConfirmation(false);
     setShowReturnConfirmation(false);
   }
 
@@ -408,12 +406,17 @@ export function DriverTourView({
   }
 
   if (!tour) {
-    const startContext = state.startContext ?? null;
-    const emptyTitle = state.canStart
-      ? "Pret a demarrer"
-      : state.message.toLowerCase().includes("terminee")
-        ? "Tournee terminee"
-        : "Aucune tournee active";
+    // AUTO-TOURNEE 08:00-18:00 - no "Commencer la tournee" button anywhere
+    // any more (getCurrentDriverTour auto-starts the tour itself the moment
+    // it's read within the 08:00-18:00 window - see that function's own doc
+    // comment): this is now a pure status card. The server's own message
+    // already says exactly why there's nothing to show (before 08:00, or
+    // the rare case where today's tour never ran at all) or shows "Tournee
+    // terminee" - see driverTourMessage - text drives the title here too,
+    // never a separate client-side clock.
+    const emptyTitle = state.message.toLowerCase().includes("terminee")
+      ? "Tournee terminee"
+      : "Tournee du jour";
 
     return (
       <div className="min-h-dvh bg-background">
@@ -427,93 +430,6 @@ export function DriverTourView({
               {emptyTitle}
             </h1>
             <p className="mt-2 text-sm text-muted-foreground">{state.message}</p>
-
-            {startContext ? (
-              <div className="mt-6 space-y-5">
-                {showStartConfirmation ? (
-                  <>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <StartInfoCard
-                        label="Chauffeur"
-                        value={startContext.driver.name}
-                      />
-                      <StartInfoCard
-                        label="Camion"
-                        value={startContext.truck.code}
-                        hint={startContext.truck.registration}
-                      />
-                      <StartInfoCard
-                        label="Date"
-                        value={formatFrenchDate(startContext.date)}
-                      />
-                      <StartInfoCard
-                        label="Depot"
-                        value={startContext.depot?.name ?? "-"}
-                        hint={startContext.depot?.code ?? undefined}
-                      />
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <MetricRow
-                        icon={PackageCheck}
-                        label="Stock camion"
-                        value={String(startContext.stockCurrentQuantity)}
-                      />
-                      <MetricRow
-                        icon={ShoppingCart}
-                        label="Produits en stock"
-                        value={String(startContext.productCount)}
-                      />
-                    </div>
-
-                    {startContext.warning ? (
-                      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        {startContext.warning}
-                      </div>
-                    ) : null}
-
-                    <div className="flex flex-col gap-3 sm:flex-row">
-                      {state.canStart ? (
-                        <button
-                          type="button"
-                          onClick={startNewTour}
-                          disabled={startingTour}
-                          className="inline-flex h-12 items-center justify-center rounded-2xl bg-foreground px-5 text-sm font-medium text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {startingTour ? "Demarrage..." : "Commencer la tournee"}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => setShowStartConfirmation(false)}
-                        disabled={startingTour}
-                        className="inline-flex h-12 items-center justify-center rounded-2xl border border-border bg-background px-5 text-sm font-medium text-foreground transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        Annuler
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex flex-col gap-3 sm:flex-row">
-                    {state.canStart ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!blockedByReadOnly()) setShowStartConfirmation(true);
-                        }}
-                        className="inline-flex h-12 items-center justify-center rounded-2xl bg-foreground px-5 text-sm font-medium text-background transition hover:opacity-90"
-                      >
-                        Commencer la tournee
-                      </button>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="mt-6">
-                <EmptyTourState title="Ma tournee" message={state.message} />
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -747,17 +663,6 @@ export function DriverTourView({
                     label="Stock"
                     value={String(state.summary?.stockCurrentQuantity ?? 0)}
                   />
-                </div>
-
-                <div className="flex flex-col gap-3 sm:flex-row">
-                  <Button
-                    type="button"
-                    className="h-12 rounded-2xl"
-                    onClick={startNewTour}
-                    disabled={startingTour}
-                  >
-                    {startingTour ? "Demarrage..." : "Commencer une nouvelle tournee"}
-                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -1134,15 +1039,6 @@ function buildReturnedTourState(
     canStart: false,
     message: "Tournee terminee",
   };
-}
-
-
-function formatFrenchDate(value: string) {
-  return new Intl.DateTimeFormat("fr-FR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(new Date(value));
 }
 
 function formatTime(value?: string | null) {

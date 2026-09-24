@@ -22,8 +22,11 @@ import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { signTrackingToken } from "@/lib/server/tracking-token";
 import { getLoadingByTourId } from "@/lib/server/truck-loadings";
 import {
+  createAndStartTourForDriver,
   getActiveTourForDriver,
+  getTodaysTourForDriver,
   getTodayTourDate,
+  isWithinDriverTourAutoWindow,
   requireActiveTourForDriver,
 } from "@/lib/server/tours";
 import type {
@@ -86,6 +89,32 @@ const noSaleSchema = z.object({
 
 type VisitDbClient = Pick<typeof prisma, "tourCustomerVisit">;
 
+/**
+ * AUTO-TOURNEE 08:00-18:00 - no client (web or the Android shell) ever
+ * needs to call POST /api/driver/tour/start anymore, and neither exposes a
+ * "Commencer la tournee" button any more (components/driver-tour/driver-
+ * tour-view.tsx) - a plain read of this endpoint is now enough, on its own,
+ * to both create/resume AND reflect today's tour correctly at any hour:
+ *
+ *  - no active tour, currently within [08:00, 18:00) Africa/Casablanca ->
+ *    auto-start it right here (createAndStartTourForDriver, shared with the
+ *    still-existing POST endpoint so both paths can never disagree) and
+ *    return it as the active tour - the driver sees it running immediately,
+ *    with no manual step. A transient failure (a real conflict, a DB blip)
+ *    falls through to the messaging below instead of breaking the read -
+ *    the NEXT read (next screen open, next 60s shell refresh) retries.
+ *  - no active tour, outside the window -> today's tour (any status, most
+ *    likely the one closeExpiredActiveToursAtCutoff already closed at
+ *    18:00) is looked up and returned AS the current tour if it exists, so
+ *    "Tournee terminee" can still show its real start/end/summary instead
+ *    of a blank empty state. Before 08:00 there normally isn't one yet.
+ *
+ * `canStart` is always false now - see emptyCurrentTour's own callers below;
+ * no caller should ever render a start button again regardless of this
+ * field's value (a stale cached DTO from before this change may still carry
+ * `true`, which is exactly why the button was removed from the UI outright
+ * rather than left conditional on this flag).
+ */
 export async function getCurrentDriverTour(): Promise<CurrentDriverTourDto> {
   const user = await requireDriverUser();
 
@@ -93,35 +122,39 @@ export async function getCurrentDriverTour(): Promise<CurrentDriverTourDto> {
   if (!activeTour) {
     const startContext = await getDriverTourStartContext(user.driverId, user.organizationId);
 
-    // 1. an ACTIVE tour was already ruled out above. 2. a tour already
-    // prepared (DRAFT/PREPARED/LOADED) for this truck - whichever day it
-    // was created - is resumable as-is. 3. otherwise, a fresh tour can
-    // start as soon as the truck has an unclaimed, stock-applied loading
-    // (see getClaimableLoadingForTruck) - never gated on "a tour already
-    // exists today for this truck", which is exactly what used to block a
-    // 2nd/3rd same-day tour once the 1st one closed.
-    const resumableTour = await findResumableTourForDriverTruck(
-      user.driverId,
-      user.organizationId,
-      startContext.truck.id,
-    );
-    if (resumableTour) {
-      return emptyCurrentTour(
-        "Une tournee preparee vous attend. Vous pouvez la commencer.",
-        startContext,
-        true,
-      );
+    if (isWithinDriverTourAutoWindow()) {
+      try {
+        const started = await createAndStartTourForDriver({
+          organizationId: user.organizationId,
+          createdByUserId: user.id,
+          driverId: user.driverId,
+          truckId: startContext.truck.id,
+        });
+        return buildCurrentDriverTourState(user.organizationId, user.driverId, started);
+      } catch {
+        // Auto-start hit a real, non-retryable-here problem (e.g. a
+        // concurrent request already claimed the truck's one loading) -
+        // never let that break the read itself. Falls through; the next
+        // read (this same 60s-refresh/visibility-driven poll) tries again.
+      }
     }
 
-    // NEW RULE (GPS/tournee/chargement independence): a chargement is no
-    // longer a precondition to start a tour - claimLoadingAndStartTour
-    // already tolerates having none. Whether or not the truck currently has
-    // a claimable loading no longer changes canStart or the message; it
-    // only used to gate this via getClaimableLoadingForTruck.
+    const todaysTour = await getTodaysTourForDriver(user.driverId, user.organizationId);
+    if (todaysTour) {
+      return buildCurrentDriverTourState(user.organizationId, user.driverId, todaysTour);
+    }
+
+    // Reached only when: before 08:00 (nothing to auto-start yet), after
+    // 18:00 with no tour having run at all today, or the in-window
+    // auto-start attempt above just failed (a real, distinct case from
+    // "not open yet" - worth its own honest message instead of implying a
+    // manual start is possible, since no button exists to act on it).
     return emptyCurrentTour(
-      "Vous pouvez commencer une nouvelle tournee.",
+      isWithinDriverTourAutoWindow()
+        ? "Demarrage automatique de la tournee en cours. Reessayez dans un instant."
+        : "La tournee commencera automatiquement a 08:00.",
       startContext,
-      true,
+      false,
     );
   }
 
@@ -835,7 +868,11 @@ async function buildCurrentDriverTourState(
   return {
     tour,
     message: driverTourMessage(tour),
-    canStart: tour.status === "LOADED" && tour.loading?.status === "VALIDATED",
+    // AUTO-TOURNEE 08:00-18:00 - never true any more: a LOADED tour is now
+    // auto-started (createAndStartTourForDriver) the moment it's read within
+    // [08:00, 18:00), so no client should ever offer a manual "Commencer la
+    // tournee" button again, including for this admin-prepared-tour case.
+    canStart: false,
     canReturn: tour.status === "IN_PROGRESS",
     customers: driverCustomers,
     route,
@@ -978,36 +1015,6 @@ async function getAccessibleDriverCustomer(
   }
 
   return customer;
-}
-
-/**
- * The tour that would be resumed if this driver clicked "Commencer" right
- * now: the most recent NON-TERMINAL tour (DRAFT/PREPARED/LOADED) for their
- * truck, regardless of which day it was created - not date-scoped, so a
- * previous day's or an earlier same-day tour that already reached a
- * terminal state (WAITING_FOR_CLOSURE/CLOSED/CANCELLED/INTERRUPTED) never
- * matches here and never blocks a fresh tour from starting instead.
- */
-async function findResumableTourForDriverTruck(
-  driverId: string,
-  organizationId: string,
-  truckId: string,
-) {
-  const tour = await prisma.tour.findFirst({
-    where: {
-      organizationId,
-      truckId,
-      status: { in: ["DRAFT", "PREPARED", "LOADED"] },
-    },
-    orderBy: { createdAt: "desc" },
-    select: { driverId: true },
-  });
-
-  if (!tour || tour.driverId !== driverId) {
-    return null;
-  }
-
-  return tour;
 }
 
 async function requireDriverUser() {
@@ -1220,6 +1227,15 @@ function driverTourMessage(tour: TourDto) {
   }
   if (tour.status === "WAITING_FOR_CLOSURE") {
     return "Votre retour est enregistre. La tournee est en attente de cloture.";
+  }
+  // AUTO-TOURNEE 08:00-18:00 - getTodaysTourForDriver can now surface a
+  // terminal-status tour here (most commonly CLOSED, auto-closed at 18:00 -
+  // see closeExpiredActiveToursAtCutoff) so "Tournee terminee" still shows
+  // its real summary instead of a blank state. Previously unreachable: this
+  // function only ever saw an IN_PROGRESS/WAITING_FOR_CLOSURE tour, or one
+  // still being prepared.
+  if (tour.status === "CLOSED" || tour.status === "CANCELLED" || tour.status === "INTERRUPTED") {
+    return "Votre tournee est terminee.";
   }
   if (!tour.loading || tour.loading.status !== "VALIDATED") {
     return "Votre tournee est en preparation. Le chargement n'est pas encore valide.";
