@@ -874,24 +874,26 @@ export function DriverPosView({
 
   // Adapters so the shared admin cart components (CartTable/CartSummary) can
   // render driver's own cartRows/totals unchanged - no driver pricing/stock
-  // logic is touched, only reshaped for these presentational props. Driver
-  // has no discount input yet (see computeLine below), so discountUnitAmount
-  // is always 0 here and wired to a no-op onDiscountChange further down.
+  // logic is touched, only reshaped for these presentational props.
+  // discountUnitAmount is the DH-per-unit figure the shared "Rem." input
+  // shows/edits - derived from the real, server-matching discountRate % (see
+  // discountRateToUnitAmount's own doc comment above computeLine).
   const cartLinesForTable = React.useMemo<CartLineComputed[]>(
     () =>
       cartRows.map((row) => {
         const baseHT = row.product.salePriceHT * row.quantity;
+        const discountUnitAmount = discountRateToUnitAmount(row.discountRate, row.product.salePriceTTC);
         return {
           productId: row.productId,
           designation: row.product.name,
           reference: row.product.reference,
           quantity: row.quantity,
-          discountUnitAmount: 0,
+          discountUnitAmount,
           unitPriceHT: row.product.salePriceHT,
           unitPriceTTC: row.product.salePriceTTC,
           tauxTVA: row.product.taxRate,
           baseHT,
-          discountAmount: 0,
+          discountAmount: round(baseHT - row.totals.totalHT),
           netHT: row.totals.totalHT,
           tvaAmount: row.totals.taxAmount,
           totalTTC: row.totals.totalTTC,
@@ -900,6 +902,24 @@ export function DriverPosView({
       }),
     [cartRows],
   );
+
+  // FIX DRIVER POS "REM." FIELD - was wired to a no-op (onDiscountChange={()
+  // => {}}), so nothing the operator typed was ever stored: the input always
+  // redisplayed discountUnitAmount=0 on the very next render, one keystroke
+  // later. This is the real handler, converting the typed DH amount back to
+  // the % the cart line/server actually store (see discountUnitAmountToRate).
+  function updateDiscount(productId: string, discountUnitAmount: number) {
+    const row = cartRows.find((line) => line.productId === productId);
+    const unitPriceTTC = row?.product.salePriceTTC ?? 0;
+    const safeAmount = Number.isFinite(discountUnitAmount) ? Math.max(0, discountUnitAmount) : 0;
+    if (safeAmount > unitPriceTTC) {
+      toast.error("La remise ne peut pas dépasser le prix unitaire.");
+    }
+    const discountRate = discountUnitAmountToRate(safeAmount, unitPriceTTC);
+    setCart((current) =>
+      current.map((line) => (line.productId === productId ? { ...line, discountRate } : line)),
+    );
+  }
 
   const cartTotalsForSummary = React.useMemo<CartTotals>(
     () => ({
@@ -1265,7 +1285,10 @@ export function DriverPosView({
           productName: row.product.name,
           quantity: row.quantity,
           unitPriceHT: row.product.salePriceHT,
-          discountUnitAmount: row.discountRate,
+          // FIX DRIVER POS "REM." FIELD - buildPreviewSale expects a DH
+          // amount (lib/pos-discount.ts), not the % this cart line actually
+          // stores - see discountRateToUnitAmount's own doc comment.
+          discountUnitAmount: discountRateToUnitAmount(row.discountRate, row.product.salePriceTTC),
           taxRate: row.product.taxRate,
         })),
       });
@@ -1469,10 +1492,10 @@ export function DriverPosView({
         productName: row.product.name,
         quantity: row.quantity,
         unitPriceHT: row.product.salePriceHT,
-        // Driver POS has no discount input yet (discountRate is always 0
-        // here) - renamed only for lib/pos-preview-sale.ts's shared type,
-        // no behaviour change. See lib/pos-discount.ts.
-        discountUnitAmount: row.discountRate,
+        // FIX DRIVER POS "REM." FIELD - buildPreviewSale expects a DH
+        // amount (lib/pos-discount.ts), not the % this cart line actually
+        // stores - see discountRateToUnitAmount's own doc comment.
+        discountUnitAmount: discountRateToUnitAmount(row.discountRate, row.product.salePriceTTC),
         taxRate: row.product.taxRate,
       })),
     });
@@ -1789,7 +1812,7 @@ export function DriverPosView({
                   onIncrement={incrementQuantity}
                   onDecrement={decrementQuantity}
                   onQuantityChange={updateQuantity}
-                  onDiscountChange={() => {}}
+                  onDiscountChange={updateDiscount}
                   onRemove={removeProduct}
                 />
               </div>
@@ -2136,6 +2159,24 @@ function computeLine(product: DriverPosProductDto, line: CartLine) {
   const totalHT = round(grossHT - discountAmount);
   const taxAmount = round(totalHT * (product.taxRate / 100));
   return { totalHT, taxAmount, totalTTC: round(totalHT + taxAmount) };
+}
+
+// FIX DRIVER POS "REM." FIELD - the shared CartTable's "Rem." input is a DH
+// amount off the unit's TTC price (see lib/pos-discount.ts, same as the
+// counter POS) but the driver POS's own cart line (CartLine.discountRate,
+// above) and its real sale-creation payload (lib/server/driver-sales.ts's
+// `discountRate: z.coerce.number().min(0).max(100)`) are a PERCENTAGE - a
+// different representation on purpose (it is what the server actually
+// persists for a driver sale). These two convert between the two at the UI
+// boundary only; `CartLine.discountRate` itself, and everything the server
+// contract expects, are unchanged.
+function discountRateToUnitAmount(discountRate: number, unitPriceTTC: number): number {
+  return round((discountRate / 100) * unitPriceTTC);
+}
+
+function discountUnitAmountToRate(discountUnitAmount: number, unitPriceTTC: number): number {
+  if (unitPriceTTC <= 0) return 0;
+  return Math.min(100, Math.max(0, round((discountUnitAmount / unitPriceTTC) * 100)));
 }
 
 function resolveInitialCustomer(
