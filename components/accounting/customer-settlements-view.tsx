@@ -367,20 +367,8 @@ export function CustomerSettlementsView({
 
             {journal && journal.operations.length > 0 ? (
               <>
-                <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                  <div className="rounded-xl border border-border bg-muted/20 px-4 py-3">
-                    <p className="text-xs text-muted-foreground">Total débit attribué</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums">
-                      {formatCurrency(journal.totals.debit)}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-border bg-muted/20 px-4 py-3">
-                    <p className="text-xs text-muted-foreground">Total crédit attribué</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums">
-                      {formatCurrency(journal.totals.credit)}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-border bg-muted/20 px-4 py-3">
+                <div className="mt-4">
+                  <div className="rounded-xl border border-border bg-muted/20 px-4 py-3 sm:max-w-xs">
                     <p className="text-xs text-muted-foreground">Solde comptable attribué</p>
                     <p className="mt-1 text-lg font-semibold tabular-nums">
                       {formatCurrency(journal.totals.balance)}
