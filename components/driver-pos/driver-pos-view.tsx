@@ -1218,7 +1218,9 @@ export function DriverPosView({
         quantity: row.quantity,
         unitPriceSnapshot: row.product.salePriceTTC,
         taxRateSnapshot: row.product.taxRate,
-        discountSnapshot: 0,
+        // PHASE 2.1b - the cart line's own discount percentage, so the
+        // synced sale carries the same discount as the local ticket.
+        discountSnapshot: row.discountRate,
         totalHT: row.totals.totalHT,
         taxAmount: row.totals.taxAmount,
         totalTTC: row.totals.totalTTC,
@@ -1675,7 +1677,12 @@ export function DriverPosView({
                 still uses the original overlay, untouched. */}
             <div className="flex items-stretch gap-2 lg:hidden">
               <MobileSupplierPicker
-                className="min-w-0 flex-1 lg:hidden"
+                // Phone UI: 30% / 70% split (flex 3:7 of the width left after
+                // the gap) and a 1.5x taller trigger (h-9 36px -> 54px). The
+                // trigger's own h-9 lives inside the shared component, so it
+                // is overridden from here with a child selector - the counter
+                // POS call site is untouched.
+                className="min-w-0 flex-[3] lg:hidden [&>button]:h-[54px]"
                 suppliers={supplierOptions}
                 value={supplierFilter}
                 onChange={setSupplierFilter}
@@ -1687,16 +1694,30 @@ export function DriverPosView({
                 // height stays byte-for-byte unchanged.
                 itemPaddingClassName="py-10"
               />
-              <div className="min-w-0 flex-1">
-                <MobileSelectedProduct product={mobileSelectedProduct} variant="inline" />
+              <div className="min-w-0 flex-[7]">
+                <MobileSelectedProduct
+                  product={mobileSelectedProduct}
+                  variant="inline"
+                  className="h-[54px]"
+                />
               </div>
             </div>
           </div>
-          <ProductGrid
-            products={productTiles}
-            onAdd={addProductById}
-            onAdded={handleMobileProductAdded}
-          />
+          {/* Phone UI: the product NAME on the tiles is 1.5x bigger (13px ->
+              19.5px, line-height 17px -> 25.5px, 2-line min height 34px ->
+              51px). ProductCard is shared with the counter POS, so this is
+              scoped to THIS wrapper with descendant selectors on the name
+              paragraph only (the one with line-clamp-2; clamp raised to 3
+              lines so a long name is not cut at the bigger size): price, stock, the
+              Ajouter pill and the photo keep their own classes. max-lg only,
+              desktop is unchanged. */}
+          <div className="max-lg:[&_button_p.line-clamp-2]:min-h-[51px] max-lg:[&_button_p.line-clamp-2]:text-[19.5px] max-lg:[&_button_p.line-clamp-2]:leading-[25.5px] max-lg:[&_button_p.line-clamp-2]:line-clamp-3">
+            <ProductGrid
+              products={productTiles}
+              onAdd={addProductById}
+              onAdded={handleMobileProductAdded}
+            />
+          </div>
         </div>
 
         <div
