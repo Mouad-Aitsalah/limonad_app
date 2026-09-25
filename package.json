@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:counter-offline": "tsx --test lib/offline/counter-pos/*.test.ts",
     "postinstall": "prisma generate",
     "build:driver-mobile": "npm --prefix mobile/driver run build",
     "android:driver-local": "node scripts/build-driver-local-android.mjs",
@@ -34,6 +35,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "decimal.js-light": "^2.5.1",
+    "dexie": "^4.4.6",
     "html2canvas": "^1.4.1",
     "jeep-sqlite": "^2.8.0",
     "jspdf": "^4.2.1",
@@ -61,6 +63,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.11",
+    "fake-indexeddb": "^6.2.5",
     "prisma": "^7.9.1",
     "tailwindcss": "^4",
     "typescript": "^5"

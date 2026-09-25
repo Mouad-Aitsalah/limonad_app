@@ -33,6 +33,13 @@ async function fetchSessionUser(): Promise<CurrentUser | null> {
     credentials: "include",
   });
   const payload = (await response.json()) as { user: CurrentUser | null };
+  // Counter POS offline: only a definitive "no session" answer from the server
+  // (200 + user: null) ends the offline identity - never a network/server error.
+  if (response.ok && payload.user === null) {
+    void import("@/lib/offline/counter-pos/offline-session")
+      .then((module) => module.clearOfflineSession())
+      .catch(() => {});
+  }
   return payload.user;
 }
 
@@ -131,6 +138,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = React.useCallback(async () => {
     // No-op on the web / when nothing is tracking - see lib/gps/native-tracking.ts.
     await stopNativeTracking();
+    // Counter POS offline: drop the offline identity (and the mirrored
+    // catalogue) BEFORE the network call, so a failed/offline logout can never
+    // leave a usable offline session behind. Unsynchronised sales are kept.
+    try {
+      const { cleanupOnLogout } = await import("@/lib/offline/counter-pos/offline-logout");
+      await cleanupOnLogout();
+    } catch {
+      // fail-soft: never block a logout
+    }
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     setCurrentUser(null);
     // Drop the cached company identity so the next user never sees the

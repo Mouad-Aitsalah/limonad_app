@@ -25,6 +25,9 @@ type CustomerComboboxProps = {
   initialSuggestions: CustomerDto[];
   placeholder?: string;
   label?: string | null;
+  /** Optional replacement for the server search (offline: local mirror).
+   *  Omitted = the unchanged GET /api/customers/search. Must not throw. */
+  searchCustomers?: (query: string) => Promise<CustomerDto[]>;
 };
 
 /**
@@ -42,6 +45,7 @@ export function CustomerCombobox({
   initialSuggestions,
   placeholder = "Selectionner un client",
   label = "Client",
+  searchCustomers,
 }: CustomerComboboxProps) {
   const [query, setQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<{
@@ -54,8 +58,12 @@ export function CustomerCombobox({
     if (!trimmedQuery) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      fetch(`/api/customers/search?q=${encodeURIComponent(trimmedQuery)}`)
-        .then((response) => (response.ok ? response.json() : { customers: [] }))
+      const request: Promise<{ customers?: CustomerDto[] }> = searchCustomers
+        ? searchCustomers(trimmedQuery).then((customers) => ({ customers }))
+        : fetch(`/api/customers/search?q=${encodeURIComponent(trimmedQuery)}`).then((response) =>
+            response.ok ? response.json() : { customers: [] },
+          );
+      request
         .then((body: { customers?: CustomerDto[] }) => {
           if (!cancelled) setSearchResults({ forQuery: trimmedQuery, customers: body.customers ?? [] });
         })
@@ -67,7 +75,7 @@ export function CustomerCombobox({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [trimmedQuery]);
+  }, [trimmedQuery, searchCustomers]);
 
   const items: CustomerDto[] = trimmedQuery
     ? searchResults?.forQuery === trimmedQuery

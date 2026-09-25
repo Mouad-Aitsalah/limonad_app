@@ -39,6 +39,28 @@ import { CheckoutDialog } from "@/components/pos/checkout-dialog";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { computeDiscountedLineTotals, reconstructDiscountUnitAmount } from "@/lib/pos-discount";
+import { OfflineStatusBar } from "@/components/pos/offline-status-bar";
+import { useCounterPosOffline } from "@/components/pos/use-counter-pos-offline";
+import {
+  createOfflineSale,
+  DEFAULT_CART_SLOT,
+  deleteCart,
+  loadCart,
+  saveCart,
+} from "@/lib/offline/counter-pos";
+import {
+  findLocalCustomerByNumber,
+  getLocalCustomer,
+  searchLocalCustomers,
+} from "@/lib/offline/counter-pos/local-search";
+import {
+  buildOfflineSaleInput,
+  cartInputFromSnapshot,
+  OFFLINE_DISABLED_PAYMENT_METHODS,
+  OFFLINE_SALE_SAVED_MESSAGE,
+  snapshotFromCartRecord,
+  ticketFromOfflineSale,
+} from "@/lib/offline/counter-pos/offline-sale";
 
 export type CartLine = {
   productId: string;
@@ -85,6 +107,8 @@ export type CartTotals = {
 
 type PosLayoutProps = {
   initialContext: CounterPosContextDto;
+  /** Offline shell (/hors-ligne): `initialContext` is the local mirror itself. */
+  offlineShell?: boolean;
 };
 
 function normalizeSearch(value: string) {
@@ -134,7 +158,7 @@ function mapContextProductsToPosProducts(
 // one by a fixed sentinel.
 const NEW_SLOT_KEY = "__new__";
 
-export function PosLayout({ initialContext }: PosLayoutProps) {
+export function PosLayout({ initialContext, offlineShell = false }: PosLayoutProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const editSaleId = searchParams.get("editSaleId");
@@ -143,6 +167,22 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   const canEditLinePrice = currentUser?.role === "admin";
 
   const [context, setContext] = React.useState(initialContext);
+  // Phase 4: network state + local mirror. While ONLINE nothing below changes
+  // the existing API flow; OFFLINE switches the data source to IndexedDB.
+  const offline = useCounterPosOffline(initialContext, {
+    shell: offlineShell,
+    // Sales just confirmed by the server: re-read the real stock.
+    onSalesSynced: () => void refreshContext().catch(() => {}),
+  });
+  const isOfflineRef = React.useRef(false);
+  React.useEffect(() => {
+    isOfflineRef.current = offline.isOffline;
+  }, [offline.isOffline]);
+  // Set when the last validated sale was saved locally (not on the server).
+  const [offlineTicket, setOfflineTicket] = React.useState<{
+    localId: string;
+    reference: string;
+  } | null>(null);
   const [search, setSearch] = React.useState("");
   const [cart, setCart] = React.useState<CartLine[]>([]);
   // Last product tapped in the mobile "Produits" launcher - drives the
@@ -580,6 +620,9 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
   async function ensureSlotReservation() {
     if (editSaleId) return null;
     if (slotReservationRef.current) return slotReservationRef.current;
+    // Official numbers only exist on the server: offline, the sale gets a
+    // local reference instead and its number is assigned at synchronisation.
+    if (isOfflineRef.current) return null;
     if (reservationInFlightRef.current) return null;
     reservationInFlightRef.current = true;
     try {
@@ -652,6 +695,10 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     }
 
     if (cartLines.length > 0) {
+      if (isOfflineRef.current) {
+        toast.error("Hors connexion : validez la vente en cours avant d'en commencer une autre.");
+        return;
+      }
       setCheckoutOpen(false);
       await prepareInvoice(true);
       return;
@@ -682,6 +729,24 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       (current) => current ?? resolveDefaultCustomer(nextContext.customers, nextContext.defaultCustomerId),
     );
   }
+
+  // Offline replacements for the three customer lookups: `undefined` while
+  // online keeps every component on its unchanged server call.
+  const offlineScope = offline.scope;
+  const searchCustomersOffline = React.useMemo(
+    () =>
+      offline.isOffline && offlineScope
+        ? (query: string) => searchLocalCustomers(offlineScope, query)
+        : undefined,
+    [offline.isOffline, offlineScope],
+  );
+  const resolveCustomerOffline = React.useMemo(
+    () =>
+      offline.isOffline && offlineScope
+        ? (accountNumber: string) => findLocalCustomerByNumber(offlineScope, accountNumber)
+        : undefined,
+    [offline.isOffline, offlineScope],
+  );
 
   function buildSaleBody(extra: Record<string, unknown>) {
     return JSON.stringify({
@@ -836,6 +901,106 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editSaleId]);
 
+  // Phase 4 - source switch. Going offline swaps the context for the local
+  // mirror (whole catalogue, stock net of unsynchronised sales, so the
+  // ordinary local product search covers everything); coming back online
+  // re-reads the server. CREDIT cannot be validated offline, so fall back to cash.
+  const wasOfflineRef = React.useRef(false);
+  React.useEffect(() => {
+    const wasOffline = wasOfflineRef.current;
+    wasOfflineRef.current = offline.isOffline;
+    if (offline.isOffline && !wasOffline) {
+      setPaymentMethod((current) => (current === "CREDIT" ? defaultPaymentMethod : current));
+      void offline.loadLocalContext().then((local) => {
+        if (local) setContext({ ...local, productsTruncated: false });
+      });
+    } else if (!offline.isOffline && wasOffline) {
+      void refreshContext().catch(() => {});
+      void offline.refreshUnsyncedCount();
+    }
+    // Only the network transition matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offline.isOffline]);
+
+  // Cart persistence: restored once per session start, then saved on every
+  // change (debounced). Survives refresh, closing the window and restarting.
+  const [cartRestored, setCartRestored] = React.useState(false);
+  React.useEffect(() => {
+    const scope = offline.scope;
+    // Edit mode never restores nor saves a local cart (see the save effect).
+    if (!scope || cartRestored || editSaleId) return;
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadCart(scope);
+      if (cancelled) return;
+      if (stored.ok && stored.value && stored.value.lines.length > 0) {
+        const snapshot = snapshotFromCartRecord(stored.value);
+        setCart(snapshot.lines);
+        setPaymentMethod(snapshot.paymentMethod);
+        setChequeNumber(snapshot.chequeNumber);
+        setBanque(snapshot.banque);
+        setBankAccountId(snapshot.bankAccountId);
+        setMixedAmounts(snapshot.mixedAmounts);
+        idempotencyKeyRef.current = snapshot.idempotencyKey;
+        if (snapshot.reservation) {
+          slotReservationRef.current = snapshot.reservation;
+          setSlotReservation(snapshot.reservation);
+        }
+        if (snapshot.customerId) {
+          const known =
+            context.customers.find((item) => item.id === snapshot.customerId) ??
+            (await getLocalCustomer(scope, snapshot.customerId));
+          if (!cancelled && known) setSelectedCustomer(known);
+        }
+      }
+      if (!cancelled) setCartRestored(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Runs once per scope; context/editSaleId are read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offline.scope, cartRestored]);
+
+  React.useEffect(() => {
+    const scope = offline.scope;
+    if (!scope || !cartRestored || editSaleId || openPendingSale) return;
+    const timer = window.setTimeout(() => {
+      if (cart.length === 0) {
+        void deleteCart(scope);
+        return;
+      }
+      void saveCart(
+        scope,
+        cartInputFromSnapshot({
+          lines: cart,
+          customerId: selectedCustomer?.id ?? null,
+          paymentMethod,
+          chequeNumber,
+          banque,
+          bankAccountId,
+          mixedAmounts,
+          idempotencyKey: idempotencyKeyRef.current,
+          reservation: slotReservation,
+        }),
+      );
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [
+    offline.scope,
+    cartRestored,
+    editSaleId,
+    openPendingSale,
+    cart,
+    selectedCustomer,
+    paymentMethod,
+    chequeNumber,
+    banque,
+    bankAccountId,
+    mixedAmounts,
+    slotReservation,
+  ]);
+
   // Edit mode: load the sale referenced by ?editSaleId and seed the POS from
   // it (client, lines with historical prices/discounts, payment method).
   React.useEffect(() => {
@@ -941,7 +1106,82 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
     window.setTimeout(() => window.print(), 0);
   }
 
+  // Phase 4: validates the current cart into a PENDING sale on THIS PC. It is
+  // not sent anywhere: the server will only know it after synchronisation.
+  async function saveOfflineSale(paidAmount?: number): Promise<boolean> {
+    if (editSaleId || openPendingSale) {
+      toast.error("Cette opération nécessite la connexion au serveur.");
+      return false;
+    }
+    if (!offline.scope) {
+      toast.error("Session introuvable : impossible d'enregistrer la vente sur ce poste.");
+      return false;
+    }
+    const built = buildOfflineSaleInput({
+      depotId: context.depot.id,
+      stockLocationId: context.stockLocation.id,
+      bankAccounts: context.bankAccounts,
+      lines: cartLines,
+      customer: selectedCustomer
+        ? { id: selectedCustomer.id, code: selectedCustomer.code, name: selectedCustomer.name }
+        : null,
+      paymentMethod,
+      chequeNumber,
+      banque,
+      bankAccountId,
+      mixedAmounts,
+      idempotencyKey: idempotencyKeyRef.current,
+      reservation: slotReservationRef.current,
+      clearCartSlot: DEFAULT_CART_SLOT,
+    });
+    if (!built.ok) {
+      toast.error(built.message);
+      return false;
+    }
+    if (paidAmount !== undefined && paidAmount < built.input.totals.totalTTC) {
+      toast.error("Le règlement partiel (reste à crédit) n'est pas disponible hors connexion.");
+      return false;
+    }
+
+    const saved = await createOfflineSale(offline.scope, built.input);
+    if (!saved.ok) {
+      toast.error("Impossible d'enregistrer la vente sur ce poste. Rien n'a été validé.");
+      return false;
+    }
+    const sale = saved.value.sale;
+    setLastSale(
+      ticketFromOfflineSale(sale, {
+        cashierName: context.user.name,
+        bankAccount:
+          context.bankAccounts.find((account) => account.id === bankAccountId) ?? null,
+      }),
+    );
+    toast.success(OFFLINE_SALE_SAVED_MESSAGE);
+    setCheckoutOpen(false);
+    clearSlotReservation();
+    resetOperation();
+    setOfflineTicket({ localId: sale.localId, reference: sale.localReference });
+    // Local stock now shows this sale as reserved.
+    const local = await offline.loadLocalContext();
+    if (local) setContext({ ...local, productsTruncated: false });
+    await offline.refreshUnsyncedCount();
+    return true;
+  }
+
   async function confirmOperation(paidAmount?: number) {
+    if (isOfflineRef.current) {
+      if (!selectedCustomer) {
+        toast.error("Sélectionnez un client avant de valider.");
+        return;
+      }
+      setSubmitting(true);
+      try {
+        await saveOfflineSale(paidAmount);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
     if (openPendingSale) {
       await collectOpenPendingSale(paidAmount);
       return;
@@ -973,6 +1213,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
       await refreshContext();
       void ensureSlotReservation();
     } catch (error) {
+      // fetch() itself failed (connection lost between the last check and the
+      // click): nothing reached the server, so the sale is kept locally. The
+      // stable idempotencyKey makes a later sync safe even if it had.
+      if (error instanceof TypeError) {
+        await saveOfflineSale(paidAmount);
+        return;
+      }
       toast.error(
         error instanceof Error ? error.message : "Impossible d'enregistrer la vente.",
       );
@@ -1198,6 +1445,23 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         </Button>
       </div>
 
+      <OfflineStatusBar
+        networkState={offline.networkState}
+        pendingCount={offline.pendingCount}
+        failedCount={offline.failedCount}
+        syncStatus={offline.syncStatus}
+        onSyncNow={() => void offline.syncNow()}
+      />
+      {offlineTicket && lastSale?.id === offlineTicket.localId ? (
+        <div
+          role="status"
+          data-testid="pos-offline-saved"
+          className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900"
+        >
+          {OFFLINE_SALE_SAVED_MESSAGE} Référence {offlineTicket.reference}.
+        </div>
+      ) : null}
+
       {editSale ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
           <div className="flex items-center gap-2 text-amber-900">
@@ -1351,6 +1615,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
                 value={selectedCustomer}
                 onChange={setSelectedCustomer}
                 initialSuggestions={context.customers}
+                searchCustomers={searchCustomersOffline}
               />
             </div>
             <MobileCustomerPicker
@@ -1358,11 +1623,13 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
               value={selectedCustomer}
               onChange={setSelectedCustomer}
               initialSuggestions={context.customers}
+              searchCustomers={searchCustomersOffline}
             />
           </div>
           <CustomerNumberInput
             customer={selectedCustomer}
             onResolved={setSelectedCustomer}
+            resolveCustomer={resolveCustomerOffline}
             placeholder="N° Client"
             hideLabelOnMobile="lg"
           />
@@ -1381,6 +1648,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
             mixedAmounts={mixedAmounts}
             onMixedAmountsChange={setMixedAmounts}
             mixedTotal={totals.netAPayer}
+            disabledMethods={offline.isOffline ? OFFLINE_DISABLED_PAYMENT_METHODS : undefined}
           />
         </div>
 
@@ -1473,7 +1741,7 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
           onPrint={() => {
             void printInvoice();
           }}
-          onHold={openPendingSale ? undefined : prepareInvoice}
+          onHold={openPendingSale || offline.isOffline ? undefined : prepareInvoice}
           holdLoading={preparing}
         />
         )}
@@ -1516,7 +1784,12 @@ export function PosLayout({ initialContext }: PosLayoutProps) {
         mixedAmounts={mixedAmounts}
         onConfirm={confirmOperation}
       />
-      <ReceiptPrint sale={lastSale} />
+      <ReceiptPrint
+        sale={lastSale}
+        offlineReference={
+          offlineTicket && lastSale?.id === offlineTicket.localId ? offlineTicket.reference : null
+        }
+      />
     </div>
   );
 }

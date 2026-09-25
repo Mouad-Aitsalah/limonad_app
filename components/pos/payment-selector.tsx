@@ -50,6 +50,8 @@ type PaymentSelectorProps = {
   mixedAmounts: MixedPaymentAmounts;
   onMixedAmountsChange: (value: MixedPaymentAmounts) => void;
   mixedTotal: number;
+  /** Methods shown but not selectable (offline: CREDIT). Omitted = all enabled. */
+  disabledMethods?: readonly PosPaymentMethodValue[];
 };
 
 export function PaymentSelector({
@@ -67,6 +69,7 @@ export function PaymentSelector({
   mixedAmounts,
   onMixedAmountsChange,
   mixedTotal,
+  disabledMethods,
 }: PaymentSelectorProps) {
   const selected = posPaymentMethods.find((method) => method.value === paymentMethod);
   const mixedError =
@@ -90,7 +93,11 @@ export function PaymentSelector({
           </SelectTrigger>
           <SelectContent>
             {posPaymentMethods.map((method) => (
-              <SelectItem key={method.value} value={method.value}>
+              <SelectItem
+                key={method.value}
+                value={method.value}
+                disabled={disabledMethods?.includes(method.value)}
+              >
                 {method.label}
               </SelectItem>
             ))}
