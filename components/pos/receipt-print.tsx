@@ -2,7 +2,7 @@
 
 import { useCompanyIdentity, type CompanyIdentity } from "@/hooks/use-company-identity";
 import { formatCustomerCode } from "@/lib/customer-code";
-import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
+import { receiptUnitPriceTTC } from "@/lib/receipt-line-price";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto } from "@/types/operations-dto";
 
@@ -151,10 +151,11 @@ export function ReceiptPrint({
           ) : null}
         </div>
 
+        {/* The "EN ATTENTE DE RÈGLEMENT" box above the table is no longer
+            printed (the "Statut" line in the footer still says it). Only the
+            offline ticket keeps its own marker. */}
         {offlineReference ? (
           <div className="receipt-print-pending">TICKET HORS CONNEXION</div>
-        ) : awaitingPayment ? (
-          <div className="receipt-print-pending">EN ATTENTE DE RÈGLEMENT</div>
         ) : null}
 
         <div className="receipt-print-separator" />
@@ -170,17 +171,10 @@ export function ReceiptPrint({
 
         <div className="receipt-print-lines">
           {sale.lines.map((line) => {
-            const unitPriceTTC = line.unitPriceHT * (1 + line.taxRate / 100);
-            // Reconstructed from the totals actually charged, never printed
-            // from discountRate - exact for a line entered as a DH amount,
-            // and a faithful DH reading of an older percentage-discounted
-            // line. Never "1 %" when the operator typed "1 DH".
-            const discountUnitAmount = reconstructDiscountUnitAmount({
-              unitPriceHT: line.unitPriceHT,
-              taxRate: line.taxRate,
-              quantity: line.quantity,
-              totalTTC: line.totalTTC,
-            });
+            // Price actually charged per unit: the line's discount (rebuilt
+            // from the totals really charged, see receiptUnitPriceTTC) is
+            // folded into it, so no "Remise" line is printed any more.
+            const unitPriceTTC = receiptUnitPriceTTC(line);
 
             return (
               <div key={line.id} className="receipt-print-line">
@@ -194,11 +188,6 @@ export function ReceiptPrint({
                     {formatReceiptAmount(line.totalTTC)}
                   </span>
                 </div>
-                {discountUnitAmount > 0 ? (
-                  <p className="receipt-print-discount">
-                    Remise : {formatReceiptAmount(discountUnitAmount)} DH/u
-                  </p>
-                ) : null}
               </div>
             );
           })}

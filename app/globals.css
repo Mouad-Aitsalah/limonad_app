@@ -625,6 +625,14 @@ body {
     font-weight: 700;
   }
 
+  /* Invoice table VALUES (quantity, product name, unit price, amount) x1.3:
+     10px -> 13px on the 80mm ticket. Only the rows: the column titles keep
+     the ticket's own size (the title row sets no font size), and the
+     column widths, the total and everything else are untouched. */
+  .receipt-print-area[data-document="sale"]:not([data-paper="58"]) .receipt-print-lines {
+    font-size: 13px;
+  }
+
   .receipt-print-lines {
     display: grid;
     gap: 1mm;
@@ -656,12 +664,28 @@ body {
     margin-left: 5.7mm;
   }
 
+  /* Amount on the far LEFT, "TOTAL TTC" on the far RIGHT, same line. The
+     direction and the per-side alignment are explicit so nothing inherited
+     can swap them. */
   .receipt-print-total {
     display: flex;
+    flex-direction: row;
+    direction: ltr;
     justify-content: space-between;
+    align-items: baseline;
     gap: 2mm;
     font-size: 12px;
     font-weight: 700;
+  }
+
+  .receipt-print-total > strong {
+    text-align: left;
+    margin-right: auto;
+  }
+
+  .receipt-print-total > span {
+    text-align: right;
+    margin-left: auto;
   }
 
   /* Unpaid ("facture du jour" printed before collection) marker - a plain
