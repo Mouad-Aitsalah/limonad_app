@@ -41,7 +41,7 @@ import {
   reapStaleSyncingSales,
   revertOfflineSaleToPending,
 } from "./sales-store";
-import type { OfflineSaleWithLines } from "./types";
+import { buildSyncPayload, type SyncSaleBody } from "./sync-payload";
 
 const SYNC_ENDPOINT = "/api/driver/sales/sync";
 const FETCH_TIMEOUT_MS = 20000;
@@ -62,6 +62,15 @@ const PERMANENT_ERROR_CODES = new Set([
   "INVALID_SOLD_AT",
   "INVALID_QUANTITY",
   "INVALID_PRICE",
+  // PHASE 2.1b - codes added to the server's vocabulary
+  // (lib/server/offline-sync-errors.ts). The server also states this with an
+  // explicit `retryable: false` on the response (see classifyResponse) - this
+  // list is only the fallback for a response that does not carry it.
+  "OFFLINE_PRICE_TOKEN_EXPIRED",
+  "CUSTOMER_INACTIVE",
+  "CREDIT_LIMIT_EXCEEDED",
+  "CONFLICT",
+  "FORBIDDEN",
 ]);
 
 export type SyncedSale = {
@@ -69,6 +78,11 @@ export type SyncedSale = {
   localReference: string;
   serverSaleId: string;
   officialDisplayNumber: string;
+  /** PHASE 2.1b - the total the server recorded, when it reported one. */
+  serverTotalTTC?: number | null;
+  /** PHASE 2.1b - true when the server total differs from this device's
+   *  ticket by more than 0.01. The sale is synced either way. */
+  totalMismatch?: boolean;
 };
 
 export type SyncFailedSale = {
@@ -99,7 +113,13 @@ export type SyncTransportOptions = {
 };
 
 type SyncOutcome =
-  | { kind: "success"; serverSaleId: string; officialDisplayNumber: string }
+  | {
+      kind: "success";
+      serverSaleId: string;
+      officialDisplayNumber: string;
+      serverTotalTTC: number | null;
+      totalMismatch: boolean;
+    }
   | { kind: "auth_required"; message: string }
   | { kind: "permanent"; message: string }
   | { kind: "transient"; message: string };
@@ -126,18 +146,30 @@ async function classifyResponse(response: Response): Promise<SyncOutcome> {
       // "success"/"serverSaleId"/"officialDisplayNumber" are the ONLY
       // fields this client trusts to decide the sale is really synced -
       // never `result` (CREATED vs ALREADY_SYNCED), see "5. SUCCÈS SERVEUR".
-      return { kind: "success", serverSaleId, officialDisplayNumber };
+      return {
+        kind: "success",
+        serverSaleId,
+        officialDisplayNumber,
+        serverTotalTTC: typeof body.serverTotalTTC === "number" ? body.serverTotalTTC : null,
+        totalMismatch: body.totalMismatch === true,
+      };
     }
     return { kind: "transient", message: "Reponse serveur incomplete." };
   }
   if (code && PERMANENT_ERROR_CODES.has(code)) {
     return { kind: "permanent", message };
   }
+  // PHASE 2.1b - the server's own verdict, when it gives one: resending this
+  // exact sale can never succeed. Absent (an older server) = the safer
+  // transient default below, unchanged.
+  if (body?.retryable === false) {
+    return { kind: "permanent", message };
+  }
   return { kind: "transient", message };
 }
 
 async function syncOneSale(
-  sale: OfflineSaleWithLines,
+  payload: SyncSaleBody,
   transport?: SyncTransportOptions,
 ): Promise<SyncOutcome> {
   const controller = new AbortController();
@@ -146,23 +178,13 @@ async function syncOneSale(
     const response = await fetch(transport?.endpoint ?? SYNC_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(transport?.headers ?? {}) },
-      // "3. PAYLOAD SERVEUR" - exactly the fields Phase 4A expects. Never
-      // organizationId/driverId/truckId/stockLocationId/totalTTC/an official
+      // "3. PAYLOAD SERVEUR" - built by buildSyncPayload (sync-payload.ts).
+      // Never organizationId/driverId/truckId/stockLocationId/an official
       // number - those are either server-derived from the session or
       // recalculated server-side, never trusted from this device.
-      body: JSON.stringify({
-        clientMutationId: sale.clientMutationId,
-        localReference: sale.localReference,
-        soldAt: sale.soldAt,
-        customerId: sale.customerId,
-        paymentMethod: sale.paymentMethod,
-        lines: sale.lines.map((line) => ({
-          productId: line.productId,
-          quantity: line.quantity,
-          unitPriceTTC: line.unitPriceSnapshot,
-          priceToken: line.priceToken,
-        })),
-      }),
+      // expectedTotalTTC is only ever COMPARED by the server with the total
+      // it computes - it never prices or refuses the sale.
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
     return await classifyResponse(response);
@@ -217,9 +239,25 @@ async function runSyncBatch(
   // PAR UNE. Pas de Promise.all." Also what makes stopping on 401 possible.
   for (const sale of toSync) {
     result.attempted += 1;
+
+    // PHASE 2.1b - a sale whose discount cannot be established with
+    // certainty is never sent at a guessed price: it goes straight to review,
+    // without being marked SYNCING (no request was made, so no attempt).
+    const prepared = buildSyncPayload(sale);
+    if (!prepared.ok) {
+      await markOfflineSaleRequiresReview(sale.localId, prepared.message);
+      result.requiresReview.push({
+        localId: sale.localId,
+        localReference: sale.localReference,
+        message: prepared.message,
+      });
+      console.log("[SYNC FAILED]", { localId: sale.localId, clientMutationId: sale.clientMutationId, status: "REQUIRES_REVIEW" });
+      continue;
+    }
+
     await markOfflineSaleSyncing(sale.localId);
 
-    const outcome = await syncOneSale(sale, transport);
+    const outcome = await syncOneSale(prepared.body, transport);
 
     if (outcome.kind === "success") {
       await markOfflineSaleSynced(sale.localId, {
@@ -234,7 +272,17 @@ async function runSyncBatch(
         localReference: sale.localReference,
         serverSaleId: outcome.serverSaleId,
         officialDisplayNumber: outcome.officialDisplayNumber,
+        serverTotalTTC: outcome.serverTotalTTC,
+        totalMismatch: outcome.totalMismatch,
       });
+      if (outcome.totalMismatch) {
+        console.warn("[SYNC TOTAL MISMATCH]", {
+          localId: sale.localId,
+          clientMutationId: sale.clientMutationId,
+          localTotalTTC: sale.totalTTC,
+          serverTotalTTC: outcome.serverTotalTTC,
+        });
+      }
       console.log("[SYNC SUCCESS]", {
         localId: sale.localId,
         clientMutationId: sale.clientMutationId,

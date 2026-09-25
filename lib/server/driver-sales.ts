@@ -3,7 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { businessDayRangeUtc, getCurrentBusinessDayParam } from "@/lib/business-day";
-import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
+import { addMoney, MONEY_RANGE_MAX_NUMBER, subtractMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
@@ -12,6 +12,7 @@ import {
   postSaleAccountingEntry,
   resolveSaleTransferBankAccountId,
 } from "@/lib/server/accounting";
+import { AuthServiceError } from "@/lib/server/auth";
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
@@ -19,7 +20,16 @@ import { toLightweightProductImageUrl } from "@/lib/server/product-image-url";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { markCustomerDeliveredOnTour } from "@/lib/server/driver-tour";
 import { closeExpiredActiveToursAtCutoff } from "@/lib/server/tours";
-import { signOfflinePrice, verifyOfflinePriceToken } from "@/lib/server/offline-price-token";
+import {
+  checkOfflinePriceTokenFreshness,
+  signOfflinePrice,
+  verifyOfflinePriceToken,
+} from "@/lib/server/offline-price-token";
+import {
+  isRetryableSyncError,
+  mapSaleServiceErrorToSyncCode,
+  type OfflineSyncErrorCode,
+} from "@/lib/server/offline-sync-errors";
 import {
   mapSaleToDto,
   nextInvoiceNumber,
@@ -717,17 +727,17 @@ export async function createDriverSale(
 // client can branch on something more precise than an HTTP status. Kept
 // local to this module (not a change to the shared OperationsServiceError
 // used across the rest of the app) - see DriverSaleSyncError below.
-export type OfflineSaleSyncErrorCode =
-  | "UNSUPPORTED_OFFLINE_PAYMENT_METHOD"
-  | "INVALID_QUANTITY"
-  | "INVALID_PRICE"
-  | "INVALID_SOLD_AT"
-  | "INVALID_OFFLINE_PRICE_TOKEN"
-  | "LEGACY_OFFLINE_PRICE_MISMATCH"
-  | "DRIVER_CONTEXT_NOT_FOUND"
-  | "CUSTOMER_NOT_FOUND"
-  | "PRODUCT_NOT_FOUND"
-  | "SALE_SYNC_FAILED";
+//
+// PHASE 2.1b - the code vocabulary now lives in lib/server/offline-sync-errors.ts
+// (shared with the future counter sync); this alias keeps every existing
+// import of the old name working unchanged.
+export type OfflineSaleSyncErrorCode = OfflineSyncErrorCode;
+
+/** Whether resending the same offline sale could ever succeed - exposed on
+ *  the wire as `retryable` so a client never has to hard-code the list. */
+export function isRetryableOfflineSyncError(error: DriverSaleSyncError): boolean {
+  return isRetryableSyncError(error.code, error.status);
+}
 
 // PHASE 4A.1 - "4. VALIDATION soldAt": no lower/historical bound (a network
 // outage can legitimately last days - see this task's own report), only an
@@ -772,6 +782,11 @@ const offlineSaleSyncSchema = z.object({
   soldAt: z.string().trim().min(1, "soldAt est requis."),
   customerId: z.string().trim().nullable().optional(),
   paymentMethod: z.enum(["CASH", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"]),
+  // PHASE 2.1b - the total the driver's own ticket showed. Only ever COMPARED
+  // with the total the server computes (see totalMismatch in the result) -
+  // never used to price or reject the sale. Absent for a client that
+  // predates this field.
+  expectedTotalTTC: z.coerce.number().finite().min(0).nullable().optional(),
   lines: z
     .array(
       z.object({
@@ -779,6 +794,11 @@ const offlineSaleSyncSchema = z.object({
         quantity: z.coerce.number().int().positive().max(1_000_000),
         unitPriceTTC: z.coerce.number().finite().min(0),
         priceToken: z.string().trim().min(1).nullable().optional(),
+        // PHASE 2.1b - the line discount, as the SAME percentage (0-100)
+        // the online driver POS sends (driverSaleSchema.lines.discountRate)
+        // and createDriverSale applies to the HT gross. Absent = 0, exactly
+        // the behaviour before this field existed.
+        discountRate: z.coerce.number().min(0).max(100).optional(),
       }),
     )
     .min(1, "Le panier hors connexion est vide."),
@@ -795,6 +815,11 @@ export type OfflineSaleSyncResult = {
   officialDisplayNumber: string;
   saleYear: number | null;
   saleNumber: number | null;
+  /** PHASE 2.1b - the total the server actually recorded. */
+  serverTotalTTC: number;
+  /** PHASE 2.1b - true when the client sent expectedTotalTTC and it differs
+   *  from serverTotalTTC by more than 0.01. The sale is kept either way. */
+  totalMismatch: boolean;
 };
 
 /**
@@ -884,13 +909,31 @@ export async function syncOfflineDriverSale(
     );
   }
 
+  // PHASE 2.1b - a sale that ALREADY exists for this key is a replay (a lost
+  // response, a restart mid-sync). It is answered from that existing sale
+  // WITHOUT re-running any price validation below: the price checks were
+  // already passed when the sale was created, and re-running them now could
+  // wrongly refuse a real, existing sale because the product's price
+  // changed - or the token aged past its window - since it was created.
+  // This read is also what labels the result CREATED / ALREADY_SYNCED (best
+  // effort only, see below) - the real guarantee that only one Sale ever
+  // exists for this key is createDriverSale's own idempotency check + the
+  // DB's @@unique([organizationId, idempotencyKey]) + its retry loop, none
+  // of which this read participates in. NEVER use this field to decide
+  // whether a sale is synced - only `success`/`serverSaleId`/
+  // `officialDisplayNumber` are guaranteed accurate under true concurrency.
+  const existingBeforeSync = await prisma.sale.findFirst({
+    where: { organizationId: user.organizationId, idempotencyKey: data.clientMutationId },
+    select: { id: true },
+  });
+
   // "7./12. PRICE TOKEN SIGNÉ" - verified (or explicitly trusted legacy)
   // price per productId, passed to createDriverSale's internal-only
   // override below. A tokenized line's price MUST match what was actually
   // signed - any mismatch (tampering or corruption) refuses the whole sale
   // before any DB read, exactly like an unsupported payment method.
   const verifiedUnitPriceTTCByProductId = new Map<string, number>();
-  for (const line of data.lines) {
+  for (const line of existingBeforeSync ? [] : data.lines) {
     if (!Number.isFinite(line.quantity) || line.quantity <= 0) {
       throw new DriverSaleSyncError(
         "INVALID_QUANTITY",
@@ -926,6 +969,22 @@ export async function syncOfflineDriverSale(
           `Le prix envoye ne correspond pas au jeton signe pour le produit ${line.productId}.`,
           422,
         );
+      }
+      // PHASE 2.1b - the signed price is only honoured while the token was
+      // still within its allowed age at the moment of sale.
+      const freshness = checkOfflinePriceTokenFreshness(tokenPayload, soldAtDate);
+      if (!freshness.fresh) {
+        throw freshness.reason === "too_old"
+          ? new DriverSaleSyncError(
+              "OFFLINE_PRICE_TOKEN_EXPIRED",
+              `Le jeton de prix du produit ${line.productId} est trop ancien pour cette vente hors connexion.`,
+              422,
+            )
+          : new DriverSaleSyncError(
+              "INVALID_OFFLINE_PRICE_TOKEN",
+              `Jeton de prix invalide pour le produit ${line.productId}.`,
+              422,
+            );
       }
       verifiedUnitPriceTTCByProductId.set(line.productId, tokenPayload.unitPriceTTC);
     } else {
@@ -977,25 +1036,18 @@ export async function syncOfflineDriverSale(
     }
   }
 
-  // Best-effort CREATED/ALREADY_SYNCED labeling only (see this task's
-  // report on the rare true-concurrency case) - the actual guarantee that
-  // only one Sale ever exists for this key comes from createDriverSale's
-  // own idempotency check + the DB's @@unique([organizationId,
-  // idempotencyKey]) constraint + its retry-on-conflict loop, none of which
-  // this read participates in. NEVER use this field to decide whether a
-  // sale is synced - only `success`/`serverSaleId`/`officialDisplayNumber`
-  // are guaranteed accurate under true concurrency (see "18. CONCURRENCE").
-  const existingBeforeSync = await prisma.sale.findFirst({
-    where: { organizationId: user.organizationId, idempotencyKey: data.clientMutationId },
-    select: { id: true },
-  });
-
   const driverSaleInput: DriverSaleInput & { idempotencyKey: string } = {
     customerId: data.customerId ?? null,
     paymentMethod: "CASH",
     reference: data.localReference ?? null,
     idempotencyKey: data.clientMutationId,
-    lines: data.lines.map((line) => ({ productId: line.productId, quantity: line.quantity })),
+    // PHASE 2.1b - discountRate is forwarded as sent (absent = 0, the
+    // previous behaviour); createDriverSale applies its own formula to it.
+    lines: data.lines.map((line) => ({
+      productId: line.productId,
+      quantity: line.quantity,
+      discountRate: line.discountRate ?? 0,
+    })),
   };
 
   let sale: SaleDto;
@@ -1006,15 +1058,34 @@ export async function syncOfflineDriverSale(
       soldAtOverride: soldAtDate,
     });
   } catch (error) {
+    // A session that expired between this function's own auth check and
+    // createDriverSale's must surface as an auth failure (401), not as a
+    // generic sale failure.
+    if (error instanceof AuthServiceError) throw error;
     if (error instanceof OperationsServiceError) {
       throw new DriverSaleSyncError(
-        mapCreateDriverSaleErrorCode(error.message),
+        mapSaleServiceErrorToSyncCode(error),
         error.message,
         error.status,
         error.fieldErrors,
       );
     }
     throw new DriverSaleSyncError("SALE_SYNC_FAILED", "Impossible de synchroniser la vente.", 500);
+  }
+
+  // PHASE 2.1b - compared, never enforced: the sale exists at this point, so
+  // a difference is reported, not refused. Exact decimal arithmetic
+  // (subtractMoney), so a difference of exactly 0.01 is not flagged.
+  const totalMismatch =
+    data.expectedTotalTTC != null &&
+    Math.abs(subtractMoney(sale.totalTTC, data.expectedTotalTTC)) > 0.01;
+  if (totalMismatch) {
+    console.warn("[OFFLINE SYNC] total mismatch between the driver's ticket and the server total", {
+      organizationId: user.organizationId,
+      clientMutationId: data.clientMutationId,
+      expectedTotalTTC: data.expectedTotalTTC,
+      serverTotalTTC: sale.totalTTC,
+    });
   }
 
   return {
@@ -1026,20 +1097,9 @@ export async function syncOfflineDriverSale(
     officialDisplayNumber: sale.displayNumber,
     saleYear: sale.saleYear,
     saleNumber: sale.saleNumber,
+    serverTotalTTC: sale.totalTTC,
+    totalMismatch,
   };
-}
-
-/**
- * Best-effort mapping of createDriverSale's own (message-only)
- * OperationsServiceError onto this task's requested error codes, without
- * duplicating the validation those messages already come from - see
- * syncOfflineDriverSale's own doc comment on reuse.
- */
-function mapCreateDriverSaleErrorCode(message: string): OfflineSaleSyncErrorCode {
-  if (message.includes("camion") || message.includes("tournee")) return "DRIVER_CONTEXT_NOT_FOUND";
-  if (message.includes("Client") || message.includes("client")) return "CUSTOMER_NOT_FOUND";
-  if (message.includes("produit") || message.includes("Produit")) return "PRODUCT_NOT_FOUND";
-  return "SALE_SYNC_FAILED";
 }
 
 // Same pattern as counter-sales.ts's withSerializableRetry - see the

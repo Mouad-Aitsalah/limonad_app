@@ -84,6 +84,8 @@ import {
 import { OfflineSalesDialog, type OfflineSaleRowData } from "@/components/driver-pos/offline-sales-dialog";
 import { roundMoney } from "@/lib/money";
 import { shareInvoicePdf } from "@/lib/share-invoice";
+import { ThermalPrinterPanel } from "@/components/driver-pos/thermal-printer-panel";
+import { getThermalPrinterService, isThermalPrinterAvailable } from "@/lib/thermal-printer";
 import { formatCurrency } from "@/lib/utils";
 import type {
   CustomerDto,
@@ -504,6 +506,17 @@ export function DriverPosView({
   // OFFLINE"). Cleared every time `lastSale` is replaced by anything else
   // (a real server sale, or a live unconfirmed cart preview).
   const [offlineTicketReference, setOfflineTicketReference] = React.useState<string | null>(null);
+  // Android Bluetooth thermal printing (see printSale below). `thermalPrinterAvailable`
+  // is false on the web and on an APK built without the native plugin, so
+  // nothing below is ever shown or run there.
+  const thermalPrinterAvailable = React.useSyncExternalStore(
+    () => () => {},
+    () => isThermalPrinterAvailable(),
+    () => false,
+  );
+  const [printerPanelOpen, setPrinterPanelOpen] = React.useState(false);
+  const [printerPanelReason, setPrinterPanelReason] = React.useState<string | null>(null);
+  const pendingPrintRef = React.useRef<{ sale: SaleDto; offlineReference: string | null } | null>(null);
   // ÉTAPE 9 - "3. BUG-03 OFF-* -> FACTURE OFFICIELLE": the offline_sales.
   // localId of the sale `lastSale`/`offlineTicketReference` currently
   // represent, or null when they don't represent any local offline sale (an
@@ -1430,17 +1443,47 @@ export function DriverPosView({
   // pipeline (see that function's own "intent: print" doc comment) instead,
   // so "Imprimer" actually reaches Android's print framework. Desktop/mobile
   // web is byte-for-byte unchanged: window.print() only, exactly as before.
-  async function printSale(sale: SaleDto) {
-    if (!Capacitor.isNativePlatform()) {
-      window.setTimeout(() => window.print(), 0);
-      return;
-    }
+  // Android + Bluetooth plugin present: the ticket goes straight to the selected
+  // thermal printer (ESC/POS, no Internet needed). Bluetooth unavailable or
+  // failing: the PDF + share sheet below, exactly as before. Web: unchanged.
+  async function printSaleAsPdf(sale: SaleDto) {
     try {
       await shareInvoicePdf({ sale, identity, customerPhone: lastSalePhone }, "print");
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       toast.error(error instanceof Error ? error.message : "Impossible de preparer le ticket a imprimer.");
     }
+  }
+
+  async function printSale(sale: SaleDto, offlineReference: string | null = offlineTicketReference) {
+    if (!Capacitor.isNativePlatform()) {
+      window.setTimeout(() => window.print(), 0);
+      return;
+    }
+    if (!isThermalPrinterAvailable()) {
+      await printSaleAsPdf(sale);
+      return;
+    }
+    const result = await getThermalPrinterService().printSale(sale, { offlineReference });
+    if (result.ok) {
+      toast.success("Ticket imprimé avec succès");
+      return;
+    }
+    if (result.code === "NOT_AVAILABLE") {
+      await printSaleAsPdf(sale);
+      return;
+    }
+    if (result.code === "NO_PRINTER" || result.code === "PERMISSION_REQUIRED") {
+      // Ask which paired printer to use (or for the permission), then print.
+      pendingPrintRef.current = { sale, offlineReference };
+      setPrinterPanelReason(`${result.message} Le ticket sera imprimé dès que c'est réglé.`);
+      setPrinterPanelOpen(true);
+      return;
+    }
+    toast.error(result.message, {
+      duration: 15_000,
+      action: { label: "Envoyer en PDF", onClick: () => void printSaleAsPdf(sale) },
+    });
   }
 
   function printLastSale() {
@@ -1512,15 +1555,16 @@ export function DriverPosView({
     // FIX ANDROID PRINT BUTTON - printSale needs the sale value itself, not
     // the React state setter above (which would still read the previous
     // render's `lastSale` if called synchronously here) - see printSale's
-    // own doc comment.
-    void printSale(previewSale);
+    // own doc comment. A cart preview is never an offline ticket: null, not
+    // the (not yet updated) state.
+    void printSale(previewSale, null);
   }
 
   function printPending(sale: SaleDto) {
     setLastSale(sale);
     setLastSalePhone(resolveCustomerPhone(sale.customer?.id));
     setOfflineTicketReference(null);
-    void printSale(sale);
+    void printSale(sale, null);
   }
 
   // Sharing is available only for an already-persisted, non-draft invoice;
@@ -1610,6 +1654,15 @@ export function DriverPosView({
         syncableOfflineCount={syncableOfflineCount}
         syncingSales={syncingSales}
         onSyncPendingSales={() => void handleSyncPendingSales()}
+        onOpenPrinterSettings={
+          thermalPrinterAvailable
+            ? () => {
+                pendingPrintRef.current = null;
+                setPrinterPanelReason(null);
+                setPrinterPanelOpen(true);
+              }
+            : undefined
+        }
       />
 
       {/* Mobile catalogue header (tabs, then search+supplier below): sticky
@@ -1918,6 +1971,20 @@ export function DriverPosView({
         onCreated={setSelectedCustomer}
       />
       <ReceiptPrint sale={lastSale} offlineReference={offlineTicketReference} identity={identity} />
+      {thermalPrinterAvailable ? (
+        <ThermalPrinterPanel
+          open={printerPanelOpen}
+          onOpenChange={setPrinterPanelOpen}
+          reason={printerPanelReason}
+          onPrinterSelected={() => {
+            const pending = pendingPrintRef.current;
+            pendingPrintRef.current = null;
+            if (!pending) return;
+            setPrinterPanelOpen(false);
+            void printSale(pending.sale, pending.offlineReference);
+          }}
+        />
+      ) : null}
       <OfflineSalesDialog
         open={offlineSalesDialogOpen}
         onOpenChange={setOfflineSalesDialogOpen}
@@ -1944,6 +2011,7 @@ function DriverInvoiceHeader({
   syncableOfflineCount,
   syncingSales,
   onSyncPendingSales,
+  onOpenPrinterSettings,
 }: {
   driverName: string;
   truckCode: string;
@@ -1975,6 +2043,8 @@ function DriverInvoiceHeader({
   syncableOfflineCount: number;
   syncingSales: boolean;
   onSyncPendingSales: () => void;
+  /** Android + Bluetooth plugin only (undefined on the web): opens the "Imprimante" screen. */
+  onOpenPrinterSettings?: () => void;
 }) {
   const now = new Date();
   const date = now.toLocaleDateString("fr-FR", {
@@ -2045,8 +2115,20 @@ function DriverInvoiceHeader({
             Dernière synchro : {formatSyncTime(cacheSyncedAt)}
           </span>
         ) : null}
+        {onOpenPrinterSettings ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ml-auto"
+            onClick={onOpenPrinterSettings}
+          >
+            <Printer aria-hidden="true" className="h-4 w-4" />
+            Imprimante
+          </Button>
+        ) : null}
         {lastSale ? (
-          <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={onPrintLastSale}>
+          <Button type="button" variant="outline" size="sm" className={onOpenPrinterSettings ? undefined : "ml-auto"} onClick={onPrintLastSale}>
             <Printer aria-hidden="true" className="h-4 w-4" />
             Imprimer
           </Button>

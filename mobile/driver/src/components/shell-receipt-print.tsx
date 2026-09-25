@@ -1,5 +1,5 @@
 import { formatCustomerCode } from "@/lib/customer-code";
-import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
+import { receiptUnitPriceTTC } from "@/lib/receipt-line-price";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto } from "@/types/operations-dto";
 
@@ -90,10 +90,11 @@ export function ShellReceiptPrint({ sale, identity, offlineReference = null }: S
           ) : null}
         </div>
 
+        {/* Same as the web ticket: the "EN ATTENTE DE REGLEMENT" box above the
+            table is no longer printed (the "Statut" line in the footer still
+            says it). Only the offline ticket keeps its own marker. */}
         {offlineReference ? (
           <div className="receipt-print-pending">TICKET HORS CONNEXION</div>
-        ) : awaitingPayment ? (
-          <div className="receipt-print-pending">EN ATTENTE DE REGLEMENT</div>
         ) : null}
 
         <div className="receipt-print-separator" />
@@ -109,13 +110,9 @@ export function ShellReceiptPrint({ sale, identity, offlineReference = null }: S
 
         <div className="receipt-print-lines">
           {sale.lines.map((line) => {
-            const unitPriceTTC = line.unitPriceHT * (1 + line.taxRate / 100);
-            const discountUnitAmount = reconstructDiscountUnitAmount({
-              unitPriceHT: line.unitPriceHT,
-              taxRate: line.taxRate,
-              quantity: line.quantity,
-              totalTTC: line.totalTTC,
-            });
+            // Price actually charged per unit: the line's discount (rebuilt from
+            // the totals really charged) is folded into it - no "Remise" line.
+            const unitPriceTTC = receiptUnitPriceTTC(line);
             return (
               <div key={line.id} className="receipt-print-line">
                 <div className="receipt-print-grid">
@@ -124,9 +121,6 @@ export function ShellReceiptPrint({ sale, identity, offlineReference = null }: S
                   <span className="receipt-print-number">{formatReceiptAmount(unitPriceTTC)}</span>
                   <span className="receipt-print-number">{formatReceiptAmount(line.totalTTC)}</span>
                 </div>
-                {discountUnitAmount > 0 ? (
-                  <p className="receipt-print-discount">Remise : {formatReceiptAmount(discountUnitAmount)} DH/u</p>
-                ) : null}
               </div>
             );
           })}

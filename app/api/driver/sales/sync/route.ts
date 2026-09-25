@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "@/lib/server/auth";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
-import { DriverSaleSyncError, syncOfflineDriverSale } from "@/lib/server/driver-sales";
+import {
+  DriverSaleSyncError,
+  isRetryableOfflineSyncError,
+  syncOfflineDriverSale,
+} from "@/lib/server/driver-sales";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { reportUnexpected } from "@/lib/server/report-error";
@@ -50,9 +54,21 @@ export async function POST(request: Request) {
       op: "syncOfflineDriverSale",
     });
     if (error instanceof AuthServiceError) {
+      // PHASE 2.1b - a 403 (role no longer allowed) is not a session problem:
+      // re-logging in cannot fix it, so it must not be reported as
+      // AUTH_REQUIRED (which makes a client pause and retry after login).
+      const forbidden = error.status === 403;
       return withMobileCors(
         request,
-        NextResponse.json({ success: false, code: "AUTH_REQUIRED", message: error.message }, { status: error.status }),
+        NextResponse.json(
+          {
+            success: false,
+            code: forbidden ? "FORBIDDEN" : "AUTH_REQUIRED",
+            message: error.message,
+            retryable: !forbidden,
+          },
+          { status: error.status },
+        ),
       );
     }
     if (error instanceof DriverSaleSyncError) {
@@ -64,6 +80,7 @@ export async function POST(request: Request) {
             code: error.code,
             message: error.message,
             fieldErrors: error.fieldErrors,
+            retryable: isRetryableOfflineSyncError(error),
           },
           { status: error.status },
         ),

@@ -24,13 +24,17 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * payload was tampered with or corrupted: the whole sale is refused, never
  * silently repriced.
  *
- * No expiry is enforced (see this task's own "4. VALIDATION soldAt" - the
- * identical reasoning applies here: a network outage can legitimately last
- * days, and a token issued before the outage must still be usable once the
- * driver is back online). `issuedAt` is still signed and returned so a
- * future phase can add a policy-driven expiry without a token-format
- * change.
+ * PHASE 2.1b - a token is honoured only if the sale was made no more than
+ * OFFLINE_PRICE_TOKEN_MAX_AGE_HOURS (default 7 days) after the token was
+ * issued - see checkOfflinePriceTokenFreshness below. The window is measured
+ * against the sale's own soldAt, never against the moment of synchronisation,
+ * so a long outage does not by itself invalidate a sale made while the
+ * token was still fresh. The token format is unchanged, so tokens already
+ * cached on devices stay valid.
  */
+
+const MAX_AGE_ENV_VAR = "OFFLINE_PRICE_TOKEN_MAX_AGE_HOURS";
+const DEFAULT_MAX_AGE_HOURS = 24 * 7;
 
 const SECRET_ENV_VAR = "OFFLINE_PRICE_SIGNING_SECRET";
 
@@ -123,4 +127,34 @@ export function verifyOfflinePriceToken(token: string): OfflinePriceTokenVerific
     return { valid: false, reason: "signature mismatch" };
   }
   return { valid: true, payload };
+}
+
+/** Maximum token age in ms. Unset, empty, non-numeric or non-positive values
+ *  fall back to the default rather than silently disabling the check. */
+export function getOfflinePriceTokenMaxAgeMs(): number {
+  const raw = process.env[MAX_AGE_ENV_VAR];
+  const hours = raw ? Number(raw) : Number.NaN;
+  return (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_MAX_AGE_HOURS) * 60 * 60 * 1000;
+}
+
+export type OfflinePriceTokenFreshness =
+  | { fresh: true }
+  | { fresh: false; reason: "invalid_issued_at" | "too_old"; ageMs?: number; maxAgeMs?: number };
+
+/**
+ * Whether a (signature-verified) token was still within its allowed age when
+ * the sale was made. A token issued AFTER soldAt (device clock behind the
+ * server's) is treated as fresh: it can only carry a newer price than the
+ * sale saw, and a clock skew of that kind must not reject a real sale.
+ */
+export function checkOfflinePriceTokenFreshness(
+  payload: OfflinePriceTokenPayload,
+  soldAt: Date,
+  maxAgeMs: number = getOfflinePriceTokenMaxAgeMs(),
+): OfflinePriceTokenFreshness {
+  const issuedAtMs = new Date(payload.issuedAt).getTime();
+  if (Number.isNaN(issuedAtMs)) return { fresh: false, reason: "invalid_issued_at" };
+  const ageMs = soldAt.getTime() - issuedAtMs;
+  if (ageMs > maxAgeMs) return { fresh: false, reason: "too_old", ageMs, maxAgeMs };
+  return { fresh: true };
 }

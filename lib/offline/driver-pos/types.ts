@@ -129,7 +129,14 @@ export type OfflineSaleLineInput = {
   /** Unit price TTC at the moment of sale. */
   unitPriceSnapshot: number;
   taxRateSnapshot: number;
-  /** DH taken off the unit price, snapshotted - 0 in Phase 1 (no offline discount UI). */
+  /**
+   * The line discount as a PERCENTAGE (0-100) - the driver cart's own
+   * CartLine.discountRate, the value the online driver POS sends and
+   * createDriverSale applies to the HT gross. Sent as-is at sync time.
+   * (Before Phase 2.1b this was always written as 0 even when the local
+   * ticket was discounted - see sync-payload.ts for how such legacy sales
+   * are handled.)
+   */
   discountSnapshot: number;
   totalHT: number;
   taxAmount: number;

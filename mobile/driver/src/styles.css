@@ -307,6 +307,14 @@ body {
     font-weight: 700;
   }
 
+  /* Table VALUES (quantity, product name, unit price, amount) x1.3: 10px ->
+     13px on the 80mm ticket - the only format this shell prints
+     (data-paper="80"). Same rule as the web ticket (app/globals.css). The
+     column titles keep the ticket's own size; widths and total untouched. */
+  .receipt-print-area[data-document="sale"]:not([data-paper="58"]) .receipt-print-lines {
+    font-size: 13px;
+  }
+
   .receipt-print-lines {
     display: grid;
     gap: 1mm;
@@ -338,12 +346,27 @@ body {
     margin-left: 5.7mm;
   }
 
+  /* Amount on the far LEFT, "TOTAL TTC" on the far RIGHT, same line - same
+     explicit rules as the web ticket. */
   .receipt-print-total {
     display: flex;
+    flex-direction: row;
+    direction: ltr;
     justify-content: space-between;
+    align-items: baseline;
     gap: 2mm;
     font-size: 12px;
     font-weight: 700;
+  }
+
+  .receipt-print-total > strong {
+    text-align: left;
+    margin-right: auto;
+  }
+
+  .receipt-print-total > span {
+    text-align: right;
+    margin-left: auto;
   }
 
   .receipt-print-pending {
