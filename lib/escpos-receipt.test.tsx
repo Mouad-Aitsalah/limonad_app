@@ -166,8 +166,9 @@ test("the printed rows and total equal the web ticket's (same data, nothing reco
   const lines = buildReceiptLines(sale);
   assert.deepEqual(productRows(lines), webRows);
   const webTotal = norm(web.match(/receipt-print-total"><strong>([^<]*)</)![1]);
-  const total = textLines(lines).find((t) => t.text.endsWith("TOTAL TTC"))!;
-  assert.equal(total.text.startsWith(webTotal), true);
+  // Thermal ticket only: TOTAL TTC on the left, the same amount on the right.
+  const total = textLines(lines).find((t) => t.text.startsWith("TOTAL TTC"))!;
+  assert.equal(total.text.endsWith(webTotal), true);
 });
 
 test("titles keep the base size (font B), row values are ~1.3x (font A), widths and order fixed", () => {
@@ -187,12 +188,40 @@ test("titles keep the base size (font B), row values are ~1.3x (font A), widths 
   assert.equal(rightDots(head.text, 9), rightDots(row.text, 12));
 });
 
-test("total: amount on the LEFT, TOTAL TTC on the RIGHT, one line, emphasised", () => {
-  const total = textLines(buildReceiptLines(saleOf([{ name: "A", unitTTC: 928, quantity: 1 }]))).find((t) => t.text.includes("TOTAL TTC"))!;
+test("total: TOTAL TTC on the LEFT, the amount on the RIGHT edge (like the Montant column), one line, emphasised", () => {
+  const lines = textLines(buildReceiptLines(saleOf([{ name: "A", unitTTC: 928, quantity: 1 }])));
+  const total = lines.find((t) => t.text.includes("TOTAL TTC"))!;
   assert.equal(total.text.length, COLUMNS_FONT_A);
-  assert.match(total.text, /^928,00 DH\s+TOTAL TTC$/);
+  assert.match(total.text, /^TOTAL TTC\s+928,00 DH$/);
   assert.equal(total.bold, true);
   assert.equal(total.tall, true);
+  // the amount ends on the last column, exactly where the Montant numbers end
+  const row = lines.find((t) => /^1\s+A\s/.test(t.text))!;
+  assert.equal(total.text.trimEnd().length, row.text.trimEnd().length);
+});
+
+test("QTE and DESIGNATION are clearly separated and aligned with the row values (8 x Eau 1/2L, 67,00 -> 536,00)", () => {
+  const lines = textLines(buildReceiptLines(saleOf([{ name: "Eau 1/2L", unitTTC: 67, quantity: 8 }])));
+  const head = lines.find((t) => t.text.includes("DESIGNATION"))!;
+  const row = lines.find((t) => t.text.includes("Eau 1/2L"))!;
+  const total = lines.find((t) => t.text.includes("TOTAL TTC"))!;
+  // titles stay in font B (unchanged size), values in font A
+  assert.equal(head.font, "B");
+  assert.equal(row.font, "A");
+  // at least 4 blank characters (>= 36 dots) between QTE and DESIGNATION in the titles ...
+  const gapTitle = head.text.indexOf("DESIGNATION") - (head.text.indexOf("QTE") + 3);
+  assert.ok(gapTitle >= 4, `title gap ${gapTitle}`);
+  // ... and a 2-character gap after the quantity column in the rows
+  assert.match(row.text, /^8 {5}Eau 1\/2L/);
+  // DESIGNATION starts at the same physical dot column as the product name
+  assert.equal(head.text.indexOf("DESIGNATION") * 9, row.text.indexOf("Eau") * 12);
+  // the two right-aligned titles end where the right-aligned numbers end (within one B glyph)
+  const endDots = (t: { text: string }, char: number, word: string) => (t.text.indexOf(word) + word.length) * char;
+  assert.ok(Math.abs(endDots(head, 9, "Prix TTC") - endDots(row, 12, "67,00")) <= 9);
+  assert.equal(head.text.trimEnd().length * 9, 576);
+  assert.equal(row.text.length * 12, 576);
+  assert.match(row.text, /67,00\s+536,00$/);
+  assert.match(total.text, /^TOTAL TTC\s+536,00 DH$/);
 });
 
 test("no EN ATTENTE box on top; the footer Statut line stays; paid ticket footer unchanged", () => {

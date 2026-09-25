@@ -10,8 +10,9 @@
  * discount, rebuilt from the totals really charged) - so no "Remise" line ever
  * exists here, exactly like the web ticket. Same rules as the web ticket:
  * no "EN ATTENTE DE REGLEMENT" box on top (the footer "Statut" line stays),
- * column titles at the ticket's base size, row VALUES ~1.3x, total with the
- * amount on the left and "TOTAL TTC" on the right.
+ * column titles at the ticket's base size, row VALUES ~1.3x. Thermal-specific
+ * layout (asked after a real print test): a clear gap between QTE and
+ * DESIGNATION, and the total as "TOTAL TTC" on the left, the amount on the right.
  *
  * Sizes: ESC/POS only knows integer multiples, so the web ratio (10px titles,
  * 13px values) is reproduced with the printer's two built-in fonts: font B
@@ -263,19 +264,23 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
   // Column widths: font A (values). Numbers never lose digits: columns widen to fit.
   const unitPrices = sale.lines.map((line) => amount(receiptUnitPriceTTC(line)));
   const lineAmounts = sale.lines.map((line) => amount(line.totalTTC));
-  const qtyW = Math.max(3, ...sale.lines.map((line) => String(line.quantity).length));
+  // QTE gets its own column (left aligned under its title) followed by a clear
+  // two-character gap, so DESIGNATION never touches the quantity.
+  const qtyW = Math.max(4, ...sale.lines.map((line) => String(line.quantity).length));
+  const QTY_GAP = 2;
   const priceW = Math.max(9, ...unitPrices.map((value) => value.length));
   const amountW = Math.max(10, ...lineAmounts.map((value) => value.length));
-  const nameW = Math.max(10, COLUMNS_FONT_A - qtyW - priceW - amountW - 3);
+  const nameW = Math.max(10, COLUMNS_FONT_A - qtyW - QTY_GAP - priceW - amountW - 2);
 
-  // Titles: font B (base size), aligned to the same physical columns (dots) as the values.
-  const dotsA = { qty: qtyW * 12, price: priceW * 12 };
-  const qtyB = Math.max(3, Math.round(dotsA.qty / 9));
-  const priceB = Math.round(dotsA.price / 9);
+  // Titles: font B (base size), aligned to the same physical columns (dots) as the values:
+  // DESIGNATION starts exactly where the product names start, the two right-aligned titles end
+  // where the right-aligned numbers end.
+  const startB = Math.round(((qtyW + QTY_GAP) * 12) / 9);
   const nameB = Math.round((nameW * 12) / 9);
-  const amountB = Math.max(7, COLUMNS_FONT_B - qtyB - nameB - priceB - 3);
+  const priceB = Math.round((priceW * 12) / 9);
+  const amountB = Math.max(7, COLUMNS_FONT_B - startB - nameB - priceB - 2);
   const head =
-    padLeft("QTE", qtyB) + " " + padRight("DESIGNATION", nameB) + " " + padLeft("Prix TTC", priceB) + " " + padLeft("Montant", amountB);
+    padRight("QTE", startB) + padRight("DESIGNATION", nameB) + " " + padLeft("Prix TTC", priceB) + " " + padLeft("Montant", amountB);
   lines.push({ kind: "text", text: head, font: "B", bold: true });
   lines.push({ kind: "text", text: RULE_A, font: "A" });
 
@@ -293,8 +298,8 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
           font: "A",
           codePage,
           text:
-            padLeft(first ? String(line.quantity) : "", qtyW) +
-            " " +
+            padRight(first ? String(line.quantity) : "", qtyW) +
+            " ".repeat(QTY_GAP) +
             padRight(part, nameW) +
             " " +
             padLeft(first ? price : "", priceW) +
@@ -310,17 +315,17 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
         kind: "text",
         font: "A",
         codePage,
-        text: padLeft(String(line.quantity), qtyW) + " " + padRight("", nameW) + " " + padLeft(price, priceW) + " " + padLeft(total, amountW),
+        text: padRight(String(line.quantity), qtyW) + " ".repeat(QTY_GAP) + padRight("", nameW) + " " + padLeft(price, priceW) + " " + padLeft(total, amountW),
       });
     }
   });
 
   lines.push({ kind: "text", text: RULE_A, font: "A" });
 
-  // Total: amount LEFT, "TOTAL TTC" RIGHT, same line.
+  // Total: "TOTAL TTC" LEFT, the amount RIGHT (aligned with the Montant column), same line.
   lines.push({
     kind: "text",
-    text: leftRight(money(sale.totalTTC), "TOTAL TTC", COLUMNS_FONT_A),
+    text: leftRight("TOTAL TTC", money(sale.totalTTC), COLUMNS_FONT_A),
     font: "A",
     bold: true,
     tall: true,
