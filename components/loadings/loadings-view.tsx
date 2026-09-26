@@ -7,6 +7,7 @@ import {
   Lock,
   PackageCheck,
   Plus,
+  Printer,
   RefreshCw,
   Save,
   Search,
@@ -15,12 +16,15 @@ import {
   Warehouse,
   X,
 } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useProductPickerSearch } from "@/components/commerce/use-product-picker-search";
+import { ThermalPrinterPanel } from "@/components/driver-pos/thermal-printer-panel";
+import { LoadingReceiptPrint } from "@/components/loadings/loading-receipt-print";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -41,6 +45,11 @@ import type {
   TruckLoadingListItemDto,
 } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
+import type { LoadingTicketInput } from "@/lib/escpos-loading";
+import { computePriceTTC } from "@/lib/product-pricing";
+import { printLoadingTicket } from "@/lib/thermal-loading-print";
+import { isThermalPrinterAvailable } from "@/lib/thermal-printer";
+import { formatCurrency } from "@/lib/utils";
 
 type LoadingsViewProps = {
   trucks: TruckDto[];
@@ -89,6 +98,8 @@ type DraftLoadingLine = {
   productReference: string;
   productBarcode?: string | null;
   productUnit: string;
+  /** Real product price TTC (display only). */
+  productPriceTTC: number;
   depotAvailableQuantity: number;
   initialLoadQuantity: number;
   reloadedQuantity: number;
@@ -222,6 +233,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
             // full catalog) still containing this exact product.
             productBarcode: line.productBarcode,
             productUnit: line.productUnit,
+            productPriceTTC: line.productPriceTTC,
             depotAvailableQuantity: line.depotAvailableQuantity,
             initialLoadQuantity: line.initialQuantity,
             reloadedQuantity: line.reloadedQuantity,
@@ -409,6 +421,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
       productReference: selectedProduct.product.reference,
       productBarcode: selectedProduct.product.barcode,
       productUnit: selectedProduct.product.unit,
+      productPriceTTC: computePriceTTC(selectedProduct.product.salePrice, selectedProduct.product.taxRate),
       depotAvailableQuantity: selectedProduct.depotAvailableQuantity,
       initialLoadQuantity: parseInteger(initialLoadInput, 0),
       reloadedQuantity: parseInteger(reloadedInput, 0),
@@ -576,6 +589,62 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
     } finally {
       setBusy(false);
     }
+  }
+
+  // ---- Print the loading (Android Bluetooth ESC/POS, browser fallback) ----
+  const thermalPrinterAvailable = React.useSyncExternalStore(
+    () => () => {},
+    () => isThermalPrinterAvailable(),
+    () => false,
+  );
+  const [printerPanelOpen, setPrinterPanelOpen] = React.useState(false);
+  const [printerPanelReason, setPrinterPanelReason] = React.useState<string | null>(null);
+  const pendingPrintRef = React.useRef(false);
+
+  // What is on screen right now: the same lines the operator sees in the table.
+  const loadingTicket: LoadingTicketInput | null = openLoading
+    ? {
+        date: openLoading.date,
+        driverName: openLoading.driverName,
+        truckLabel: selectedTruck ? `${selectedTruck.code} - ${selectedTruck.registration}` : openLoading.truckCode,
+        lines: draftLines.map((line) => ({
+          productName: line.productName,
+          initialQuantity: line.initialLoadQuantity,
+          reloadedQuantity: line.reloadedQuantity,
+        })),
+      }
+    : null;
+
+  async function printLoading() {
+    if (!loadingTicket || loadingTicket.lines.length === 0) {
+      toast.error("Ajoutez au moins un produit.");
+      return;
+    }
+    // Web / PC / an APK without the Bluetooth plugin: browser print (80 mm ticket).
+    if (!Capacitor.isNativePlatform() || !isThermalPrinterAvailable()) {
+      window.setTimeout(() => window.print(), 0);
+      return;
+    }
+    const result = await printLoadingTicket(loadingTicket);
+    if (result.ok) {
+      toast.success("Chargement imprimé avec succès");
+      return;
+    }
+    if (result.code === "NOT_AVAILABLE") {
+      window.setTimeout(() => window.print(), 0);
+      return;
+    }
+    if (result.code === "NO_PRINTER" || result.code === "PERMISSION_REQUIRED") {
+      // Choose the paired printer (or allow Bluetooth), then the ticket is printed.
+      pendingPrintRef.current = true;
+      setPrinterPanelReason(`${result.message} Le chargement sera imprimé dès que c'est réglé.`);
+      setPrinterPanelOpen(true);
+      return;
+    }
+    toast.error(result.message, {
+      duration: 15_000,
+      action: { label: "Imprimer (navigateur)", onClick: () => window.setTimeout(() => window.print(), 0) },
+    });
   }
 
   async function closeLoading() {
@@ -779,11 +848,15 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                       </p>
                     </div>
 
-                    <div className="overflow-x-auto rounded-2xl border border-border">
+                    {/* Desktop (lg+): the whole table text is 1.5x bigger - titles 0.72rem -> 1.08rem,
+                        values 0.94rem -> 1.41rem, reference 0.75rem -> 1.125rem, inputs, action
+                        button. Below lg the compact mobile sizes are untouched. */}
+                    <div className="overflow-x-auto rounded-2xl border border-border lg:[&_button]:size-12 lg:[&_button_svg]:size-6 lg:[&_input]:h-12 lg:[&_input]:text-[1.3125rem] lg:[&_td]:text-[1.41rem] lg:[&_td_.text-xs]:text-[1.125rem] lg:[&_th]:h-16 lg:[&_th]:text-[1.08rem]">
                       <Table className="max-lg:table-fixed">
                         <TableHeader>
                           <TableRow>
                             <TableHead className={`${MOBILE_HEAD} max-lg:w-[30%] max-lg:px-2`}>Produit</TableHead>
+                            <TableHead className="text-right max-lg:hidden">Prix</TableHead>
                             <TableHead className="text-right max-lg:hidden">Stock depot</TableHead>
                             <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[23%] max-lg:text-center`}>
                               <ResponsiveText desktop="Charge initiale" mobile="Charge" />
@@ -801,7 +874,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                         <TableBody>
                           {draftLines.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                              <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
                                 Aucun produit ajoute. Utilisez la zone d&apos;ajout ci-dessous
                                 pour remplir la fiche.
                               </TableCell>
@@ -817,7 +890,11 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                                     {line.productReference}
                                     {line.productBarcode ? ` - ${line.productBarcode}` : ""}
                                     {` - ${line.productUnit}`}
+                                    <span className="lg:hidden">{` - ${formatCurrency(line.productPriceTTC)}`}</span>
                                   </div>
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums max-lg:hidden">
+                                  {formatCurrency(line.productPriceTTC)}
                                 </TableCell>
                                 <TableCell
                                   className={
@@ -1061,7 +1138,17 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                       {/* Mobile: keeps the last rows clear of the fixed button bar below
                           (bar height + the same bottom safe-area inset the bar adds). */}
                       <div aria-hidden="true" className="h-[calc(5.5rem+env(safe-area-inset-bottom))] lg:hidden" />
-                      <div className="grid grid-cols-2 gap-2 max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 max-lg:border-t max-lg:border-border max-lg:bg-background/95 max-lg:px-3 max-lg:pt-2 max-lg:pb-[max(0.5rem,env(safe-area-inset-bottom))] max-lg:shadow-[0_-6px_20px_rgba(15,23,42,0.08)] max-lg:backdrop-blur lg:flex lg:flex-wrap">
+                      <div className="grid grid-cols-3 gap-2 max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 max-lg:border-t max-lg:border-border max-lg:bg-background/95 max-lg:px-3 max-lg:pt-2 max-lg:pb-[max(0.5rem,env(safe-area-inset-bottom))] max-lg:shadow-[0_-6px_20px_rgba(15,23,42,0.08)] max-lg:backdrop-blur lg:flex lg:flex-wrap">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => void printLoading()}
+                          className="max-lg:h-auto max-lg:min-h-11 max-lg:px-2 max-lg:py-2 max-lg:text-[13px] max-lg:leading-tight max-lg:whitespace-normal"
+                        >
+                          <Printer aria-hidden="true" className="h-4 w-4" />
+                          Imprimer
+                        </Button>
                         <Button
                           type="button"
                           variant="outline"
@@ -1213,6 +1300,21 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
           </Card>
         </TabsContent>
       </Tabs>
+
+      <LoadingReceiptPrint ticket={loadingTicket} />
+      {thermalPrinterAvailable ? (
+        <ThermalPrinterPanel
+          open={printerPanelOpen}
+          onOpenChange={setPrinterPanelOpen}
+          reason={printerPanelReason}
+          onPrinterSelected={() => {
+            if (!pendingPrintRef.current) return;
+            pendingPrintRef.current = false;
+            setPrinterPanelOpen(false);
+            void printLoading();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
+import { computePriceTTC } from "@/lib/product-pricing";
 import type { TruckLoadingGetPayload } from "@/lib/generated/prisma/models/TruckLoading";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
@@ -33,7 +34,18 @@ const loadingInclude = {
       // TruckLoadingLineDto so an already-loaded line never depends on the
       // product picker's current preload/search results to render
       // correctly - see that type's doc comment.
-      product: { select: { id: true, reference: true, name: true, barcode: true, unit: true } },
+      product: {
+        select: {
+          id: true,
+          reference: true,
+          name: true,
+          barcode: true,
+          unit: true,
+          // display price (productPriceTTC on the line DTO) - read only
+          salePrice: true,
+          taxRate: true,
+        },
+      },
     },
     orderBy: { product: { name: "asc" } },
   },
@@ -209,6 +221,7 @@ export async function mapTruckLoadingToDto(
         productName: line.product.name,
         productBarcode: line.product.barcode,
         productUnit: line.product.unit,
+        productPriceTTC: computePriceTTC(line.product.salePrice.toNumber(), line.product.taxRate.toNumber()),
         quantity: line.quantity,
         initialQuantity,
         reloadedQuantity: line.reloadedQuantity,

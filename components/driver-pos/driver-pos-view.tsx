@@ -1756,15 +1756,16 @@ export function DriverPosView({
               </div>
             </div>
           </div>
-          {/* Phone UI: the product NAME on the tiles is 1.5x bigger (13px ->
-              19.5px, line-height 17px -> 25.5px, 2-line min height 34px ->
-              51px). ProductCard is shared with the counter POS, so this is
-              scoped to THIS wrapper with descendant selectors on the name
-              paragraph only (the one with line-clamp-2; clamp raised to 3
-              lines so a long name is not cut at the bigger size): price, stock, the
-              Ajouter pill and the photo keep their own classes. max-lg only,
-              desktop is unchanged. */}
-          <div className="max-lg:[&_button_p.line-clamp-2]:min-h-[51px] max-lg:[&_button_p.line-clamp-2]:text-[19.5px] max-lg:[&_button_p.line-clamp-2]:leading-[25.5px] max-lg:[&_button_p.line-clamp-2]:line-clamp-3">
+          {/* The product NAME on the tiles is 1.5x bigger: phone 13px -> 19.5px
+              (line-height 17px -> 25.5px, 2-line min height 34px -> 51px), desktop
+              14px -> 21px (its 2-line min height is in em, so it follows). At most
+              2 lines (the card's own line-clamp-2), long words wrap instead of
+              overflowing, and `unicode-bidi: plaintext` lets an Arabic name start
+              on its own side. ProductCard is shared with the counter POS, so this
+              is scoped to THIS wrapper with descendant selectors on the name
+              paragraph only: price, stock, the Ajouter pill and the photo keep
+              their own classes. */}
+          <div className="[&_button_p.line-clamp-2]:[overflow-wrap:anywhere] [&_button_p.line-clamp-2]:[unicode-bidi:plaintext] max-lg:[&_button_p.line-clamp-2]:min-h-[51px] max-lg:[&_button_p.line-clamp-2]:text-[19.5px] max-lg:[&_button_p.line-clamp-2]:leading-[25.5px] lg:[&_button_p.line-clamp-2]:text-[21px]">
             <ProductGrid
               products={productTiles}
               onAdd={addProductById}

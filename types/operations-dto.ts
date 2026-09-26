@@ -390,6 +390,11 @@ export interface TruckLoadingLineDto {
    * draftLines sync and getProductPickerPreload's doc comment. */
   productBarcode: string | null;
   productUnit: string;
+  /** The product's real sale price TTC (product.salePrice HT + taxRate, same
+   *  computePriceTTC as the POS) - display only, never used to compute stock
+   *  or amounts. Embedded so an already-loaded line shows its price even when
+   *  its product is not in the picker's current preload. */
+  productPriceTTC: number;
   quantity: number;
   initialQuantity: number;
   reloadedQuantity: number;

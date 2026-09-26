@@ -172,7 +172,7 @@ const paymentLabels: Record<string, string> = {
   MIXED: "Paiement mixte",
 };
 
-const normalizeSpaces = (value: string) => simplify(value);
+export const normalizeSpaces = (value: string) => simplify(value);
 
 function money(value: number): string {
   return normalizeSpaces(formatCurrency(value));
@@ -201,14 +201,14 @@ function formatTime(value: string): string {
 }
 
 /** left ... right on one line of `width` columns (left is cut first if they collide). */
-function leftRight(left: string, right: string, width: number): string {
+export function leftRight(left: string, right: string, width: number): string {
   const room = width - right.length - 1;
   const cut = left.length > room ? left.slice(0, Math.max(0, room)) : left;
   return cut + " ".repeat(Math.max(1, width - cut.length - right.length)) + right;
 }
 
 /** Wraps at `width`, at most `maxLines` lines; the last one ends with ".." if cut. */
-function wrap(text: string, width: number, maxLines: number): string[] {
+export function wrap(text: string, width: number, maxLines: number): string[] {
   const words = simplify(text).trim().split(/\s+/).filter(Boolean);
   const lines: string[] = [];
   let current = "";
@@ -238,10 +238,10 @@ function wrap(text: string, width: number, maxLines: number): string[] {
   return kept;
 }
 
-const RULE_A = "-".repeat(COLUMNS_FONT_A);
+export const RULE_A = "-".repeat(COLUMNS_FONT_A);
 
-const CHAR_DOTS_A = 12;
-const CHAR_DOTS_B = 9;
+export const CHAR_DOTS_A = 12;
+export const CHAR_DOTS_B = 9;
 
 /** Character-grid preview of absolutely positioned cells (for tests / logs only). */
 function previewCells(cells: Array<{ x: number; text: string }>, charDots: number, columns: number): string {
@@ -253,7 +253,7 @@ function previewCells(cells: Array<{ x: number; text: string }>, charDots: numbe
   return grid.join("").trimEnd();
 }
 
-function columnsLine(
+export function columnsLine(
   font: "A" | "B",
   cells: Array<{ x: number; text: string }>,
   extra: { bold?: boolean; codePage?: CodePageName } = {},
@@ -531,7 +531,7 @@ export function encodeReceipt(lines: ReceiptLine[], raster?: RasterRenderer, ras
         continue;
       }
       // No renderer / rendering failed: the same row as text, name replaced by a marker.
-      unrenderedLines.push(line.cells[1]?.text ?? "");
+      unrenderedLines.push((line.cells.find((cell) => !isEncodable(cell.text)) ?? line.cells[0])?.text ?? "");
       out.push(ESC, 0x4d, 0x00, ESC, 0x45, 0x00, GS, 0x21, 0x00, ESC, 0x61, 0x00);
       if (currentCodePage !== "cp858") {
         out.push(ESC, 0x74, CODE_PAGE_INDEX.cp858);

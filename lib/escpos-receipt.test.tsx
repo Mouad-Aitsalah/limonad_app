@@ -18,6 +18,7 @@ import {
   encodeReceipt,
   isEncodable,
   rasterToEscPos,
+  type RasterCellsRenderer,
   type RasterImage,
   type RasterRenderer,
   type ReceiptLine,
@@ -78,13 +79,16 @@ function saleOf(items: Item[], overrides: Record<string, unknown> = {}): SaleDto
 type TextLine = Extract<ReceiptLine, { kind: "text" }>;
 const textLines = (lines: ReceiptLine[]) => lines.filter((l): l is TextLine => l.kind === "text");
 const allText = (lines: ReceiptLine[]) =>
-  lines.map((l) => (l.kind === "feed" ? "" : l.text)).join("\n");
+  lines
+    .map((l) => (l.kind === "feed" ? "" : l.kind === "rasterCells" ? l.cells.map((c) => c.text).join(" ") : l.text))
+    .join("\n");
 
 /** [qty, name, price, amount] of every product row (font A lines between the 2nd and 3rd rule). */
 function productRows(lines: ReceiptLine[]): string[][] {
   const texts = textLines(lines);
   const rules = texts.map((t, i) => (/^-+$/.test(t.text) ? i : -1)).filter((i) => i >= 0);
   const rows: string[][] = [];
+  void 0;
   for (const t of texts.slice(rules[1] + 1, rules[2])) {
     const match = t.text.trim().match(/^(\d+) +(.*?) +([\d.]+,\d\d) +([\d.]+,\d\d)$/);
     if (match) rows.push([match[1], match[2].trim(), match[3], match[4]]);
@@ -248,6 +252,49 @@ test("QTE -> DESIGNATION gap is doubled with REAL ESC $ column positions; QTE 2,
   }
 });
 
+test("every value is at the SAME position as its title: qty 2 / 8 / 120, long name, price 1.234,50, amount 14.814,00", () => {
+  const cases: Array<{ label: string; items: Item[] }> = [
+    { label: "qty 2", items: [{ name: "Eau 1/2L", unitTTC: 72, quantity: 2 }] },
+    { label: "qty 8", items: [{ name: "Eau 1/2L", unitTTC: 67, quantity: 8 }] },
+    { label: "qty 120", items: [{ name: "Eau 1/2L", unitTTC: 72, quantity: 120 }] },
+    { label: "long name", items: [{ name: "Eau minérale gazeuse naturelle 1,5L pack économique", unitTTC: 72, quantity: 2 }] },
+    { label: "price 1.234,50", items: [{ name: "Eau 1/2L", unitTTC: 1234.5, quantity: 12 }] },
+    { label: "amount 14.814,00", items: [{ name: "Eau 1/2L", unitTTC: 1234.5, quantity: 12 }] },
+    { label: "several rows", items: [{ name: "A", unitTTC: 40, quantity: 10, discountUnitAmount: 1 }, { name: "Eau 1/2L", unitTTC: 1234.5, quantity: 120 }, { name: "C", unitTTC: 9.5, quantity: 3 }] },
+  ];
+  for (const { label, items } of cases) {
+    const lines = textLines(buildReceiptLines(saleOf(items)));
+    const head = lines.find((t) => t.text.includes("DESIGNATION"))!;
+    const [qteTitle, designation, prixTitle, montantTitle] = cellsOf(head);
+    const rules = lines.map((t, i) => (/^-+$/.test(t.text) ? i : -1)).filter((i) => i >= 0);
+    const rowLines = lines.slice(rules[1] + 1, rules[2]);
+    assert.ok(rowLines.length >= items.length, label);
+    let productRowsSeen = 0;
+    for (const row of rowLines) {
+      const cells = cellsOf(row);
+      const first = cells[0].x === 0 && /^\d+$/.test(cells[0].text);
+      if (first) {
+        // a product row: [qty, name, price, amount], each value in its own column
+        assert.equal(cells.length, 4, `${label}: 4 cells on ONE line`);
+        const [qty, name, price, amount] = cells;
+        assert.equal(qty.x, qteTitle.x, `${label}: quantity x = QTE x`);
+        assert.equal(name.x, designation.x, `${label}: name x = DESIGNATION x`);
+        assert.equal(price.x + price.text.length * 12, prixTitle.x + prixTitle.text.length * 9, `${label}: price column = Prix TTC column`);
+        assert.equal(amount.x + amount.text.length * 12, montantTitle.x + montantTitle.text.length * 9, `${label}: amount column = Montant column`);
+        productRowsSeen += 1;
+      } else {
+        // a wrapped name (2nd line) sits under DESIGNATION only
+        assert.equal(cells.length, 1, `${label}: continuation line`);
+        assert.equal(cells[0].x, designation.x, `${label}: wrapped name under DESIGNATION`);
+      }
+    }
+    assert.equal(productRowsSeen, items.length, `${label}: one line per product`);
+  }
+  // the specific numbers of the two big-figure cases are really printed
+  const big = productRows(buildReceiptLines(saleOf([{ name: "Eau 1/2L", unitTTC: 1234.5, quantity: 12 }])));
+  assert.deepEqual(big, [["12", "Eau 1/2L", "1.234,50", "14.814,00"]]);
+});
+
 test("the column positions reach the printer as ESC $ (absolute position), with the motion unit set to 1 dot", () => {
   const { bytes } = buildReceiptEscPos(saleOf([{ name: "Eau 1/2L", unitTTC: 72, quantity: 2 }]));
   assert.ok(hasSequence(bytes, [0x1d, 0x50, 203, 203]), "GS P 203 203");
@@ -325,20 +372,62 @@ test("ESC/POS stream: initialise, code page, fonts, alignment, cut - and accents
   assert.equal(rasterLines, 0, "a Latin ticket is never an image");
 });
 
-test("an Arabic product name becomes ONE image line; the rest stays native text", () => {
+const fakeRasterCells: RasterCellsRenderer = (_cells, { widthDots }) => ({
+  width: widthDots,
+  height: 36,
+  data: new Uint8Array(Math.ceil(widthDots / 8) * 36).fill(0x0f),
+});
+
+test("an Arabic product name: the WHOLE row is one image line (same line for quantity, name, price, amount)", () => {
   const sale = saleOf([{ name: "مشروب غازي", unitTTC: 12, quantity: 3 }, { name: "Coca", unitTTC: 10, quantity: 1 }]);
   const lines = buildReceiptLines(sale);
-  assert.equal(lines.filter((l) => l.kind === "raster").length, 1);
-  assert.deepEqual(productRows(lines).map((r) => r.slice(-2)), [["12,00", "36,00"], ["10,00", "10,00"]]);
-  const encoded = buildReceiptEscPos(sale, { raster: fakeRaster });
+  const rows = lines.filter((l) => l.kind === "rasterCells");
+  assert.equal(rows.length, 1);
+  assert.equal(lines.filter((l) => l.kind === "raster").length, 0, "no separate name image line any more");
+  const cells = (rows[0] as Extract<ReceiptLine, { kind: "rasterCells" }>).cells;
+  assert.deepEqual(cells.map((c) => [c.text, c.at, c.align]), [
+    ["3", 0, "left"],
+    ["مشروب غازي", 117, "left"],
+    ["12,00", 444, "right"],
+    ["36,00", 576, "right"],
+  ]);
+  // the Latin row next to it stays a text row
+  assert.deepEqual(productRows(lines).map((r) => r.slice(-2)), [["10,00", "10,00"]]);
+
+  const encoded = buildReceiptEscPos(sale, { raster: fakeRaster, rasterCells: fakeRasterCells });
   assert.equal(encoded.rasterLines, 1);
   assert.ok(hasSequence(encoded.bytes, [0x1d, 0x76, 0x30, 0x00]), "GS v 0 raster command");
   assert.equal(encoded.unrenderedLines.length, 0);
-  // no renderer available: readable placeholder, never garbage bytes
+
+  // no image renderer available: the row still prints on ONE line, with a readable marker
   const without = buildReceiptEscPos(sale);
   assert.equal(without.rasterLines, 0);
   assert.deepEqual(without.unrenderedLines, ["مشروب غازي"]);
-  assert.ok(Buffer.from(without.bytes).toString("latin1").includes("[texte non imprimable]"));
+  const text = Buffer.from(without.bytes).toString("latin1");
+  assert.ok(text.includes("(non imprimable)"));
+  assert.ok(text.includes("36,00"));
+});
+
+test("special characters that LOOK Latin never turn a product name into a separate image line", () => {
+  const names = [
+    "Eau 1/2L",
+    "Eau\u200b 1/2L", // zero-width space (typical of pasted / imported names)
+    "Eau\u00a01/2L", // no-break space
+    "Eau 1\u20442L", // fraction slash
+    "Eau 1\u2215\uff12L", // division slash + full-width digit
+    "Ｅａｕ 1/2L", // full-width letters
+    "Eau ½L",
+    "\ufeffEau 1/2L", // BOM
+  ];
+  for (const name of names) {
+    const lines = buildReceiptLines(saleOf([{ name, unitTTC: 72, quantity: 2 }]));
+    assert.equal(lines.filter((l) => l.kind === "raster" || l.kind === "rasterCells").length, 0, JSON.stringify(name));
+    const rows = productRows(lines);
+    assert.equal(rows.length, 1, JSON.stringify(name));
+    assert.deepEqual([rows[0][0], rows[0][2], rows[0][3]], ["2", "72,00", "144,00"], JSON.stringify(name));
+    const row = textLines(lines).find((t) => t.text.includes("144,00") && !t.text.includes("TOTAL"))!;
+    assert.equal(cellsOf(row).length, 4, "quantity, name, price, amount on ONE line");
+  }
 });
 
 test("raster packing: GS v 0 header, bytes per row, bands", () => {
