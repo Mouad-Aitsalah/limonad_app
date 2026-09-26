@@ -66,15 +66,36 @@ const CP858_MAP = new Map<string, number>();
   for (const [char, code] of pairs) CP858_MAP.set(char, code);
 })();
 
+/**
+ * Invisible / layout-only characters (zero-width space, BOM, soft hyphen, bidi marks...).
+ * They must never be what makes a plain Latin product name "impossible to print as text".
+ */
+const INVISIBLE = /[\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]/g;
+
 /** Typographic characters replaced by a plain equivalent before encoding. */
 function simplify(text: string): string {
   return text
-    .replace(/[    ]/g, " ")
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—]/g, "-")
-    .replace(/…/g, "...")
-    .replace(/[‎‏]/g, "");
+    .replace(INVISIBLE, "")
+    .replace(/[\u00a0\u202f\u2007\u2009]/g, " ")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/[\u2044\u2215\uff0f]/g, "/")
+    .replace(/\u2026/g, "...");
+}
+
+/**
+ * The text as it will be sent, and whether the printer can print it as TEXT.
+ * Compatibility forms (full-width letters, a fraction slash in "1/2", ...) are
+ * folded to plain characters first: only what still cannot be encoded (Arabic...)
+ * needs an image.
+ */
+export function printableText(text: string, codePage: CodePageName = "cp858"): { text: string; encodable: boolean } {
+  const first = simplify(text);
+  if (isEncodable(first, codePage)) return { text: first, encodable: true };
+  const folded = simplify(first.normalize("NFKC"));
+  if (isEncodable(folded, codePage)) return { text: folded, encodable: true };
+  return { text: first, encodable: false };
 }
 
 /** Byte of one character in the code page, or null when the printer cannot print it. */
@@ -121,7 +142,17 @@ export type ReceiptLine =
       cells?: Array<{ x: number; text: string }>;
     }
   | { kind: "raster"; text: string; fontPx: number; bold?: boolean; align: Align }
+  /**
+   * A whole table row drawn as ONE image (only when a product name cannot be
+   * printed as text, e.g. Arabic): quantity, name, price and amount stay on the
+   * same line at the same positions as the text rows. `fallback` is the text row
+   * printed instead when no image renderer is available.
+   */
+  | { kind: "rasterCells"; cells: RasterCell[]; fontPx: number; fallback: Array<{ x: number; text: string }> }
   | { kind: "feed"; lines: number };
+
+/** `at` is the left edge (align "left") or the right edge (align "right"), in dots. */
+export type RasterCell = { text: string; at: number; align: "left" | "right"; maxWidth?: number };
 
 export type ReceiptOptions = {
   /** Set only for a local offline ticket: prints its own marker, like the web ticket. */
@@ -246,11 +277,11 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
 
   /** A text line, or a raster line when the printer cannot print it. */
   function textOrRaster(text: string, style: { align?: Align; bold?: boolean; fontPx?: number } = {}): ReceiptLine {
-    const clean = normalizeSpaces(text);
-    if (isEncodable(clean, codePage)) {
-      return { kind: "text", text: clean, font: "A", bold: style.bold, align: style.align ?? "left", codePage };
+    const printable = printableText(text, codePage);
+    if (printable.encodable) {
+      return { kind: "text", text: printable.text, font: "A", bold: style.bold, align: style.align ?? "left", codePage };
     }
-    return { kind: "raster", text: clean, fontPx: style.fontPx ?? 24, bold: style.bold, align: style.align ?? "left" };
+    return { kind: "raster", text: normalizeSpaces(text), fontPx: style.fontPx ?? 24, bold: style.bold, align: style.align ?? "left" };
   }
 
   const receiptDate = sale.validatedAt ?? sale.createdAt;
@@ -271,8 +302,9 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
   const numberLabel = offlineReference ? "Référence : " : "N° Facture : ";
   lines.push(textOrRaster(leftRight(`${numberLabel}${offlineReference ?? sale.displayNumber}`, formatDate(receiptDate), COLUMNS_FONT_A)));
   const clientText = `Client : ${customerName}`;
-  if (isEncodable(clientText, codePage)) {
-    lines.push(textOrRaster(leftRight(clientText, formatTime(receiptDate), COLUMNS_FONT_A)));
+  const clientPrintable = printableText(clientText, codePage);
+  if (clientPrintable.encodable) {
+    lines.push(textOrRaster(leftRight(clientPrintable.text, formatTime(receiptDate), COLUMNS_FONT_A)));
   } else {
     lines.push(textOrRaster(clientText));
     lines.push(textOrRaster(formatTime(receiptDate), { align: "right" }));
@@ -325,9 +357,9 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
   sale.lines.forEach((line, index) => {
     const price = unitPrices[index];
     const total = lineAmounts[index];
-    const nameEncodable = isEncodable(line.productName, codePage);
-    if (nameEncodable) {
-      const parts = wrap(line.productName, nameW, 2);
+    const name = printableText(line.productName, codePage);
+    if (name.encodable) {
+      const parts = wrap(name.text, nameW, 2);
       parts.forEach((part, partIndex) => {
         const cells =
           partIndex === 0
@@ -336,10 +368,25 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
         lines.push(columnsLine("A", cells, { codePage }));
       });
     } else {
-      // The name cannot be printed as text (e.g. Arabic): it goes as an image
-      // line, the numbers stay text on their own line.
-      lines.push({ kind: "raster", text: normalizeSpaces(line.productName), fontPx: 24, align: "left" });
-      lines.push(columnsLine("A", numberCells(String(line.quantity), price, total), { codePage }));
+      // The name cannot be printed as text (e.g. Arabic): the WHOLE row is drawn as
+      // one image so quantity, name, price and amount stay on the same line, at the
+      // same positions as the text rows.
+      lines.push({
+        kind: "rasterCells",
+        fontPx: 24,
+        cells: [
+          { text: String(line.quantity), at: 0, align: "left" },
+          { text: normalizeSpaces(line.productName), at: nameX, align: "left", maxWidth: priceEdge - priceW * CHAR_DOTS_A - CHAR_DOTS_A - nameX },
+          { text: price, at: priceEdge, align: "right" },
+          { text: total, at: PRINTABLE_DOTS, align: "right" },
+        ],
+        fallback: [
+          { x: 0, text: String(line.quantity) },
+          { x: nameX, text: "(non imprimable)".slice(0, nameW) },
+          { x: priceEdge - price.length * CHAR_DOTS_A, text: price },
+          { x: PRINTABLE_DOTS - total.length * CHAR_DOTS_A, text: total },
+        ],
+      });
     }
   });
 
@@ -437,6 +484,11 @@ export type RasterRenderer = (
   options: { widthDots: number; fontPx: number; bold?: boolean; align: Align },
 ) => RasterImage | null;
 
+export type RasterCellsRenderer = (
+  cells: RasterCell[],
+  options: { widthDots: number; fontPx: number },
+) => RasterImage | null;
+
 const ESC = 0x1b;
 const GS = 0x1d;
 const LF = 0x0a;
@@ -456,7 +508,7 @@ export function rasterToEscPos(image: RasterImage): number[] {
 
 export type EncodeResult = { bytes: Uint8Array; rasterLines: number; unrenderedLines: string[] };
 
-export function encodeReceipt(lines: ReceiptLine[], raster?: RasterRenderer): EncodeResult {
+export function encodeReceipt(lines: ReceiptLine[], raster?: RasterRenderer, rasterCells?: RasterCellsRenderer): EncodeResult {
   // ESC @ : initialise, then GS P 203 203: horizontal/vertical motion unit = 1 dot at 203 dpi,
   // so ESC $ positions below are exact dots on every 80 mm printer.
   const out: number[] = [ESC, 0x40, GS, 0x50, 203, 203];
@@ -467,6 +519,30 @@ export function encodeReceipt(lines: ReceiptLine[], raster?: RasterRenderer): En
   for (const line of lines) {
     if (line.kind === "feed") {
       out.push(ESC, 0x64, Math.max(0, Math.min(255, line.lines))); // ESC d n
+      continue;
+    }
+
+    if (line.kind === "rasterCells") {
+      const image = rasterCells?.(line.cells, { widthDots: PRINTABLE_DOTS, fontPx: line.fontPx }) ?? null;
+      if (image) {
+        rasterLines += 1;
+        out.push(ESC, 0x61, 0x00);
+        out.push(...rasterToEscPos(image));
+        continue;
+      }
+      // No renderer / rendering failed: the same row as text, name replaced by a marker.
+      unrenderedLines.push(line.cells[1]?.text ?? "");
+      out.push(ESC, 0x4d, 0x00, ESC, 0x45, 0x00, GS, 0x21, 0x00, ESC, 0x61, 0x00);
+      if (currentCodePage !== "cp858") {
+        out.push(ESC, 0x74, CODE_PAGE_INDEX.cp858);
+        currentCodePage = "cp858";
+      }
+      for (const cell of line.fallback) {
+        const x = Math.max(0, Math.min(PRINTABLE_DOTS - 1, Math.round(cell.x)));
+        out.push(ESC, 0x24, x & 0xff, x >> 8);
+        for (const char of simplify(cell.text)) out.push(encodeChar(char, "cp858") ?? 0x3f);
+      }
+      out.push(LF);
       continue;
     }
 
@@ -514,8 +590,11 @@ export function encodeReceipt(lines: ReceiptLine[], raster?: RasterRenderer): En
   return { bytes: Uint8Array.from(out), rasterLines, unrenderedLines };
 }
 
-export function buildReceiptEscPos(sale: SaleDto, options: ReceiptOptions & { raster?: RasterRenderer } = {}): EncodeResult {
-  return encodeReceipt(buildReceiptLines(sale, options), options.raster);
+export function buildReceiptEscPos(
+  sale: SaleDto,
+  options: ReceiptOptions & { raster?: RasterRenderer; rasterCells?: RasterCellsRenderer } = {},
+): EncodeResult {
+  return encodeReceipt(buildReceiptLines(sale, options), options.raster, options.rasterCells);
 }
 
 export function buildTestEscPos(input: { printerName: string; raster?: RasterRenderer }): EncodeResult {

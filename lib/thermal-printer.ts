@@ -1,10 +1,11 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Preferences } from "@capacitor/preferences";
 
-import { canvasRasterRenderer } from "@/lib/escpos-raster-canvas";
+import { canvasRasterCellsRenderer, canvasRasterRenderer } from "@/lib/escpos-raster-canvas";
 import {
   buildReceiptEscPos,
   buildTestEscPos,
+  type RasterCellsRenderer,
   type RasterRenderer,
   type ReceiptOptions,
 } from "@/lib/escpos-receipt";
@@ -84,6 +85,7 @@ export type ThermalPrinterDeps = {
   plugin: ThermalPrinterPlugin | null;
   storage: ThermalPrinterStorage;
   raster?: RasterRenderer;
+  rasterCells?: RasterCellsRenderer;
 };
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -166,7 +168,7 @@ export function createThermalPrinterService(deps: ThermalPrinterDeps) {
     if (!plugin) return failure("NOT_AVAILABLE");
     let encoded;
     try {
-      encoded = buildReceiptEscPos(sale, { ...options, raster: deps.raster });
+      encoded = buildReceiptEscPos(sale, { ...options, raster: deps.raster, rasterCells: deps.rasterCells });
     } catch (error) {
       return failure("UNKNOWN", error instanceof Error ? error.message : undefined);
     }
@@ -232,6 +234,7 @@ export function getThermalPrinterService() {
       plugin: getThermalPrinterPlugin(),
       storage: preferencesStorage,
       raster: canvasRasterRenderer,
+      rasterCells: canvasRasterCellsRenderer,
     });
   }
   return defaultService;

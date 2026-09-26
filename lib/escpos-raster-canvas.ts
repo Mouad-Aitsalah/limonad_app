@@ -1,4 +1,4 @@
-import type { Align, RasterImage, RasterRenderer } from "@/lib/escpos-receipt";
+import type { Align, RasterCellsRenderer, RasterImage, RasterRenderer } from "@/lib/escpos-receipt";
 
 /**
  * Browser/WebView renderer for the few lines a thermal printer cannot print as
@@ -72,4 +72,33 @@ export const canvasRasterRenderer: RasterRenderer = (text, { widthDots, fontPx, 
   }
   const pixels = context.getImageData(0, 0, width, height).data;
   return rgbaToRasterImage(pixels, width, height);
+};
+
+/**
+ * One table row drawn as a single image: every cell at its own x (left edge) or
+ * right edge, so the row keeps the columns of the text rows. Used only when a
+ * product name cannot be printed as text.
+ */
+export const canvasRasterCellsRenderer: RasterCellsRenderer = (cells, { widthDots, fontPx }) => {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  const height = Math.ceil(fontPx * 1.5);
+  canvas.width = widthDots;
+  canvas.height = height;
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, widthDots, height);
+  context.fillStyle = "#000000";
+  context.textBaseline = "middle";
+  const font = `${fontPx}px "Noto Sans Arabic", "Segoe UI", Arial, sans-serif`;
+  for (const cell of cells) {
+    context.font = font;
+    context.direction = RTL.test(cell.text) ? "rtl" : "ltr";
+    context.textAlign = cell.align === "right" ? "right" : "left";
+    // fillText squeezes the text into maxWidth instead of overflowing into the next column
+    if (cell.maxWidth && cell.maxWidth > 0) context.fillText(cell.text, cell.at, height / 2, cell.maxWidth);
+    else context.fillText(cell.text, cell.at, height / 2);
+  }
+  return rgbaToRasterImage(context.getImageData(0, 0, widthDots, height).data, widthDots, height);
 };
