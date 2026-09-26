@@ -5,6 +5,7 @@ import { Bot, LoaderCircle, Send, UserRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { MarkdownMessage } from "@/components/assistant/markdown-message";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -135,16 +136,17 @@ export function AssistantChat() {
                     <Bot aria-hidden="true" className="h-4 w-4" />
                   )}
                 </div>
-                <p
-                  className={cn(
-                    "whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6",
-                    chatMessage.role === "user"
-                      ? "rounded-tr-sm bg-emerald-600 text-white"
-                      : "rounded-tl-sm bg-muted text-foreground",
-                  )}
-                >
-                  {chatMessage.content}
-                </p>
+                {chatMessage.role === "user" ? (
+                  // What the user typed stays plain text.
+                  <p className="whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-emerald-600 px-4 py-3 text-sm leading-6 text-white">
+                    {chatMessage.content}
+                  </p>
+                ) : (
+                  // The AI answer is Markdown (bold, lists, headings, code, tables...).
+                  <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3 text-sm leading-6 text-foreground">
+                    <MarkdownMessage>{chatMessage.content}</MarkdownMessage>
+                  </div>
+                )}
               </div>
             ))}
 
