@@ -42,6 +42,10 @@ export function OfflineStatusBar({
   const serverProblem =
     lastResult?.status === "STOPPED_NETWORK" || lastResult?.status === "STOPPED_SERVER";
   const authPaused = lastResult?.status === "PAUSED_AUTH";
+  // Plain "En ligne" with nothing else to show: the bar shrinks to its content
+  // (icon + label) instead of spanning the whole POS width.
+  const compact =
+    !offline && !syncStatus.running && syncedCount === 0 && failedCount === 0 && pendingCount === 0;
 
   return (
     <div
@@ -51,7 +55,9 @@ export function OfflineStatusBar({
       className={
         offline
           ? "flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900"
-          : "flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900"
+          : compact
+            ? "flex w-fit items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900"
+            : "flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900"
       }
     >
       {offline ? (
@@ -66,6 +72,7 @@ export function OfflineStatusBar({
         </span>
       ) : null}
 
+      {compact ? null : (
       <div className="ml-auto flex flex-wrap items-center gap-2">
         {syncStatus.running ? (
           <span data-testid="pos-sync-running" className="inline-flex items-center gap-1.5">
@@ -113,6 +120,7 @@ export function OfflineStatusBar({
           </Button>
         ) : null}
       </div>
+      )}
     </div>
   );
 }
