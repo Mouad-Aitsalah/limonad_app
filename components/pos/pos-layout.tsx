@@ -1571,7 +1571,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
       {mobileView === "products" && (
         <MobileSelectedProduct product={mobileSelectedProduct} className="lg:hidden" />
       )}
-      <div className="grid gap-4 lg:h-[calc(100vh-11rem)] lg:grid-cols-2 lg:gap-6">
+      <div className="grid gap-4 lg:h-[calc(100vh-6.75rem)] lg:grid-cols-2 lg:gap-6">
       <div
         className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4 lg:overflow-hidden`}
       >
@@ -1601,8 +1601,9 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
       <div
         id="mobile-pos-cart"
         ref={cartSectionRef}
-        className={`${mobileView === "cart" ? "flex" : "hidden"} order-1 min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:flex lg:h-full lg:gap-4 lg:overflow-y-auto lg:p-4`}
+        className={`${mobileView === "cart" ? "flex" : "hidden"} order-1 min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:flex lg:h-full lg:min-h-0 lg:gap-4 lg:overflow-y-auto lg:p-4`}
       >
+        <div className="contents lg:flex lg:shrink-0 lg:flex-col lg:gap-4">
         <InvoiceHeader
           userName={context.user.name}
           invoiceLabel={activeInvoiceLabel}
@@ -1652,7 +1653,11 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
           />
         </div>
 
-        <div className="rounded-2xl border border-border">
+        </div>
+
+        {/* Desktop: only the product list scrolls; the header above and the
+            total / actions below stay put. Mobile: unchanged flow. */}
+        <div className="rounded-2xl border border-border lg:min-h-32 lg:flex-1 lg:overflow-y-auto">
           <CartTable
             lines={cartLines}
             operationType={operationType}
@@ -1667,6 +1672,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
           />
         </div>
 
+        <div className="contents lg:flex lg:shrink-0 lg:flex-col lg:gap-4">
         <CartSummary totals={totals} operationType={operationType} />
 
         {editSale ? (
@@ -1766,6 +1772,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
               Facture ouverte : {openPendingSale.displayNumber} · En attente de règlement
             </p>
           )}
+        </div>
         </div>
       </div>
 
