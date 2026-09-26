@@ -22,7 +22,7 @@ import type { FleetSnapshotDto, FleetTruckDto } from "@/types/fleet-tracking";
  * count/sum aggregates for the tour's live stats.
  */
 export async function getFleetSnapshot(): Promise<FleetSnapshotDto> {
-  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const tours = await prisma.tour.findMany({
     where: { organizationId: currentUser.organizationId, status: "IN_PROGRESS" },

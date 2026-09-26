@@ -268,7 +268,7 @@ const truckLoadingCreateSchema = z.object({
 });
 
 export async function getOpenLoadingForTruck(truckId: string): Promise<TruckLoadingDto | null> {
-  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const loading = await prisma.truckLoading.findFirst({
     where: {
       organizationId: currentUser.organizationId,
@@ -395,7 +395,7 @@ function mapLoadingRowToListItemDto(
 export async function getLoadingHistoryPage(
   params: { cursor?: string | null; pageSize?: number } = {},
 ): Promise<TruckLoadingHistoryPageDto> {
-  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const requestedPageSize = Math.trunc(params.pageSize ?? HISTORY_DEFAULT_PAGE_SIZE);
   // Never let a caller ask for an unbounded page (see the Phase 3 spec's
   // explicit "never pageSize=100000") - clamped both ends, invalid/absent
@@ -434,7 +434,7 @@ export async function getLoadingHistoryPage(
 }
 
 export async function getLoadingById(id: string): Promise<TruckLoadingDto> {
-  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const loading = await prisma.truckLoading.findFirst({
     where: { id, organizationId: currentUser.organizationId },
     include: loadingInclude,
@@ -481,7 +481,7 @@ async function resolveDriverUsualProductIds(
 export async function createOrReuseOpenLoading(
   input: TruckLoadingCreateInput,
 ): Promise<{ loading: TruckLoadingDto; reused: boolean }> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const parsed = truckLoadingCreateSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -595,7 +595,7 @@ export async function updateOpenLoadingLines(
   loadingId: string,
   input: TruckLoadingMutationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const lines = validateLoadingLines(input, { allowZeroTotalLines: true });
 
   // F10: read-then-write on a single row already looked up by id inside the
@@ -691,7 +691,7 @@ export async function closeLoading(
   loadingId: string,
   input: TruckLoadingValidationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const parsed = truckLoadingValidationSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -862,7 +862,7 @@ export async function updateLoadingLines(
   loadingId: string,
   input: TruckLoadingEditInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const parsed = truckLoadingEditSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -1168,7 +1168,7 @@ export async function createLoading(
   tourId: string,
   input: TruckLoadingMutationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const lines = validateLoadingLines(input);
 
   // F10: idempotent by construction - tour.loading is re-checked fresh on
@@ -1266,7 +1266,7 @@ export async function updateDraftLoading(
   tourId: string,
   input: TruckLoadingMutationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const lines = validateLoadingLines(input);
 
   // F10: read-then-write on a single row already looked up by tourId, so a
@@ -1352,7 +1352,7 @@ export async function updateDraftLoading(
 }
 
 export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDto> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   // F10: current.status is re-checked fresh on every attempt, so a retry
   // after a Serializable conflict either safely cancels (if still DRAFT) or
   // cleanly hits the 409 below (if a concurrent request already cancelled
@@ -1428,7 +1428,7 @@ export async function validateLoading(
   tourId: string,
   input: TruckLoadingValidationInput,
 ): Promise<TruckLoadingDto> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   const parsed = truckLoadingValidationSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(

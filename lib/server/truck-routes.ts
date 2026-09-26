@@ -45,7 +45,7 @@ type TruckRoutesSearchParams = Record<string, string | string[] | undefined>;
 export async function getTruckRoutesPageData(
   searchParams: TruckRoutesSearchParams,
 ): Promise<TruckRoutesPageData> {
-  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const requestedDate = parseDateParam(searchParams.date) ?? getTodayDateParam();
   const requestedTruckId = pickFirstValue(searchParams.truckId);
@@ -182,7 +182,7 @@ export async function getTruckRoutesPageData(
 }
 
 export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto | null> {
-  const currentUser = await requireOrganizationUser(["admin", "depot_manager"]);
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
 
   const tour = await prisma.tour.findFirst({
     where: { id: tourId, organizationId: currentUser.organizationId },

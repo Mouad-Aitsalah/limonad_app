@@ -77,8 +77,8 @@ export const navItems: NavItem[] = [
       { label: "Dépôts", href: "/depots", roles: ["admin"] },
       { label: "Inventaire", href: "/inventaire", roles: ["admin", "depot_manager"] },
       { label: "Camions", href: "/camions" },
-      { label: "Chargements", href: "/chargements", roles: ["admin", "depot_manager"] },
-      { label: "Trajets", href: "/trajets", roles: ["admin", "depot_manager"] },
+      { label: "Chargements", href: "/chargements", roles: ["admin", "depot_manager", "cashier"] },
+      { label: "Trajets", href: "/trajets", roles: ["admin", "depot_manager", "cashier"] },
     ],
   },
   {

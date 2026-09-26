@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-const allowedRoles: UserRole[] = ["admin", "depot_manager"];
+const allowedRoles: UserRole[] = ["admin", "depot_manager", "cashier"];
 
 type TrajetsPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
