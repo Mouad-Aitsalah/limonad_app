@@ -1640,6 +1640,8 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
           <div className="min-w-0">
             <div className="hidden lg:block">
               <CustomerCombobox
+                labelClassName="lg:text-[16.8px] lg:font-bold"
+                inputClassName="lg:h-11 lg:text-[19.6px] lg:font-bold"
                 value={selectedCustomer}
                 onChange={setSelectedCustomer}
                 initialSuggestions={context.customers}
@@ -1819,6 +1821,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         onConfirm={confirmOperation}
       />
       <ReceiptPrint
+        ruled
         sale={lastSale}
         offlineReference={
           offlineTicket && lastSale?.id === offlineTicket.localId ? offlineTicket.reference : null

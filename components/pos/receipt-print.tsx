@@ -31,6 +31,13 @@ type ReceiptPrintProps = {
    * hook's live value, exactly as before this prop existed.
    */
   identity?: CompanyIdentity | null;
+  /**
+   * Counter POS (PC, admin + cashier) layout: vertical rules between the four
+   * product columns and the total printed "PRIX TTC" (left) / amount (right).
+   * Off by default, so the driver POS ticket and every other caller print
+   * exactly as before.
+   */
+  ruled?: boolean;
 };
 
 // Nom affiché sous le logo sur le ticket / la facture imprimée du POS.
@@ -73,6 +80,7 @@ export function ReceiptPrint({
   paperWidth = "80",
   offlineReference = null,
   identity: identityProp,
+  ruled = false,
 }: ReceiptPrintProps) {
   // Rules of Hooks: called unconditionally on every render, exactly as
   // before - only WHICH value gets used below depends on `identityProp`,
@@ -119,7 +127,7 @@ export function ReceiptPrint({
       data-paper={paperWidth}
       data-document="sale"
     >
-      <div className="receipt-print-ticket">
+      <div className={ruled ? "receipt-print-ticket receipt-print-ruled" : "receipt-print-ticket"}>
         <header className="receipt-print-header">
           {identity?.logoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -167,7 +175,7 @@ export function ReceiptPrint({
           <span className="receipt-print-number">Montant</span>
         </div>
 
-        <div className="receipt-print-separator" />
+        <div className={ruled ? "receipt-print-separator receipt-print-separator-flush" : "receipt-print-separator"} />
 
         <div className="receipt-print-lines">
           {sale.lines.map((line) => {
@@ -195,10 +203,17 @@ export function ReceiptPrint({
 
         <div className="receipt-print-separator" />
 
-        <div className="receipt-print-total">
-          <strong>{formatCurrency(sale.totalTTC)}</strong>
-          <span>TOTAL TTC</span>
-        </div>
+        {ruled ? (
+          <div className="receipt-print-total receipt-print-total-ruled">
+            <span>PRIX TTC</span>
+            <strong>{formatCurrency(sale.totalTTC)}</strong>
+          </div>
+        ) : (
+          <div className="receipt-print-total">
+            <strong>{formatCurrency(sale.totalTTC)}</strong>
+            <span>TOTAL TTC</span>
+          </div>
+        )}
 
         <div className="receipt-print-separator" />
 

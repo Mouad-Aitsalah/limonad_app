@@ -58,8 +58,8 @@ type CartTableProps = {
 const COL = {
   produit: "w-[40%] px-1 lg:w-auto lg:px-4",
   qte: "w-[26%] px-0.5 lg:w-[11.5rem] lg:px-2",
-  prix: "w-[19%] px-0.5 lg:w-24 lg:px-2",
-  rem: "w-[15%] px-0.5 lg:w-[6.5rem] lg:px-2",
+  prix: "w-[19%] px-0.5 lg:w-36 lg:px-2",
+  rem: "w-[15%] px-0.5 lg:w-[7.5rem] lg:px-2",
   // Desktop-only now - see this constant group's own comment above.
   total: "max-lg:hidden lg:w-[6.25rem] lg:px-2 lg:pr-3",
   // Own column on desktop only; on mobile the delete icon lives inside the
@@ -71,6 +71,8 @@ const COL = {
 // wide letter-spacing so "PRIX TTC" never spills into "REM.". Desktop keeps
 // the default header type.
 const H_MOBILE = "max-lg:text-[10px] max-lg:tracking-normal";
+// Desktop only: header type x1.4 (0.72rem = 11.52px -> 16.128px), bold.
+const H_DESKTOP = "lg:text-[16.128px] lg:font-bold";
 
 export function CartTable({
   lines,
@@ -109,18 +111,18 @@ export function CartTable({
     // Mobile: w-full + min-w-0 -> the table is exactly the panel width and
     // the % columns fill it (no internal scroll). Desktop keeps its floor so
     // `table-fixed` never collapses the flexible Produit column.
-    <Table className="table-fixed min-w-0 lg:min-w-[44rem]">
+    <Table className="table-fixed min-w-0 lg:min-w-[48rem]">
       <TableHeader>
         <TableRow>
-          <TableHead className={cn(COL.produit, H_MOBILE)}>Produit</TableHead>
-          <TableHead className={cn(COL.qte, "text-center", H_MOBILE)}>
+          <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP)}>Produit</TableHead>
+          <TableHead className={cn(COL.qte, "text-center", H_MOBILE, H_DESKTOP)}>
             Qte
           </TableHead>
-          <TableHead className={cn(COL.prix, "text-center", H_MOBILE)}>
+          <TableHead className={cn(COL.prix, "text-center", H_MOBILE, H_DESKTOP)}>
             {isTransfer ? "Valeur unit." : "Prix TTC"}
           </TableHead>
           {!isTransfer && (
-            <TableHead className={cn(COL.rem, "text-center", H_MOBILE)}>
+            <TableHead className={cn(COL.rem, "text-center", H_MOBILE, H_DESKTOP)}>
               {/* Compact "Rem." on mobile (column too narrow for more);
                   "Rem. DH" on desktop so the unit is explicit - this field
                   is a DH amount per unit, never a percentage. */}
@@ -128,7 +130,7 @@ export function CartTable({
               <span className="hidden lg:inline">Rem. DH</span>
             </TableHead>
           )}
-          <TableHead className={cn(COL.total, "text-right", H_MOBILE)}>
+          <TableHead className={cn(COL.total, "text-right", H_MOBILE, H_DESKTOP)}>
             {isTransfer ? "Valeur" : "Total"}
           </TableHead>
           <TableHead className={COL.action} />
@@ -160,7 +162,7 @@ export function CartTable({
                     TableCell sets by default; wrapping happens on spaces and
                     `break-words` only splits a single word when it is itself
                     too wide for the column, so it can never overflow. */}
-                <p className="pr-5 font-medium whitespace-normal break-words text-foreground lg:pr-0 lg:text-[22.56px]">
+                <p className="pr-5 font-medium whitespace-normal break-words text-foreground lg:pr-0 lg:text-[22.56px] lg:font-bold">
                   {line.designation}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">

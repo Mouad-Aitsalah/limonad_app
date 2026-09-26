@@ -688,6 +688,44 @@ body {
     margin-left: auto;
   }
 
+  /* Counter POS ticket only (ReceiptPrint `ruled`): vertical rules between
+     the four product columns, and the total as "PRIX TTC" (far left) /
+     amount (far right). Borders (not backgrounds) so they always print.
+     Column widths are kept: the former 1mm gaps become cell padding. Rows
+     touch each other (no row gap) so each rule is one continuous line from
+     the title row down to the last product; the flush separator under the
+     title row has no margin for the same reason. */
+  .receipt-print-area[data-document="sale"] .receipt-print-ruled .receipt-print-grid {
+    gap: 0;
+    align-items: stretch;
+  }
+
+  .receipt-print-ruled .receipt-print-grid > span {
+    padding: 0.4mm 0.5mm;
+  }
+
+  .receipt-print-ruled .receipt-print-grid > span + span {
+    border-left: 1px solid #000;
+  }
+
+  .receipt-print-area[data-document="sale"] .receipt-print-ruled .receipt-print-lines {
+    gap: 0;
+  }
+
+  .receipt-print-ruled .receipt-print-separator-flush {
+    margin: 0;
+  }
+
+  .receipt-print-ruled .receipt-print-total-ruled > span {
+    margin: 0;
+    text-align: left;
+  }
+
+  .receipt-print-ruled .receipt-print-total-ruled > strong {
+    margin: 0 0 0 auto;
+    text-align: right;
+  }
+
   /* Unpaid ("facture du jour" printed before collection) marker - a plain
      paid ticket must never be mistaken for this one. */
   .receipt-print-pending {

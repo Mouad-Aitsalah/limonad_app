@@ -61,7 +61,7 @@ function saleOf(items: Item[], overrides: Record<string, unknown> = {}): SaleDto
   } as unknown as SaleDto;
 }
 
-function html(sale: SaleDto, extra: { offlineReference?: string | null; paperWidth?: "58" | "80" } = {}) {
+function html(sale: SaleDto, extra: { offlineReference?: string | null; paperWidth?: "58" | "80"; ruled?: boolean } = {}) {
   return renderToStaticMarkup(<ReceiptPrint sale={sale} identity={null} {...extra} />);
 }
 
@@ -222,4 +222,44 @@ test("nothing is recomputed or stored: the helper is pure, a line without discou
   const snapshot = JSON.stringify(stored);
   assert.equal(receiptUnitPriceTTC(stored), stored.unitPriceHT * (1 + stored.taxRate / 100));
   assert.equal(JSON.stringify(stored), snapshot);
+});
+
+// ---------------------------------------------------------------------------
+// Counter POS (PC) layout: `ruled` = vertical rules + "PRIX TTC" left / amount right
+// ---------------------------------------------------------------------------
+
+test("ruled: the total is PRIX TTC first (left), the real amount second (right)", () => {
+  const sale = saleOf([{ name: "A", unitTTC: 928, quantity: 1 }]);
+  const markup = html(sale, { ruled: true });
+  const match = markup.match(/<div class="receipt-print-total receipt-print-total-ruled"><span>PRIX TTC<\/span><strong>([^<]*)<\/strong><\/div>/);
+  assert.ok(match, "label then amount");
+  assert.equal(normalize(match[1]), normalize(html(sale).match(/<strong>(928[^<]*)<\/strong><span>TOTAL TTC/)![1]));
+  assert.equal(markup.includes("TOTAL TTC"), false);
+});
+
+test("ruled: same rows, same data; only the table classes differ", () => {
+  const sale = saleOf([{ name: "Coca", unitTTC: 40, quantity: 2 }, { name: "Fanta", unitTTC: 12.5, quantity: 3 }]);
+  assert.deepEqual(rows(html(sale, { ruled: true })), rows(html(sale)));
+  assert.match(html(sale, { ruled: true }), /receipt-print-ticket receipt-print-ruled/);
+  assert.match(html(sale, { ruled: true }), /receipt-print-separator receipt-print-separator-flush/);
+});
+
+test("default (driver POS and everything else) is untouched: no ruled class, TOTAL TTC as before", () => {
+  const markup = html(saleOf([{ name: "A", unitTTC: 40, quantity: 1 }]));
+  assert.equal(markup.includes("receipt-print-ruled"), false);
+  assert.equal(markup.includes("PRIX TTC"), false);
+  assert.match(markup, /<span>TOTAL TTC<\/span>/);
+});
+
+test("ruled CSS: exactly 3 vertical rules (borders, so they always print), scoped to the ruled ticket inside @media print", () => {
+  const rule = ruleBody(".receipt-print-ruled .receipt-print-grid > span + span");
+  assert.match(rule, /border-left: 1px solid #000/);
+  assert.equal(css.includes(".receipt-print-ruled .receipt-print-grid > span {"), true);
+  assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled > strong"), /margin: 0 0 0 auto/);
+  assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled > span"), /text-align: left/);
+  const printStart = css.lastIndexOf("@media print", css.indexOf(".receipt-print-ruled .receipt-print-grid > span + span"));
+  assert.ok(printStart >= 0 && printStart < css.indexOf(".receipt-print-area {"));
+  // 4 spans per row -> "span + span" gives a rule before columns 2, 3 and 4 only.
+  const row = html(saleOf([{ name: "A", unitTTC: 40, quantity: 1 }]), { ruled: true }).match(/<div class="receipt-print-grid receipt-print-head">(.*?)<\/div>/)![1];
+  assert.equal((row.match(/<span/g) ?? []).length, 4);
 });

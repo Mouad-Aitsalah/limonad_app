@@ -13,6 +13,7 @@ import {
   ComboboxItem,
 } from "@/components/ui/combobox";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import type { CustomerDto } from "@/types/operations-dto";
 
 const SEARCH_DEBOUNCE_MS = 350;
@@ -25,6 +26,9 @@ type CustomerComboboxProps = {
   initialSuggestions: CustomerDto[];
   placeholder?: string;
   label?: string | null;
+  /** Optional extra classes (POS desktop sizing); omitted = unchanged look. */
+  labelClassName?: string;
+  inputClassName?: string;
   /** Optional replacement for the server search (offline: local mirror).
    *  Omitted = the unchanged GET /api/customers/search. Must not throw. */
   searchCustomers?: (query: string) => Promise<CustomerDto[]>;
@@ -45,6 +49,8 @@ export function CustomerCombobox({
   initialSuggestions,
   placeholder = "Selectionner un client",
   label = "Client",
+  labelClassName,
+  inputClassName,
   searchCustomers,
 }: CustomerComboboxProps) {
   const [query, setQuery] = React.useState("");
@@ -86,7 +92,7 @@ export function CustomerCombobox({
   return (
     <div className="space-y-2">
       {label ? (
-        <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Label className={cn("flex items-center gap-1.5 text-xs font-medium text-muted-foreground", labelClassName)}>
           <User aria-hidden="true" className="h-3.5 w-3.5" />
           {label}
         </Label>
@@ -102,7 +108,7 @@ export function CustomerCombobox({
         isItemEqualToValue={(a: CustomerDto, b: CustomerDto) => a.id === b.id}
       >
         <ComboboxInputGroup>
-          <ComboboxInput placeholder={value?.name ?? placeholder} />
+          <ComboboxInput placeholder={value?.name ?? placeholder} className={inputClassName} />
           <ComboboxClear />
         </ComboboxInputGroup>
         <ComboboxContent>
