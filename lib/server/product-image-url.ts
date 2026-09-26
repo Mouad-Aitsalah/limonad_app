@@ -34,3 +34,20 @@ export function toLightweightProductImageUrl(
   if (!imageUrl.startsWith("data:")) return imageUrl;
   return `/api/products/${productId}/image?v=${updatedAt.getTime()}`;
 }
+
+/**
+ * Same idea for Supplier.logoUrl (a data: URI in a text column). The counter
+ * POS repeated that logo on EVERY product row of its context (one copy per
+ * product of the supplier), which multiplied it in the RSC payload. A data:
+ * URI is replaced by a short versioned link to
+ * GET /api/suppliers/[id]/logo; an external URL is passed through unchanged.
+ */
+export function toLightweightSupplierLogoUrl(
+  supplierId: string | null,
+  logoUrl: string | null,
+  updatedAt: Date,
+): string | null {
+  if (!supplierId || !logoUrl) return null;
+  if (!logoUrl.startsWith("data:")) return logoUrl;
+  return `/api/suppliers/${supplierId}/logo?v=${updatedAt.getTime()}`;
+}

@@ -18,6 +18,7 @@ import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { toLightweightProductImageUrl, toLightweightSupplierLogoUrl } from "@/lib/server/product-image-url";
 import {
   createMixedPayments,
   mapSaleToDto,
@@ -223,10 +224,11 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
         barcode: true,
         name: true,
         imageUrl: true,
+        updatedAt: true,
         salePrice: true,
         taxRate: true,
         defaultSupplierId: true,
-        defaultSupplier: { select: { name: true, logoUrl: true } },
+        defaultSupplier: { select: { name: true, logoUrl: true, updatedAt: true } },
       },
       orderBy: { name: "asc" },
       take: POS_PRODUCT_LIST_LIMIT + 1,
@@ -272,7 +274,8 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       reference: product.reference,
       barcode: product.barcode,
       name: product.name,
-      imageUrl: product.imageUrl,
+      // PERF: a data: URI is sent as a short link (fetched lazily per card).
+      imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
       salePriceHT,
       salePriceTTC: computePriceTTC(salePriceHT, taxRate),
       taxRate,
@@ -280,7 +283,13 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
       supplierId: product.defaultSupplierId,
       supplierName: product.defaultSupplier?.name ?? null,
-      supplierLogoUrl: product.defaultSupplier?.logoUrl ?? null,
+      supplierLogoUrl: product.defaultSupplier
+        ? toLightweightSupplierLogoUrl(
+            product.defaultSupplierId,
+            product.defaultSupplier.logoUrl,
+            product.defaultSupplier.updatedAt,
+          )
+        : null,
     };
   });
 
