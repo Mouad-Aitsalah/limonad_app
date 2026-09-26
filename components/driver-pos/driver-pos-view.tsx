@@ -1756,16 +1756,15 @@ export function DriverPosView({
               </div>
             </div>
           </div>
-          {/* The product NAME on the tiles: phone 19.5px -> 29.25px (line-height
-              25.5px -> 38.25px, 2-line min height 51px -> 76.5px), desktop 21px ->
-              31.5px (its 2-line min height is in em, so it follows) - each 1.5x the
-              previous size. At most 2 lines (the card's own line-clamp-2), long words
-              wrap instead of overflowing, and `unicode-bidi: plaintext` lets an
-              Arabic name start on its own side. ProductCard is shared with the
-              counter POS, so this is scoped to THIS wrapper with descendant selectors
-              on the name paragraph only: price, stock, the Ajouter pill and the photo
-              keep their own classes. */}
-          <div className="[&_button_p.line-clamp-2]:[overflow-wrap:anywhere] [&_button_p.line-clamp-2]:[unicode-bidi:plaintext] max-lg:[&_button_p.line-clamp-2]:min-h-[76.5px] max-lg:[&_button_p.line-clamp-2]:text-[29.25px] max-lg:[&_button_p.line-clamp-2]:leading-[38.25px] lg:[&_button_p.line-clamp-2]:text-[31.5px]">
+          {/* The product NAME on the tiles, per screen: phone (below lg) 19.5px with a
+              25.5px line-height and a 51px 2-line min height; desktop (lg and up)
+              31.5px (its 2-line min height is in em, so it follows). At most 2 lines
+              (the card's own line-clamp-2), long words wrap instead of overflowing,
+              and `unicode-bidi: plaintext` lets an Arabic name start on its own side.
+              ProductCard is shared with the counter POS, so this is scoped to THIS
+              wrapper with descendant selectors on the name paragraph only: price,
+              stock, the Ajouter pill and the photo keep their own classes. */}
+          <div className="[&_button_p.line-clamp-2]:[overflow-wrap:anywhere] [&_button_p.line-clamp-2]:[unicode-bidi:plaintext] max-lg:[&_button_p.line-clamp-2]:min-h-[51px] max-lg:[&_button_p.line-clamp-2]:text-[19.5px] max-lg:[&_button_p.line-clamp-2]:leading-[25.5px] lg:[&_button_p.line-clamp-2]:text-[31.5px]">
             <ProductGrid
               products={productTiles}
               onAdd={addProductById}
