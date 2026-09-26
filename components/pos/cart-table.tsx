@@ -160,7 +160,7 @@ export function CartTable({
                     TableCell sets by default; wrapping happens on spaces and
                     `break-words` only splits a single word when it is itself
                     too wide for the column, so it can never overflow. */}
-                <p className="pr-5 font-medium whitespace-normal break-words text-foreground lg:pr-0">
+                <p className="pr-5 font-medium whitespace-normal break-words text-foreground lg:pr-0 lg:text-[22.56px]">
                   {line.designation}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">

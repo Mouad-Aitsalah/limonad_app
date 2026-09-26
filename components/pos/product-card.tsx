@@ -75,7 +75,7 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
       />
 
       <div className="mt-1.5 flex flex-1 flex-col px-0.5 max-lg:mt-0.5 max-lg:w-full max-lg:flex-none max-lg:px-0">
-        <p className="line-clamp-2 min-h-[2.75em] pr-12 text-[14px] font-medium leading-snug text-foreground max-lg:min-h-[34px] max-lg:pr-0 max-lg:text-center max-lg:text-[13px] max-lg:font-semibold max-lg:leading-[17px]">
+        <p className="line-clamp-2 min-h-[2.75em] pr-12 text-[18.2px] font-medium leading-snug text-foreground max-lg:min-h-[34px] max-lg:pr-0 max-lg:text-center max-lg:text-[13px] max-lg:font-semibold max-lg:leading-[17px]">
           {product.designation}
         </p>
         {product.reference ? (
