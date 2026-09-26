@@ -456,7 +456,14 @@ export async function getProductPickerPreload(params?: {
     take: limit,
   });
 
-  return products.map(mapProductToDto);
+  // PERF: this list is embedded in the /chargements RSC payload. A base64
+  // data: photo is replaced by a short versioned link (fetched lazily by the
+  // browser); external URLs pass through. Only this preload is affected -
+  // mapProductToDto itself (getProducts, products page) is unchanged.
+  return products.map((product) => ({
+    ...mapProductToDto(product),
+    imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
+  }));
 }
 
 /**
