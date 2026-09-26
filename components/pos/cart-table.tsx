@@ -57,9 +57,9 @@ type CartTableProps = {
 //  - DESKTOP (lg+): the previously-validated fixed rem widths, untouched.
 const COL = {
   produit: "w-[40%] px-1 lg:w-auto lg:px-4",
-  qte: "w-[26%] px-0.5 lg:w-[7.5rem] lg:px-2",
+  qte: "w-[26%] px-0.5 lg:w-[11.5rem] lg:px-2",
   prix: "w-[19%] px-0.5 lg:w-24 lg:px-2",
-  rem: "w-[15%] px-0.5 lg:w-[4.25rem] lg:px-2",
+  rem: "w-[15%] px-0.5 lg:w-[6.5rem] lg:px-2",
   // Desktop-only now - see this constant group's own comment above.
   total: "max-lg:hidden lg:w-[6.25rem] lg:px-2 lg:pr-3",
   // Own column on desktop only; on mobile the delete icon lives inside the
@@ -109,7 +109,7 @@ export function CartTable({
     // Mobile: w-full + min-w-0 -> the table is exactly the panel width and
     // the % columns fill it (no internal scroll). Desktop keeps its floor so
     // `table-fixed` never collapses the flexible Produit column.
-    <Table className="table-fixed min-w-0 lg:min-w-[34rem]">
+    <Table className="table-fixed min-w-0 lg:min-w-[44rem]">
       <TableHeader>
         <TableRow>
           <TableHead className={cn(COL.produit, H_MOBILE)}>Produit</TableHead>
@@ -139,7 +139,7 @@ export function CartTable({
           // Mobile: cells align to the top so QTE / PRIX / REM. / TOTAL stay
           // readable when the product name wraps to 2-3 lines. Desktop keeps
           // its previously-validated vertical-align (middle).
-          <TableRow key={line.productId} className="max-lg:[&>td]:align-top">
+          <TableRow key={line.productId} data-product-id={line.productId} className="max-lg:[&>td]:align-top">
             <TableCell className={cn(COL.produit, "relative pr-1")}>
               {/* Mobile-only compact delete - pulled out of the text flow
                   (absolute, top-right) so the name can use the full column
@@ -169,17 +169,17 @@ export function CartTable({
               </div>
             </TableCell>
             <TableCell className={COL.qte}>
-              <div className="flex items-center justify-center gap-0 lg:gap-0.5">
+              <div className="flex items-center justify-center gap-0 lg:gap-1">
                 <Button
                   type="button"
                   variant="outline"
                   size="icon-xs"
-                  className="size-6 lg:size-8"
+                  className="size-6 lg:size-12"
                   aria-label="Diminuer la quantite"
                   disabled={readOnly}
                   onClick={() => onDecrement(line.productId)}
                 >
-                  <Minus className="h-3 w-3" />
+                  <Minus className="h-3 w-3 lg:h-[18px] lg:w-[18px]" />
                 </Button>
                 <input
                   type="number"
@@ -194,18 +194,18 @@ export function CartTable({
                     )
                   }
                   aria-label="Quantite"
-                  className="h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-11"
+                  className="h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:h-[2.625rem] lg:w-[4.125rem] lg:text-[21px]"
                 />
                 <Button
                   type="button"
                   variant="outline"
                   size="icon-xs"
-                  className="size-6 lg:size-8"
+                  className="size-6 lg:size-12"
                   aria-label="Augmenter la quantite"
                   disabled={readOnly}
                   onClick={() => onIncrement(line.productId)}
                 >
-                  <Plus className="h-3 w-3" />
+                  <Plus className="h-3 w-3 lg:h-[18px] lg:w-[18px]" />
                 </Button>
               </div>
             </TableCell>
@@ -251,7 +251,7 @@ export function CartTable({
                     onDiscountChange(line.productId, Math.max(0, Number(event.target.value)))
                   }
                   aria-label={`Remise en DH par unité de ${line.designation}`}
-                  className="h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-14"
+                  className="h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:h-[2.625rem] lg:w-[5.25rem] lg:text-[21px]"
                 />
               </TableCell>
             )}

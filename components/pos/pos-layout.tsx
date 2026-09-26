@@ -190,6 +190,11 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   const [lastAddedProductId, setLastAddedProductId] = React.useState<string | null>(null);
   const [mobileView, setMobileView] = React.useState<"products" | "cart">("cart");
   const cartSectionRef = React.useRef<HTMLDivElement>(null);
+  // Desktop only: the scrollable product list of the cart, and the product the
+  // user just added (consumed by the effect below once the cart has rendered).
+  const cartScrollRef = React.useRef<HTMLDivElement>(null);
+  const pendingRevealProductIdRef = React.useRef<string | null>(null);
+  const previousCartProductIdsRef = React.useRef<Set<string>>(new Set());
   const cartButtonRef = React.useRef<HTMLDivElement>(null);
   const [cartPulse, setCartPulse] = React.useState(false);
   const cartPulseTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -481,11 +486,33 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
       ? `${slotReservation.saleNumber}/${slotReservation.saleYear}`
       : "…");
 
+  // After a product was added: once its row is really in the DOM, scroll ONLY
+  // the cart list so a NEW product is visible. A product that was already in
+  // the cart (quantity +1) keeps the current scroll position. Desktop only
+  // (lg+): on mobile the cart is not a separate scroll area.
+  React.useEffect(() => {
+    const previousIds = previousCartProductIdsRef.current;
+    previousCartProductIdsRef.current = new Set(cart.map((line) => line.productId));
+
+    const productId = pendingRevealProductIdRef.current;
+    if (!productId) return;
+    pendingRevealProductIdRef.current = null;
+    if (previousIds.has(productId)) return;
+    if (!window.matchMedia("(min-width: 64rem)").matches) return;
+
+    const container = cartScrollRef.current;
+    const row = container?.querySelector<HTMLElement>(`[data-product-id="${CSS.escape(productId)}"]`);
+    if (!container || !row) return;
+    const overflow = row.getBoundingClientRect().bottom - container.getBoundingClientRect().bottom;
+    if (overflow > 0) container.scrollTo({ top: container.scrollTop + overflow, behavior: "smooth" });
+  }, [cart]);
+
   // Negative stock is allowed: the cart quantity is never capped at the
   // product's on-hand stock. The only lower bound is 1.
   function addToCart(productId: string) {
     const product = productById.get(productId);
     if (!product) return false;
+    pendingRevealProductIdRef.current = productId;
 
     setCart((prev) => {
       const existing = prev.find((line) => line.productId === productId);
@@ -1657,7 +1684,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
 
         {/* Desktop: only the product list scrolls; the header above and the
             total / actions below stay put. Mobile: unchanged flow. */}
-        <div className="rounded-2xl border border-border lg:min-h-32 lg:flex-1 lg:overflow-y-auto">
+        <div ref={cartScrollRef} className="rounded-2xl border border-border lg:min-h-32 lg:flex-1 lg:overflow-y-auto">
           <CartTable
             lines={cartLines}
             operationType={operationType}
