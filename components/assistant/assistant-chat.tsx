@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { Bot, LoaderCircle, Send, UserRound } from "lucide-react";
+import { Bot, LoaderCircle, Mic, Send, Square, UserRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MarkdownMessage } from "@/components/assistant/markdown-message";
+import { appendTranscript, useVoiceInput } from "@/components/assistant/use-voice-input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +38,12 @@ export function AssistantChat() {
   const [isLoading, setIsLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
+  // Voice input: the transcription goes INTO the input (existing text kept) and is
+  // never sent - the user reads it, edits it if needed and presses "Envoyer".
+  const voice = useVoiceInput({
+    onTranscript: (text) => setMessage((current) => appendTranscript(current, text)),
+  });
+  const voiceBusy = voice.isRecording || voice.isTranscribing;
 
   React.useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -44,7 +51,7 @@ export function AssistantChat() {
 
   async function sendMessage() {
     const trimmedMessage = message.trim();
-    if (!trimmedMessage || isLoading) return;
+    if (!trimmedMessage || isLoading || voiceBusy) return;
 
     setMessage("");
     setError(null);
@@ -159,9 +166,25 @@ export function AssistantChat() {
             <div ref={messagesEndRef} />
           </div>
 
-          {error && (
+          {(error ?? voice.error) && (
             <p role="alert" className="rounded-xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {error}
+              {error ?? voice.error}
+            </p>
+          )}
+
+          {voiceBusy && (
+            <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+              {voice.isRecording ? (
+                <>
+                  <span aria-hidden="true" className="h-2.5 w-2.5 animate-pulse rounded-full bg-red-600" />
+                  Enregistrement…
+                </>
+              ) : (
+                <>
+                  <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin text-emerald-600" />
+                  Transcription…
+                </>
+              )}
             </p>
           )}
 
@@ -170,7 +193,7 @@ export function AssistantChat() {
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={isLoading}
+              disabled={isLoading || voice.isTranscribing}
               placeholder="Écrivez votre question…"
               aria-label="Message pour l’assistant IA"
               className="max-h-32 min-h-12 resize-none"
@@ -178,7 +201,31 @@ export function AssistantChat() {
             <Button
               type="button"
               size="icon"
-              disabled={!message.trim() || isLoading}
+              variant={voice.isRecording ? "destructive" : "outline"}
+              disabled={isLoading || voice.isTranscribing}
+              onClick={() => (voice.isRecording ? voice.stopRecording() : void voice.startRecording())}
+              aria-label={
+                voice.isRecording
+                  ? "Arrêter l’enregistrement"
+                  : voice.isTranscribing
+                    ? "Transcription en cours"
+                    : "Enregistrer un message vocal"
+              }
+              aria-pressed={voice.isRecording}
+              className={cn("h-12 w-12 shrink-0 rounded-xl", voice.isRecording && "animate-pulse")}
+            >
+              {voice.isTranscribing ? (
+                <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+              ) : voice.isRecording ? (
+                <Square aria-hidden="true" className="h-4 w-4" />
+              ) : (
+                <Mic aria-hidden="true" className="h-4 w-4" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              size="icon"
+              disabled={!message.trim() || isLoading || voiceBusy}
               onClick={() => void sendMessage()}
               aria-label="Envoyer le message"
               className="h-12 w-12 shrink-0 rounded-xl bg-emerald-600 hover:bg-emerald-700"
