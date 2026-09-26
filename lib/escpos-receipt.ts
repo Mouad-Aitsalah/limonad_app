@@ -113,6 +113,12 @@ export type ReceiptLine =
       big?: boolean;
       align?: Align;
       codePage?: CodePageName;
+      /**
+       * Column layout: each cell is printed at an ABSOLUTE position in dots from
+       * the left margin (ESC $), not with spaces. `text` is then only a
+       * character-grid preview of the same layout (used by tests and logs).
+       */
+      cells?: Array<{ x: number; text: string }>;
     }
   | { kind: "raster"; text: string; fontPx: number; bold?: boolean; align: Align }
   | { kind: "feed"; lines: number };
@@ -163,14 +169,6 @@ function formatTime(value: string): string {
   );
 }
 
-function padRight(text: string, width: number): string {
-  return text.length >= width ? text.slice(0, width) : text + " ".repeat(width - text.length);
-}
-
-function padLeft(text: string, width: number): string {
-  return text.length >= width ? text : " ".repeat(width - text.length) + text;
-}
-
 /** left ... right on one line of `width` columns (left is cut first if they collide). */
 function leftRight(left: string, right: string, width: number): string {
   const room = width - right.length - 1;
@@ -210,6 +208,32 @@ function wrap(text: string, width: number, maxLines: number): string[] {
 }
 
 const RULE_A = "-".repeat(COLUMNS_FONT_A);
+
+const CHAR_DOTS_A = 12;
+const CHAR_DOTS_B = 9;
+
+/** Character-grid preview of absolutely positioned cells (for tests / logs only). */
+function previewCells(cells: Array<{ x: number; text: string }>, charDots: number, columns: number): string {
+  const grid = Array.from({ length: columns }, () => " ");
+  for (const cell of cells) {
+    const start = Math.round(cell.x / charDots);
+    for (let i = 0; i < cell.text.length && start + i < columns; i += 1) grid[start + i] = cell.text[i];
+  }
+  return grid.join("").trimEnd();
+}
+
+function columnsLine(
+  font: "A" | "B",
+  cells: Array<{ x: number; text: string }>,
+  extra: { bold?: boolean; codePage?: CodePageName } = {},
+): ReceiptLine {
+  const charDots = font === "B" ? CHAR_DOTS_B : CHAR_DOTS_A;
+  const columns = font === "B" ? COLUMNS_FONT_B : COLUMNS_FONT_A;
+  return { kind: "text", font, text: previewCells(cells, charDots, columns), cells, ...extra };
+}
+
+/** DESIGNATION / product names start this far from the left margin (dots): twice the old QTE -> DESIGNATION gap. */
+const NAME_X_MIN = 117;
 
 // ---------------------------------------------------------------------------
 // The ticket (same content as ReceiptPrint)
@@ -264,27 +288,40 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
   // Column widths: font A (values). Numbers never lose digits: columns widen to fit.
   const unitPrices = sale.lines.map((line) => amount(receiptUnitPriceTTC(line)));
   const lineAmounts = sale.lines.map((line) => amount(line.totalTTC));
-  // QTE gets its own column (left aligned under its title) followed by a clear
-  // two-character gap, so DESIGNATION never touches the quantity.
-  const qtyW = Math.max(4, ...sale.lines.map((line) => String(line.quantity).length));
-  const QTY_GAP = 2;
+  // Real column positions (dots from the left margin, ESC $), not runs of spaces:
+  //   QTE          x = 0, left aligned (the quantity sits under its title)
+  //   DESIGNATION  x = nameX, the SAME x for the title and every product name
+  //   Prix TTC     right edge at priceEdge   (unchanged position)
+  //   Montant      right edge at the paper edge (unchanged position)
   const priceW = Math.max(9, ...unitPrices.map((value) => value.length));
   const amountW = Math.max(10, ...lineAmounts.map((value) => value.length));
-  const nameW = Math.max(10, COLUMNS_FONT_A - qtyW - QTY_GAP - priceW - amountW - 2);
+  const priceEdge = (COLUMNS_FONT_A - amountW - 1) * CHAR_DOTS_A;
+  const longestQty = Math.max(1, ...sale.lines.map((line) => String(line.quantity).length));
+  // A very long quantity pushes the name column right instead of touching it.
+  const nameX = Math.max(NAME_X_MIN, longestQty * CHAR_DOTS_A + 60);
+  const nameW = Math.max(8, Math.floor((priceEdge - priceW * CHAR_DOTS_A - CHAR_DOTS_A - nameX) / CHAR_DOTS_A));
 
-  // Titles: font B (base size), aligned to the same physical columns (dots) as the values:
-  // DESIGNATION starts exactly where the product names start, the two right-aligned titles end
-  // where the right-aligned numbers end.
-  const startB = Math.round(((qtyW + QTY_GAP) * 12) / 9);
-  const nameB = Math.round((nameW * 12) / 9);
-  const priceB = Math.round((priceW * 12) / 9);
-  const amountB = Math.max(7, COLUMNS_FONT_B - startB - nameB - priceB - 2);
-  const head =
-    padRight("QTE", startB) + padRight("DESIGNATION", nameB) + " " + padLeft("Prix TTC", priceB) + " " + padLeft("Montant", amountB);
-  lines.push({ kind: "text", text: head, font: "B", bold: true });
+  // Titles: font B (base size), on the same x positions as the values.
+  lines.push(
+    columnsLine(
+      "B",
+      [
+        { x: 0, text: "QTE" },
+        { x: nameX, text: "DESIGNATION" },
+        { x: priceEdge - "Prix TTC".length * CHAR_DOTS_B, text: "Prix TTC" },
+        { x: PRINTABLE_DOTS - "Montant".length * CHAR_DOTS_B, text: "Montant" },
+      ],
+      { bold: true },
+    ),
+  );
   lines.push({ kind: "text", text: RULE_A, font: "A" });
 
   // Rows: font A (values, ~1.3x the title size)
+  const numberCells = (quantity: string, price: string, total: string) => [
+    { x: 0, text: quantity },
+    { x: priceEdge - price.length * CHAR_DOTS_A, text: price },
+    { x: PRINTABLE_DOTS - total.length * CHAR_DOTS_A, text: total },
+  ];
   sale.lines.forEach((line, index) => {
     const price = unitPrices[index];
     const total = lineAmounts[index];
@@ -292,31 +329,17 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
     if (nameEncodable) {
       const parts = wrap(line.productName, nameW, 2);
       parts.forEach((part, partIndex) => {
-        const first = partIndex === 0;
-        lines.push({
-          kind: "text",
-          font: "A",
-          codePage,
-          text:
-            padRight(first ? String(line.quantity) : "", qtyW) +
-            " ".repeat(QTY_GAP) +
-            padRight(part, nameW) +
-            " " +
-            padLeft(first ? price : "", priceW) +
-            " " +
-            padLeft(first ? total : "", amountW),
-        });
+        const cells =
+          partIndex === 0
+            ? [numberCells(String(line.quantity), price, total)[0], { x: nameX, text: part }, ...numberCells("", price, total).slice(1)]
+            : [{ x: nameX, text: part }];
+        lines.push(columnsLine("A", cells, { codePage }));
       });
     } else {
       // The name cannot be printed as text (e.g. Arabic): it goes as an image
       // line, the numbers stay text on their own line.
       lines.push({ kind: "raster", text: normalizeSpaces(line.productName), fontPx: 24, align: "left" });
-      lines.push({
-        kind: "text",
-        font: "A",
-        codePage,
-        text: padRight(String(line.quantity), qtyW) + " ".repeat(QTY_GAP) + padRight("", nameW) + " " + padLeft(price, priceW) + " " + padLeft(total, amountW),
-      });
+      lines.push(columnsLine("A", numberCells(String(line.quantity), price, total), { codePage }));
     }
   });
 
@@ -434,7 +457,9 @@ export function rasterToEscPos(image: RasterImage): number[] {
 export type EncodeResult = { bytes: Uint8Array; rasterLines: number; unrenderedLines: string[] };
 
 export function encodeReceipt(lines: ReceiptLine[], raster?: RasterRenderer): EncodeResult {
-  const out: number[] = [ESC, 0x40]; // ESC @ : initialise
+  // ESC @ : initialise, then GS P 203 203: horizontal/vertical motion unit = 1 dot at 203 dpi,
+  // so ESC $ positions below are exact dots on every 80 mm printer.
+  const out: number[] = [ESC, 0x40, GS, 0x50, 203, 203];
   let currentCodePage: CodePageName | null = null;
   let rasterLines = 0;
   const unrenderedLines: string[] = [];
@@ -470,7 +495,16 @@ export function encodeReceipt(lines: ReceiptLine[], raster?: RasterRenderer): En
     out.push(ESC, 0x45, line.bold ? 0x01 : 0x00); // ESC E : bold
     out.push(GS, 0x21, line.big ? 0x11 : line.tall ? 0x01 : 0x00); // GS ! : size
     out.push(ESC, 0x61, line.align === "center" ? 0x01 : line.align === "right" ? 0x02 : 0x00); // ESC a
-    for (const char of simplify(line.text)) out.push(encodeChar(char, codePage) ?? 0x3f); // '?' never reached for checked lines
+    if (line.cells) {
+      // Absolute column positions: ESC $ nL nH, then the cell's text.
+      for (const cell of line.cells) {
+        const x = Math.max(0, Math.min(PRINTABLE_DOTS - 1, Math.round(cell.x)));
+        out.push(ESC, 0x24, x & 0xff, x >> 8);
+        for (const char of simplify(cell.text)) out.push(encodeChar(char, codePage) ?? 0x3f);
+      }
+    } else {
+      for (const char of simplify(line.text)) out.push(encodeChar(char, codePage) ?? 0x3f); // '?' never reached for checked lines
+    }
     out.push(LF);
     // reset emphasis so it never leaks into the next line
     out.push(ESC, 0x45, 0x00, GS, 0x21, 0x00);

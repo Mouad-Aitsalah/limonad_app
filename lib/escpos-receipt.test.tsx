@@ -200,28 +200,71 @@ test("total: TOTAL TTC on the LEFT, the amount on the RIGHT edge (like the Monta
   assert.equal(total.text.trimEnd().length, row.text.trimEnd().length);
 });
 
-test("QTE and DESIGNATION are clearly separated and aligned with the row values (8 x Eau 1/2L, 67,00 -> 536,00)", () => {
-  const lines = textLines(buildReceiptLines(saleOf([{ name: "Eau 1/2L", unitTTC: 67, quantity: 8 }])));
-  const head = lines.find((t) => t.text.includes("DESIGNATION"))!;
-  const row = lines.find((t) => t.text.includes("Eau 1/2L"))!;
-  const total = lines.find((t) => t.text.includes("TOTAL TTC"))!;
-  // titles stay in font B (unchanged size), values in font A
-  assert.equal(head.font, "B");
-  assert.equal(row.font, "A");
-  // at least 4 blank characters (>= 36 dots) between QTE and DESIGNATION in the titles ...
-  const gapTitle = head.text.indexOf("DESIGNATION") - (head.text.indexOf("QTE") + 3);
-  assert.ok(gapTitle >= 4, `title gap ${gapTitle}`);
-  // ... and a 2-character gap after the quantity column in the rows
-  assert.match(row.text, /^8 {5}Eau 1\/2L/);
-  // DESIGNATION starts at the same physical dot column as the product name
-  assert.equal(head.text.indexOf("DESIGNATION") * 9, row.text.indexOf("Eau") * 12);
-  // the two right-aligned titles end where the right-aligned numbers end (within one B glyph)
-  const endDots = (t: { text: string }, char: number, word: string) => (t.text.indexOf(word) + word.length) * char;
-  assert.ok(Math.abs(endDots(head, 9, "Prix TTC") - endDots(row, 12, "67,00")) <= 9);
-  assert.equal(head.text.trimEnd().length * 9, 576);
-  assert.equal(row.text.length * 12, 576);
-  assert.match(row.text, /67,00\s+536,00$/);
-  assert.match(total.text, /^TOTAL TTC\s+536,00 DH$/);
+function cellsOf(line: TextLine): Array<{ x: number; text: string }> {
+  assert.ok(line.cells, "the line uses absolute column positions (ESC $)");
+  return line.cells;
+}
+
+test("QTE -> DESIGNATION gap is doubled with REAL ESC $ column positions; QTE 2, 8 and 120", () => {
+  const OLD_GAP_DOTS = 5 * 9; // QTE -> DESIGNATION before: 5 font-B characters
+  const reference: { priceX?: number; montantX?: number; totalText?: string } = {};
+  for (const quantity of [2, 8, 120]) {
+    const price = 72;
+    const lines = textLines(buildReceiptLines(saleOf([{ name: "Eau 1/2L", unitTTC: price, quantity }])));
+    const head = lines.find((t) => t.text.includes("DESIGNATION"))!;
+    const row = lines.find((t) => t.text.includes("Eau 1/2L"))!;
+    const total = lines.find((t) => t.text.includes("TOTAL TTC"))!;
+    const [qteTitle, designation, prixTitle, montantTitle] = cellsOf(head);
+    const [qty, name, unit, amountCell] = cellsOf(row);
+
+    // sizes unchanged: titles font B, values font A
+    assert.equal(head.font, "B");
+    assert.equal(row.font, "A");
+    // QTE and the quantity share the left edge
+    assert.equal(qteTitle.x, 0);
+    assert.equal(qty.x, 0);
+    assert.equal(qty.text, String(quantity));
+    // DESIGNATION starts EXACTLY where the product name starts
+    assert.equal(designation.x, name.x);
+    // the gap between the end of "QTE" and DESIGNATION is about twice the old one
+    const gap = designation.x - "QTE".length * 9;
+    assert.ok(gap >= 2 * OLD_GAP_DOTS, `gap ${gap} dots vs old ${OLD_GAP_DOTS}`);
+    // the quantity never touches the name, even at 120
+    assert.ok(name.x - quantity.toString().length * 12 >= 60, "at least 60 dots (5 characters) between quantity and name");
+    // Prix TTC / Montant: right-aligned to fixed edges - identical for every quantity
+    const priceEdgeTitle = prixTitle.x + prixTitle.text.length * 9;
+    const priceEdgeValue = unit.x + unit.text.length * 12;
+    assert.ok(Math.abs(priceEdgeTitle - priceEdgeValue) <= 9);
+    assert.equal(montantTitle.x + montantTitle.text.length * 9, 576);
+    assert.equal(amountCell.x + amountCell.text.length * 12, 576);
+    reference.priceX ??= priceEdgeValue;
+    reference.montantX ??= amountCell.x + amountCell.text.length * 12;
+    assert.equal(priceEdgeValue, reference.priceX);
+    assert.equal(amountCell.x + amountCell.text.length * 12, reference.montantX);
+    // Total line untouched: TOTAL TTC left, amount right
+    reference.totalText ??= total.text.replace(/\d[\d.,]*/, "N");
+    assert.match(total.text, /^TOTAL TTC\s+[\d.,]+ DH$/);
+    assert.equal(total.text.length, COLUMNS_FONT_A);
+  }
+});
+
+test("the column positions reach the printer as ESC $ (absolute position), with the motion unit set to 1 dot", () => {
+  const { bytes } = buildReceiptEscPos(saleOf([{ name: "Eau 1/2L", unitTTC: 72, quantity: 2 }]));
+  assert.ok(hasSequence(bytes, [0x1d, 0x50, 203, 203]), "GS P 203 203");
+  assert.ok(hasSequence(bytes, [0x1b, 0x24, 117, 0]), "ESC $ 117 0 : DESIGNATION / name at x = 117 dots");
+  assert.ok(hasSequence(bytes, [0x1b, 0x24, 0, 0]), "ESC $ 0 0 : QTE / quantity at the left margin");
+  // the row is 4 positioned cells, not padded with spaces
+  const eau = Buffer.from(bytes).toString("latin1");
+  assert.ok(eau.includes("\x1b$u\x00Eau 1/2L"), "name printed right after its ESC $");
+  assert.equal(/2 {3,}Eau/.test(eau), false, "no run of spaces between quantity and name");
+});
+
+test("example 2 x Eau 1/2L at 72,00 = 144,00, and 8 x 67,00 = 536,00", () => {
+  const two = textLines(buildReceiptLines(saleOf([{ name: "Eau 1/2L", unitTTC: 72, quantity: 2 }])));
+  assert.match(two.find((t) => t.text.includes("Eau"))!.text, /^2 +Eau 1\/2L +72,00 +144,00$/);
+  assert.match(two.find((t) => t.text.includes("TOTAL"))!.text, /^TOTAL TTC +144,00 DH$/);
+  const eight = textLines(buildReceiptLines(saleOf([{ name: "Eau 1/2L", unitTTC: 67, quantity: 8 }])));
+  assert.match(eight.find((t) => t.text.includes("Eau"))!.text, /^8 +Eau 1\/2L +67,00 +536,00$/);
 });
 
 test("no EN ATTENTE box on top; the footer Statut line stays; paid ticket footer unchanged", () => {
