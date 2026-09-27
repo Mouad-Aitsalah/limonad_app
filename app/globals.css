@@ -571,8 +571,11 @@ body {
     text-align: center;
   }
 
-  /* Invoice logo: 16mm -> 27.2mm (x1.7), ratio-preserving. */
-  .receipt-print-area[data-document="sale"] .receipt-print-logo {
+  /* Invoice logo: 16mm -> 27.2mm (x1.7), ratio-preserving. Not scoped to
+     [data-document="sale"] - reused as-is by the deposit receipt (see
+     components/cash-deposits/deposit-receipt-print.tsx), which has no
+     data-document of its own. */
+  .receipt-print-area .receipt-print-logo {
     display: block;
     margin: 0 auto 1mm;
     max-height: 27.2mm;
@@ -582,7 +585,7 @@ body {
     object-fit: contain;
   }
 
-  .receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-logo {
+  .receipt-print-area[data-paper="58"] .receipt-print-logo {
     max-height: 22.1mm;
     max-width: 64.6mm;
   }
@@ -773,6 +776,39 @@ body {
   .receipt-print-totals-grand {
     font-size: 12px;
     font-weight: 700;
+  }
+
+  /* Deposit receipt only: the comment, when the deposit has one, and the two
+     signature blocks at the very bottom (see deposit-receipt-print.tsx). */
+  .receipt-print-notes-label {
+    font-weight: 700;
+  }
+
+  .receipt-print-notes-text {
+    overflow-wrap: anywhere;
+  }
+
+  .receipt-print-signatures {
+    display: flex;
+    justify-content: space-between;
+    gap: 4mm;
+    margin-top: 5mm;
+  }
+
+  .receipt-print-signature-block {
+    flex: 1;
+    text-align: center;
+    font-size: 9px;
+  }
+
+  .receipt-print-signature-space {
+    height: 10mm;
+    border-bottom: 1px solid #000;
+    margin-bottom: 1mm;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-signature-space {
+    height: 8mm;
   }
 
 }

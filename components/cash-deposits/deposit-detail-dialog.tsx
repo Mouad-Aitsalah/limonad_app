@@ -24,11 +24,12 @@ import {
 } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
 import type { CashDepositDto } from "@/types/cash-deposits";
-import { DepositReceiptPrint } from "@/components/cash-deposits/deposit-receipt-print";
 
 type DepositDetailDialogProps = {
   depositId: string | null;
   onOpenChange: (open: boolean) => void;
+  /** Hands the loaded deposit to the parent's single shared print target (see CashDepositsView). */
+  onPrint: (deposit: CashDepositDto) => void;
 };
 
 const statusLabels: Record<string, string> = {
@@ -36,7 +37,7 @@ const statusLabels: Record<string, string> = {
   CANCELLED: "Annule",
 };
 
-export function DepositDetailDialog({ depositId, onOpenChange }: DepositDetailDialogProps) {
+export function DepositDetailDialog({ depositId, onOpenChange, onPrint }: DepositDetailDialogProps) {
   const [deposit, setDeposit] = React.useState<CashDepositDto | null>(null);
 
   React.useEffect(() => {
@@ -63,7 +64,8 @@ export function DepositDetailDialog({ depositId, onOpenChange }: DepositDetailDi
   const loading = depositId !== null && displayedDeposit === null;
 
   function handlePrint() {
-    window.setTimeout(() => window.print(), 0);
+    if (!displayedDeposit) return;
+    onPrint(displayedDeposit);
   }
 
   return (
@@ -205,8 +207,6 @@ export function DepositDetailDialog({ depositId, onOpenChange }: DepositDetailDi
           </Button>
         </DialogFooter>
       </DialogContent>
-
-      <DepositReceiptPrint deposit={displayedDeposit} />
     </Dialog>
   );
 }

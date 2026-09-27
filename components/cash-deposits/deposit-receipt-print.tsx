@@ -46,8 +46,12 @@ export function DepositReceiptPrint({ deposit, paperWidth = "80" }: DepositRecei
     <section aria-hidden="true" className="receipt-print-area hidden" data-paper={paperWidth}>
       <div className="receipt-print-ticket">
         <header className="receipt-print-header">
+          {identity?.logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={identity.logoUrl} alt={organizationName} className="receipt-print-logo" />
+          ) : null}
           <p className="receipt-print-brand">{organizationName}</p>
-          <p>VERSEMENT DE CAISSE</p>
+          <p>REÇU DE VERSEMENT</p>
         </header>
 
         <div className="receipt-print-meta">
@@ -106,7 +110,26 @@ export function DepositReceiptPrint({ deposit, paperWidth = "80" }: DepositRecei
           </div>
         </div>
 
+        {deposit.notes ? (
+          <>
+            <div className="receipt-print-separator" />
+            <p className="receipt-print-notes-label">Commentaire</p>
+            <p className="receipt-print-notes-text">{deposit.notes}</p>
+          </>
+        ) : null}
+
         <div className="receipt-print-separator" />
+
+        <div className="receipt-print-signatures">
+          <div className="receipt-print-signature-block">
+            <div className="receipt-print-signature-space" />
+            <p>Signature caissier</p>
+          </div>
+          <div className="receipt-print-signature-block">
+            <div className="receipt-print-signature-space" />
+            <p>Signature responsable</p>
+          </div>
+        </div>
       </div>
     </section>
   );

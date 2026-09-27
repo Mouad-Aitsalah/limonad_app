@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Banknote, FileCheck, Receipt, Wallet } from "lucide-react";
+import { toast } from "sonner";
 
 import { MetricCard } from "@/components/ui/metric-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,6 +11,7 @@ import type { DepotDto } from "@/types/operations-dto";
 import { NewDepositForm } from "@/components/cash-deposits/new-deposit-form";
 import { DepositHistoryTable } from "@/components/cash-deposits/deposit-history-table";
 import { DepositDetailDialog } from "@/components/cash-deposits/deposit-detail-dialog";
+import { DepositReceiptPrint } from "@/components/cash-deposits/deposit-receipt-print";
 
 type CashDepositsViewProps = {
   initialContext: CashDepositContextDto;
@@ -26,6 +28,32 @@ export function CashDepositsView({
   const [history, setHistory] = React.useState(initialHistory);
   const [activeTab, setActiveTab] = React.useState("new");
   const [detailId, setDetailId] = React.useState<string | null>(null);
+  // Single shared print target for the whole "Historique" tab (the detail
+  // dialog's own "Imprimer" button and the table's per-row print button both
+  // go through this) - one hidden .receipt-print-area at a time, so opening
+  // the dialog for one deposit and quick-printing another can never overlap
+  // two receipts on the same printed page.
+  const [printTarget, setPrintTarget] = React.useState<CashDepositDto | null>(null);
+
+  // Print only after the receipt for THIS deposit has actually rendered.
+  React.useEffect(() => {
+    if (!printTarget) return;
+    window.setTimeout(() => window.print(), 0);
+  }, [printTarget]);
+
+  async function printDepositById(id: string) {
+    try {
+      const response = await fetch(`/api/cash-deposits/${id}`, { cache: "no-store" });
+      const body = (await response.json()) as { deposit?: CashDepositDto; message?: string };
+      if (!body.deposit) {
+        toast.error(body.message ?? "Impossible de charger ce versement.");
+        return;
+      }
+      setPrintTarget(body.deposit);
+    } catch {
+      toast.error("Impossible de charger ce versement.");
+    }
+  }
 
   function upsertHistory(deposit: CashDepositDto) {
     setHistory((current) => {
@@ -118,12 +146,18 @@ export function CashDepositsView({
               depots={depots}
               context={context}
               onOpenDetail={setDetailId}
+              onPrint={printDepositById}
             />
           </div>
         </TabsContent>
       </Tabs>
 
-      <DepositDetailDialog depositId={detailId} onOpenChange={(open) => !open && setDetailId(null)} />
+      <DepositDetailDialog
+        depositId={detailId}
+        onOpenChange={(open) => !open && setDetailId(null)}
+        onPrint={setPrintTarget}
+      />
+      <DepositReceiptPrint deposit={printTarget} />
     </div>
   );
 }

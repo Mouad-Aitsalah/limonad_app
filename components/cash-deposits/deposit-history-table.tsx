@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Eye } from "lucide-react";
+import { Eye, Printer } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,8 @@ type DepositHistoryTableProps = {
   depots: DepotDto[];
   context: CashDepositContextDto;
   onOpenDetail: (id: string) => void;
+  /** Prints this deposit's receipt directly, without opening the detail dialog. */
+  onPrint: (id: string) => void;
 };
 
 const statusLabels: Record<string, string> = {
@@ -44,6 +46,7 @@ export function DepositHistoryTable({
   depots,
   context,
   onOpenDetail,
+  onPrint,
 }: DepositHistoryTableProps) {
   const [search, setSearch] = React.useState("");
   const [dateFrom, setDateFrom] = React.useState("");
@@ -200,15 +203,27 @@ export function DepositHistoryTable({
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onOpenDetail(deposit.id)}
-                    >
-                      <Eye className="h-4 w-4" />
-                      Voir
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onOpenDetail(deposit.id)}
+                      >
+                        <Eye className="h-4 w-4" />
+                        Voir
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onPrint(deposit.id)}
+                        aria-label={`Imprimer le reçu du versement ${deposit.number}`}
+                      >
+                        <Printer className="h-4 w-4" />
+                        Imprimer
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
