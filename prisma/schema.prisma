@@ -406,71 +406,72 @@ model Session {
 }
 
 model Organization {
-  id                   String                @id @default(cuid())
-  code                 String                @unique
-  name                 String
-  tradeName            String?
-  address              String?
-  city                 String?
-  country              String?
-  phone                String?
-  email                String?
+  id                        String                     @id @default(cuid())
+  code                      String                     @unique
+  name                      String
+  tradeName                 String?
+  address                   String?
+  city                      String?
+  country                   String?
+  phone                     String?
+  email                     String?
   // Company logo shown in the sidebar and on sales tickets. Stored as a
   // validated `data:image/(png|jpeg|webp);base64,...` URL (same persistence
   // approach as product photos - a text column, never the Vercel FS).
   // Nullable: no logo => the "C" / name fallback is used.
-  logoUrl              String?
-  status               OrganizationStatus    @default(ACTIVE)
-  users                User[]
-  depots               Depot[]
-  trucks               Truck[]
-  drivers              Driver[]
-  categories           Category[]
-  brands               Brand[]
-  suppliers            Supplier[]
-  contacts             Contact[]
-  expenseAccounts      ExpenseAccount[]
-  documentSequences    DocumentSequence[]
-  treasuryAccounts     TreasuryAccount[]
-  products             Product[]
-  stockLocations       StockLocation[]
-  stockLevels          StockLevel[]
-  stockMovements       StockMovement[]
-  customers            Customer[]
-  tours                Tour[]
-  truckLoadings        TruckLoading[]
-  posSessions          PosSession[]
-  cashDeposits         CashDeposit[]
-  employees            Employee[]
-  employeeTransactions EmployeeTransaction[]
-  sales                Sale[]
-  payments             Payment[]
-  creditNotes          CreditNote[]
-  purchases            Purchase[]
-  accountingAccounts   AccountingAccount[]
-  accountingEntries    AccountingEntry[]
-  accountingSettings   AccountingSettings[]
-  tourClosures         TourClosure[]
-  discrepancies        Discrepancy[]
-  auditLogs            AuditLog[]
-  inventories          Inventory[]
-  expenses             Expense[]
-  customerSettlements  CustomerSettlement[]
-  aiConversations      AiConversation[]
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
+  logoUrl                   String?
+  status                    OrganizationStatus         @default(ACTIVE)
+  users                     User[]
+  depots                    Depot[]
+  trucks                    Truck[]
+  drivers                   Driver[]
+  categories                Category[]
+  brands                    Brand[]
+  suppliers                 Supplier[]
+  contacts                  Contact[]
+  expenseAccounts           ExpenseAccount[]
+  documentSequences         DocumentSequence[]
+  treasuryAccounts          TreasuryAccount[]
+  products                  Product[]
+  stockLocations            StockLocation[]
+  stockLevels               StockLevel[]
+  stockMovements            StockMovement[]
+  customers                 Customer[]
+  tours                     Tour[]
+  truckLoadings             TruckLoading[]
+  posSessions               PosSession[]
+  cashDeposits              CashDeposit[]
+  employees                 Employee[]
+  employeeTransactions      EmployeeTransaction[]
+  sales                     Sale[]
+  payments                  Payment[]
+  creditNotes               CreditNote[]
+  purchases                 Purchase[]
+  accountingAccounts        AccountingAccount[]
+  accountingEntries         AccountingEntry[]
+  accountingSettings        AccountingSettings[]
+  tourClosures              TourClosure[]
+  discrepancies             Discrepancy[]
+  auditLogs                 AuditLog[]
+  inventories               Inventory[]
+  expenses                  Expense[]
+  customerSettlements       CustomerSettlement[]
+  aiConversations           AiConversation[]
+  purchaseForecastSnapshots PurchaseForecastSnapshot[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
 }
 
 model AiConversation {
   organizationId  String
-  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  id              String                 @id @default(cuid())
+  organization    Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id              String                  @id @default(cuid())
   createdByUserId String
-  createdByUser   User                   @relation("AiConversationCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdByUser   User                    @relation("AiConversationCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   title           String?
   messages        AiConversationMessage[]
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
 
   @@index([organizationId, createdByUserId, updatedAt(sort: Desc)])
 }
@@ -600,31 +601,31 @@ model Brand {
 }
 
 model Supplier {
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  id             String       @id @default(cuid())
-  code           String
-  name           String
-  logoUrl        String?
-  phone          String?
-  email          String?
-  address        String?
-  city           String?
-  ice            String?
-  taxId          String?
-  active         Boolean      @default(true)
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id              String       @id @default(cuid())
+  code            String
+  name            String
+  logoUrl         String?
+  phone           String?
+  email           String?
+  address         String?
+  city            String?
+  ice             String?
+  taxId           String?
+  active          Boolean      @default(true)
   // Who created this account. Nullable: pre-existing rows stay NULL (no
   // backfill), and a deleted user leaves the account intact with "-" shown.
   // Display only (/comptes "Créé par") - never a filter, never client-supplied.
   createdByUserId String?
   createdBy       User?        @relation("SupplierCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  products       Product[]
-  purchases      Purchase[]
-  creditNotes    CreditNote[]
-  contacts       Contact[]
-  expenses       Expense[]
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  products        Product[]
+  purchases       Purchase[]
+  creditNotes     CreditNote[]
+  contacts        Contact[]
+  expenses        Expense[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
   @@unique([organizationId, code])
   @@index([organizationId])
@@ -769,37 +770,38 @@ model TreasuryAccount {
 }
 
 model Product {
-  organizationId    String
-  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  id                String             @id @default(cuid())
-  reference         String
-  barcode           String?
-  name              String
-  description       String?
-  categoryId        String
-  category          Category           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  brandId           String?
-  brand             Brand?             @relation(fields: [brandId], references: [id], onDelete: SetNull)
-  defaultSupplierId String?
-  defaultSupplier   Supplier?          @relation(fields: [defaultSupplierId], references: [id], onDelete: SetNull)
-  purchasePrice     Decimal            @db.Decimal(12, 2)
-  salePrice         Decimal            @db.Decimal(12, 2)
-  taxRate           Decimal            @db.Decimal(5, 2)
-  unit              String
-  minimumStock      Int                @default(0)
-  status            ProductStatus      @default(ACTIVE)
-  imageUrl          String?
-  stockLevels       StockLevel[]
-  stockMovements    StockMovement[]
-  loadingLines      TruckLoadingLine[]
-  tourStockCounts   TourStockCount[]
-  saleLines         SaleLine[]
-  creditNoteLines   CreditNoteLine[]
-  purchaseLines     PurchaseLine[]
-  discrepancies     Discrepancy[]
-  inventoryLines    InventoryLine[]
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  organizationId            String
+  organization              Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id                        String                     @id @default(cuid())
+  reference                 String
+  barcode                   String?
+  name                      String
+  description               String?
+  categoryId                String
+  category                  Category                   @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  brandId                   String?
+  brand                     Brand?                     @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  defaultSupplierId         String?
+  defaultSupplier           Supplier?                  @relation(fields: [defaultSupplierId], references: [id], onDelete: SetNull)
+  purchasePrice             Decimal                    @db.Decimal(12, 2)
+  salePrice                 Decimal                    @db.Decimal(12, 2)
+  taxRate                   Decimal                    @db.Decimal(5, 2)
+  unit                      String
+  minimumStock              Int                        @default(0)
+  status                    ProductStatus              @default(ACTIVE)
+  imageUrl                  String?
+  stockLevels               StockLevel[]
+  stockMovements            StockMovement[]
+  loadingLines              TruckLoadingLine[]
+  tourStockCounts           TourStockCount[]
+  saleLines                 SaleLine[]
+  creditNoteLines           CreditNoteLine[]
+  purchaseLines             PurchaseLine[]
+  discrepancies             Discrepancy[]
+  inventoryLines            InventoryLine[]
+  purchaseForecastSnapshots PurchaseForecastSnapshot[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
 
   @@unique([organizationId, reference])
   @@unique([organizationId, barcode])
@@ -1301,36 +1303,36 @@ model EmployeeTransaction {
 }
 
 model Sale {
-  organizationId  String
-  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  id              String        @id @default(cuid())
-  invoiceNumber   String
-  saleYear        Int?
-  saleNumber      Int?
-  posSessionId    String?
-  posSession      PosSession?   @relation(fields: [posSessionId], references: [id], onDelete: SetNull)
-  origin          SaleOrigin
-  status          SaleStatus    @default(DRAFT)
-  customerId      String?
-  customer        Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  depotId         String?
-  depot           Depot?        @relation(fields: [depotId], references: [id], onDelete: Restrict)
-  driverId        String?
-  driver          Driver?       @relation(fields: [driverId], references: [id], onDelete: Restrict)
-  truckId         String?
-  truck           Truck?        @relation(fields: [truckId], references: [id], onDelete: Restrict)
-  tourId          String?
-  tour            Tour?         @relation(fields: [tourId], references: [id], onDelete: Restrict)
-  stockLocationId String
-  stockLocation   StockLocation @relation(fields: [stockLocationId], references: [id], onDelete: Restrict)
-  subtotalHT      Decimal       @db.Decimal(12, 2)
-  discountAmount  Decimal       @default(0) @db.Decimal(12, 2)
-  taxAmount       Decimal       @db.Decimal(12, 2)
-  totalTTC        Decimal       @db.Decimal(12, 2)
-  stampAmount     Decimal       @default(0) @db.Decimal(12, 2)
-  paidAmount      Decimal       @default(0) @db.Decimal(12, 2)
-  creditAmount    Decimal       @default(0) @db.Decimal(12, 2)
-  paymentMethod   PaymentMethod
+  organizationId          String
+  organization            Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id                      String             @id @default(cuid())
+  invoiceNumber           String
+  saleYear                Int?
+  saleNumber              Int?
+  posSessionId            String?
+  posSession              PosSession?        @relation(fields: [posSessionId], references: [id], onDelete: SetNull)
+  origin                  SaleOrigin
+  status                  SaleStatus         @default(DRAFT)
+  customerId              String?
+  customer                Customer?          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  depotId                 String?
+  depot                   Depot?             @relation(fields: [depotId], references: [id], onDelete: Restrict)
+  driverId                String?
+  driver                  Driver?            @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  truckId                 String?
+  truck                   Truck?             @relation(fields: [truckId], references: [id], onDelete: Restrict)
+  tourId                  String?
+  tour                    Tour?              @relation(fields: [tourId], references: [id], onDelete: Restrict)
+  stockLocationId         String
+  stockLocation           StockLocation      @relation(fields: [stockLocationId], references: [id], onDelete: Restrict)
+  subtotalHT              Decimal            @db.Decimal(12, 2)
+  discountAmount          Decimal            @default(0) @db.Decimal(12, 2)
+  taxAmount               Decimal            @db.Decimal(12, 2)
+  totalTTC                Decimal            @db.Decimal(12, 2)
+  stampAmount             Decimal            @default(0) @db.Decimal(12, 2)
+  paidAmount              Decimal            @default(0) @db.Decimal(12, 2)
+  creditAmount            Decimal            @default(0) @db.Decimal(12, 2)
+  paymentMethod           PaymentMethod
   // Selected only for a BANK_TRANSFER sale: the specific 5141 sub-account
   // that received the transfer. Mandatory for every NEW bank-transfer sale
   // (server 422 otherwise, no silent default). Historical rows stay NULL and
@@ -1338,9 +1340,9 @@ model Sale {
   // backfilled.
   bankAccountingAccountId String?
   bankAccountingAccount   AccountingAccount? @relation("SaleBankAccountingAccount", fields: [bankAccountingAccountId], references: [id], onDelete: Restrict)
-  createdByUserId String
-  createdBy       User          @relation("SaleCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  validatedAt     DateTime?
+  createdByUserId         String
+  createdBy               User               @relation("SaleCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  validatedAt             DateTime?
   // PHASE 4A.1 - the real moment of sale, distinct from createdAt (when the
   // server row was actually inserted). NULL for every sale created before
   // this column existed and for a normal online sale where "moment of sale"
@@ -1350,19 +1352,19 @@ model Sale {
   // value DIFFERENT from createdAt for a driver sale synced from the offline
   // POS, where the two can legitimately be hours (or days) apart - see
   // syncOfflineDriverSale in lib/server/driver-sales.ts.
-  soldAt          DateTime?
+  soldAt                  DateTime?
   // Client-generated, stable for one logical sale attempt (see
   // lib/server/counter-sales.ts / driver-sales.ts). Same pattern as
   // EmployeeTransaction.idempotencyKey: nullable so existing rows and any
   // caller that doesn't send one are unaffected - Postgres treats NULL as
   // distinct from NULL in a unique index, so the constraint below only ever
   // constrains rows that actually carry a key.
-  idempotencyKey  String?
-  lines           SaleLine[]
-  payments        Payment[]
-  creditNotes     CreditNote[]
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  idempotencyKey          String?
+  lines                   SaleLine[]
+  payments                Payment[]
+  creditNotes             CreditNote[]
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
   @@unique([organizationId, invoiceNumber])
   @@unique([organizationId, saleYear, saleNumber])
@@ -1523,39 +1525,39 @@ model CreditNoteLine {
 }
 
 model Purchase {
-  organizationId    String
-  organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  id                String         @id @default(cuid())
-  purchaseNumber    String
-  supplierId        String
-  supplier          Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  depotId           String
-  depot             Depot          @relation(fields: [depotId], references: [id], onDelete: Restrict)
-  status            PurchaseStatus @default(DRAFT)
+  organizationId          String
+  organization            Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id                      String              @id @default(cuid())
+  purchaseNumber          String
+  supplierId              String
+  supplier                Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  depotId                 String
+  depot                   Depot               @relation(fields: [depotId], references: [id], onDelete: Restrict)
+  status                  PurchaseStatus      @default(DRAFT)
   // Price-entry mode for the whole purchase (see PurchasePricingMode).
   // Every pre-existing row keeps CLASSIC_TTC via this default.
-  pricingMode       PurchasePricingMode @default(CLASSIC_TTC)
-  orderDate         DateTime
-  receivedAt        DateTime?
-  paymentMethod     String         @default("credit_fournisseur")
-  paymentDate       DateTime?
-  chequeNumber      String?
-  bankName          String?
+  pricingMode             PurchasePricingMode @default(CLASSIC_TTC)
+  orderDate               DateTime
+  receivedAt              DateTime?
+  paymentMethod           String              @default("credit_fournisseur")
+  paymentDate             DateTime?
+  chequeNumber            String?
+  bankName                String?
   // Selected only for the new "banque" payment method. Historical purchases
   // deliberately keep this nullable, including their legacy bankName text.
   bankAccountingAccountId String?
-  bankAccountingAccount   AccountingAccount? @relation("PurchaseBankAccountingAccount", fields: [bankAccountingAccountId], references: [id], onDelete: Restrict)
-  observation       String?
-  subtotalHT        Decimal        @db.Decimal(12, 2)
-  taxAmount         Decimal        @db.Decimal(12, 2)
-  totalTTC          Decimal        @db.Decimal(12, 2)
-  createdByUserId   String
-  createdBy         User           @relation("PurchaseCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  validatedByUserId String?
-  validatedBy       User?          @relation("PurchaseValidatedBy", fields: [validatedByUserId], references: [id], onDelete: SetNull)
-  lines             PurchaseLine[]
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  bankAccountingAccount   AccountingAccount?  @relation("PurchaseBankAccountingAccount", fields: [bankAccountingAccountId], references: [id], onDelete: Restrict)
+  observation             String?
+  subtotalHT              Decimal             @db.Decimal(12, 2)
+  taxAmount               Decimal             @db.Decimal(12, 2)
+  totalTTC                Decimal             @db.Decimal(12, 2)
+  createdByUserId         String
+  createdBy               User                @relation("PurchaseCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  validatedByUserId       String?
+  validatedBy             User?               @relation("PurchaseValidatedBy", fields: [validatedByUserId], references: [id], onDelete: SetNull)
+  lines                   PurchaseLine[]
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
 
   @@unique([organizationId, purchaseNumber])
   @@index([organizationId])
@@ -1618,7 +1620,7 @@ model AccountingAccount {
   cashSettings             AccountingSettings[]  @relation("AccountingSettingsCashAccount")
   bankSettings             AccountingSettings[]  @relation("AccountingSettingsBankAccount")
   purchasesWithBankAccount Purchase[]            @relation("PurchaseBankAccountingAccount")
-  salesWithBankAccount     Sale[]               @relation("SaleBankAccountingAccount")
+  salesWithBankAccount     Sale[]                @relation("SaleBankAccountingAccount")
   customerSettings         AccountingSettings[]  @relation("AccountingSettingsCustomerAccount")
   supplierSettings         AccountingSettings[]  @relation("AccountingSettingsSupplierAccount")
   customerReturnSettings   AccountingSettings[]  @relation("AccountingSettingsCustomerReturnAccount")
@@ -1910,6 +1912,47 @@ model InventoryLine {
  * retries for the numbering step itself, and O(1) regardless of how many
  * documents already exist.
  */
+/**
+ * Forecasting step 4 - "PRÉCALCUL / CACHE". ONE row per organisation, business
+ * day (see lib/business-day.ts - 02h-02h Casablanca, the exact same rule the
+ * rest of the app uses, no logic duplicated here) and product: the ML-side
+ * result of the sales forecast (lib/forecasting/sales-forecast.ts), computed
+ * once a day by the Vercel Cron (app/api/cron/purchase-forecast/route.ts)
+ * instead of on every AI Assistant question (~10s otherwise).
+ * Deliberately does NOT store currentStock, safetyStock, targetStock,
+ * recommendedPurchase or a stock alert: those depend on the stock level,
+ * which must always be read live (lib/forecasting/purchase-recommendation.ts
+ * still calls queryCurrentStockByProduct + computeRecommendation() at read
+ * time, snapshot or not) - a stock change must never require recomputing the
+ * forecast. A row for a business day that already has one is upserted
+ * (idempotent re-run), never duplicated - see the unique index below.
+ */
+model PurchaseForecastSnapshot {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  businessDay          String
+  productId            String
+  product              Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+  productName          String
+  forecast1Day         Int
+  forecast3Days        Int
+  forecast7Days        Int
+  // Sum of the 7 daily predictions BEFORE rounding (see SalesPrediction.
+  // predictedQuantityRaw) - summing already-rounded values would lose a
+  // small demand (0.4/day rounds to 0 every day).
+  predictedQuantityRaw Float
+  model                String
+  mae                  Float?
+  reliability          String
+  historyDays          Int
+  soldDays             Int
+  createdAt            DateTime     @default(now())
+
+  @@unique([organizationId, businessDay, productId])
+  @@index([organizationId, businessDay])
+}
+
 model DocumentSequence {
   id             String       @id @default(cuid())
   organizationId String
