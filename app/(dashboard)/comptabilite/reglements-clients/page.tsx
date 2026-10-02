@@ -37,9 +37,6 @@ export default async function CustomerSettlementsPage({
         <h1 className="font-heading text-2xl font-semibold text-foreground">
           Règlements clients
         </h1>
-        <p className="text-sm text-muted-foreground">
-          Consulter le compte client et enregistrer un règlement.
-        </p>
       </div>
 
       <CustomerSettlementsView initialCustomer={initialCustomer} />

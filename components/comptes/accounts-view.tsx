@@ -106,9 +106,6 @@ export function AccountsView({ initialPage, accountingAccounts }: AccountsViewPr
           <h1 className="font-heading text-2xl font-semibold text-foreground">
             Comptes
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Gestion des comptes clients, fournisseurs, charges, tresorerie et comptes employes.
-          </p>
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">

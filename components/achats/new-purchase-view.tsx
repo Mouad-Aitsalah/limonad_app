@@ -92,7 +92,6 @@ export function NewPurchaseView() {
       <div className="space-y-6">
         <div>
           <h1 className="font-heading text-2xl font-semibold text-foreground">Nouvel achat</h1>
-          <p className="text-sm text-muted-foreground">Saisir une facture fournisseur.</p>
         </div>
 
         <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
@@ -154,7 +153,6 @@ export function NewPurchaseView() {
     <div className="space-y-6">
       <div>
         <h1 className="font-heading text-2xl font-semibold text-foreground">Nouvel achat</h1>
-        <p className="text-sm text-muted-foreground">Saisir une facture fournisseur.</p>
       </div>
 
       <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">

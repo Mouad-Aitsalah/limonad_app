@@ -24,9 +24,6 @@ export default async function VentesPage() {
         <h1 className="font-heading text-2xl font-semibold text-foreground">
           Archives des factures
         </h1>
-        <p className="text-sm text-muted-foreground">
-          Consulter les commandes et les sessions journalières du point de vente.
-        </p>
       </div>
 
       <SalesView initialOrdersPage={ordersPage} sessions={sessions} months={months} />

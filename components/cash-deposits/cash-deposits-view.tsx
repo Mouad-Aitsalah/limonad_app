@@ -89,10 +89,6 @@ export function CashDepositsView({
       <div>
         {/* Page type scaled x1.4 (24px -> 33.6px title, 14px -> 19.6px text). */}
         <h1 className="font-heading text-[33.6px] leading-tight font-semibold text-foreground">Versements</h1>
-        <p className="text-[19.6px] leading-snug text-muted-foreground">
-          Declarez l&apos;argent physiquement present en caisse et consultez l&apos;historique
-          par POS.
-        </p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">

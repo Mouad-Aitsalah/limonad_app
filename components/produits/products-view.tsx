@@ -135,7 +135,6 @@ export function ProductsView({
       <AppPageHeader
         eyebrow="Catalogue"
         title="Produits"
-        description="Pilotez le catalogue COMDIS, les prix, les statuts et les visuels produits depuis une vue unique."
         actions={
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button

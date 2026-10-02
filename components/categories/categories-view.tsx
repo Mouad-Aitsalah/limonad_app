@@ -103,7 +103,6 @@ export function CategoriesView({ initialCategories }: CategoriesViewProps) {
       <AppPageHeader
         eyebrow="Catalogue"
         title="Categories"
-        description="Organisez le catalogue COMDIS et pilotez rapidement l'activation des familles de produits."
         actions={<CategoryDialog onSave={saveCategory} />}
       />
 

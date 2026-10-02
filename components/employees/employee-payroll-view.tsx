@@ -219,9 +219,6 @@ export function EmployeePayrollView({
         <h1 className="font-heading text-2xl font-semibold text-foreground">
           Avances / Salaire
         </h1>
-        <p className="text-sm text-muted-foreground">
-          Enregistrez les avances, la remuneration du personnel et le transfert du reste du salaire.
-        </p>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[420px_1fr]">

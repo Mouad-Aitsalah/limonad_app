@@ -16,10 +16,6 @@ export default async function DailyInvoicesPage() {
         <h1 className="font-heading text-2xl font-semibold text-foreground">
           Factures journalières
         </h1>
-        <p className="text-sm text-muted-foreground">
-          Les factures vendues sur une journée commerciale (02:00 → 02:00), avec le chiffre
-          d&apos;affaires total et par mode de règlement.
-        </p>
       </div>
 
       <DailyInvoicesView initialData={initialData} />

@@ -169,9 +169,6 @@ export function PurchasesView() {
           <h1 className="font-heading text-2xl font-semibold text-foreground">
             Historique des achats
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Suivi des factures d&apos;achat fournisseurs.
-          </p>
         </div>
 
         <Link

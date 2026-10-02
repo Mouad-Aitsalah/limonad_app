@@ -86,9 +86,6 @@ export function ContactsView({ initialContacts, initialSummary, suppliers }: Con
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="font-heading text-2xl font-semibold text-foreground">Contacts</h1>
-          <p className="text-sm text-muted-foreground">
-            Contacts generaux, independants des clients et fournisseurs.
-          </p>
         </div>
 
         <ContactDialog suppliers={suppliers} onSaved={refreshContacts} />

@@ -114,7 +114,6 @@ export function StockView({
       <AppPageHeader
         eyebrow="Operations"
         title="Stock"
-        description="Suivez les quantites, la valeur, les alertes et les mouvements entre depot et camions dans un seul ecran."
         actions={
           <StockAdjustmentDialog
             products={products}

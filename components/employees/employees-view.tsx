@@ -68,9 +68,6 @@ export function EmployeesView({ initialEmployees, initialSummary }: EmployeesVie
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="font-heading text-2xl font-semibold text-foreground">Employes</h1>
-          <p className="text-sm text-muted-foreground">
-            Annuaire des employes, avec code metier, salaire mensuel et comptes comptables.
-          </p>
         </div>
 
         <EmployeeDialog onSaved={refreshEmployees} />
