@@ -1180,7 +1180,12 @@ export async function POST(request: Request) {
         }
 
         const reference = parsedArguments.data.reference;
-        const page = await getSalesOrdersPage({ search: reference, pageSize: 5 });
+        const page = await getSalesOrdersPage({
+          search: reference,
+          pageSize: 5,
+          // The assistant's invoice lookup keeps finding drafts, as before.
+          includeDrafts: true,
+        });
 
         if (page.items.length === 0) {
           return { reference, found: false };

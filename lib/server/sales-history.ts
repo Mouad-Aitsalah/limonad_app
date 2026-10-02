@@ -5,6 +5,7 @@ import { formatSaleDisplayNumber } from "@/lib/sale-display-number";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { buildOrdersWhere, type SalesOrdersPageParams } from "@/lib/sales-orders-where";
 import type {
   PosSessionDto,
   SaleHistoryListItemDto,
@@ -27,6 +28,8 @@ const monthLabels = [
   "Decembre",
 ];
 
+export type { SalesOrdersPageParams };
+
 const ORDERS_DEFAULT_PAGE_SIZE = 25;
 const ORDERS_MAX_PAGE_SIZE = 100;
 
@@ -42,12 +45,6 @@ function roundMoney(value: number) {
  * "Total remboursements", per the Total net = ventes - remboursements rule.
  */
 const postedSaleStatuses: Prisma.SaleWhereInput["status"] = { notIn: ["DRAFT", "CANCELLED"] };
-
-function endOfDay(dateOnly: string): Date {
-  const date = new Date(dateOnly);
-  date.setHours(23, 59, 59, 999);
-  return date;
-}
 
 // Exported for reuse by lib/server/daily-invoices.ts (Factures journalières),
 // which renders the same InvoicesTable and so needs the exact same row shape
@@ -72,58 +69,11 @@ export const orderListSelect = {
   lines: { select: { quantity: true } },
 } as const;
 
-export type SalesOrdersPageParams = {
-  cursor?: string | null;
-  pageSize?: number;
-  /** Matches invoiceNumber, customer name, driver name, or the creating
-   * user's name - the same fields the pre-Phase-3 client-side filter
-   * checked, except the legacy `saleNumber/saleYear` display format (e.g.
-   * "4/2026"), which isn't a real column and can't be searched server-side
-   * without reconstructing it in SQL - out of scope, see the Phase 3
-   * report; invoiceNumber itself (every live VC-/VD- sale) is unaffected. */
-  search?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  paymentMethod?: string;
-  posSessionId?: string;
-};
-
 function clampPageSize(pageSize: number | undefined): number {
   const requested = Math.trunc(pageSize ?? ORDERS_DEFAULT_PAGE_SIZE);
   return Number.isFinite(requested) && requested > 0
     ? Math.min(requested, ORDERS_MAX_PAGE_SIZE)
     : ORDERS_DEFAULT_PAGE_SIZE;
-}
-
-function buildOrdersWhere(
-  organizationId: string,
-  params: SalesOrdersPageParams,
-): Prisma.SaleWhereInput {
-  const where: Prisma.SaleWhereInput = { organizationId };
-
-  if (params.posSessionId) {
-    where.posSessionId = params.posSessionId;
-  }
-  if (params.paymentMethod && params.paymentMethod !== "all") {
-    where.paymentMethod = params.paymentMethod as Prisma.SaleWhereInput["paymentMethod"];
-  }
-  if (params.dateFrom || params.dateTo) {
-    where.createdAt = {
-      ...(params.dateFrom ? { gte: new Date(params.dateFrom) } : {}),
-      ...(params.dateTo ? { lte: endOfDay(params.dateTo) } : {}),
-    };
-  }
-  const search = params.search?.trim();
-  if (search) {
-    where.OR = [
-      { invoiceNumber: { contains: search, mode: "insensitive" } },
-      { customer: { name: { contains: search, mode: "insensitive" } } },
-      { driver: { user: { fullName: { contains: search, mode: "insensitive" } } } },
-      { createdBy: { fullName: { contains: search, mode: "insensitive" } } },
-    ];
-  }
-
-  return where;
 }
 
 export function mapOrderRowToListItemDto(
