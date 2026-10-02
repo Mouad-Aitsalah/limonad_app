@@ -1,15 +1,15 @@
 const KPIS = [
-  { x: 118, label: "Ventes", value: "128 450", color: "#00966D" },
-  { x: 214, label: "Achats", value: "74 210", color: "#2f6fd6" },
-  { x: 310, label: "Clients", value: "1 284", color: "#f2a33a" },
-  { x: 406, label: "Stock", value: "9 640", color: "#7a5cd6" },
+  { x: 118, label: "Chiffre d'affaires", value: "125 430 DH", color: "#00966D" },
+  { x: 214, label: "Nombre de ventes", value: "342", color: "#2f6fd6" },
+  { x: 310, label: "Stock produits", value: "1 245", color: "#f2a33a" },
+  { x: 406, label: "Clients", value: "1 284", color: "#7a5cd6" },
 ] as const;
 
 const PRODUCTS = [
-  { name: "Eau minérale 1.5L", qty: "420", w: 82 },
-  { name: "Jus d'orange 1L", qty: "315", w: 64 },
-  { name: "Soda cola 33cl", qty: "260", w: 52 },
-  { name: "Huile de table 5L", qty: "148", w: 34 },
+  { name: "Coca Cola 1.5L", qty: "420", w: 82 },
+  { name: "Hawai 1.5L", qty: "315", w: 64 },
+  { name: "Poms 1.5L", qty: "260", w: 52 },
+  { name: "Sprite 1.5L", qty: "148", w: 34 },
 ] as const;
 
 const FONT = "system-ui, sans-serif";
@@ -52,7 +52,7 @@ export function LoginDashboardIllustration({ className }: { className?: string }
 
       {/* sidebar */}
       <rect x="94" y="28" width="52" height="276" rx="10" fill="#102B4E" />
-      <rect x="104" y="40" width="32" height="10" rx="3" fill="#00966D" />
+      <text x="104" y="48" fontSize="8" fontWeight="700" fill="#fff" fontFamily={FONT}>COMDIS</text>
       {[66, 88, 110, 132, 154, 176].map((y, i) => (
         <g key={y}>
           <rect x="106" y={y} width="8" height="8" rx="2" fill="#fff" opacity={i === 0 ? 0.95 : 0.45} />
@@ -82,7 +82,7 @@ export function LoginDashboardIllustration({ className }: { className?: string }
       {/* sales chart */}
       <rect x="152" y="112" width="232" height="184" rx="8" fill="#fff" />
       <text x="162" y="128" fontSize="9" fontWeight="700" fill="#102B4E" fontFamily={FONT}>
-        Ventes mensuelles
+        Ventes des 7 derniers jours
       </text>
       {[150, 180, 210, 240, 270].map((y) => (
         <line key={y} x1="162" x2="374" y1={y} y2={y} stroke="#e8edf4" strokeWidth="1" />
@@ -112,7 +112,7 @@ export function LoginDashboardIllustration({ className }: { className?: string }
       {/* product list */}
       <rect x="392" y="112" width="148" height="112" rx="8" fill="#fff" />
       <text x="402" y="128" fontSize="9" fontWeight="700" fill="#102B4E" fontFamily={FONT}>
-        Produits les plus vendus
+        Top produits
       </text>
       {PRODUCTS.map((product, i) => (
         <g key={product.name}>

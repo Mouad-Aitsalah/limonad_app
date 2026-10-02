@@ -11,9 +11,9 @@ export const metadata: Metadata = {
 
 export default function LoginPage() {
   return (
-    <main className="grid min-h-screen bg-[#eef4fb] lg:grid-cols-[56fr_44fr]">
+    <main className="grid min-h-screen bg-[linear-gradient(180deg,#f1f5fb_0%,#e8eff9_100%)] lg:grid-cols-[58fr_42fr]">
       <LoginInfo />
-      <div className="flex items-center justify-center px-4 py-8 sm:px-8 lg:px-10 xl:px-14">
+      <div className="flex items-center justify-center px-4 py-8 sm:px-8 lg:px-8 xl:px-10">
         <Suspense fallback={null}>
           <LoginForm />
         </Suspense>
