@@ -44,7 +44,12 @@ export function LoginForm() {
     setIsSubmitting(true);
 
     try {
-      const result = await login(email.trim(), password);
+      // Read the fields themselves: a browser autofill can fill them without
+      // React having seen a change event yet.
+      const form = new FormData(event.currentTarget);
+      const emailValue = String(form.get("email") ?? email);
+      const passwordValue = String(form.get("password") ?? password);
+      const result = await login(emailValue.trim(), passwordValue);
       if (!result.success) {
         setError(result.error);
         setIsSubmitting(false);
@@ -58,7 +63,6 @@ export function LoginForm() {
     }
   }
 
-  const isFormValid = email.trim().length > 0 && password.length > 0;
   const fieldClass =
     "h-[52px] [@media(max-height:850px)]:h-12 rounded-xl border-slate-200 bg-white px-4 pl-12 text-base shadow-none transition placeholder:text-slate-400 focus-visible:border-[#08875e] focus-visible:ring-[#08875e]/20";
   const iconClass = "pointer-events-none absolute top-1/2 left-4 h-5 w-5 -translate-y-1/2 text-slate-500";
@@ -134,7 +138,7 @@ export function LoginForm() {
 
         <Button
           type="submit"
-          disabled={isSubmitting || !isFormValid}
+          disabled={isSubmitting}
           aria-label="Se connecter à COMDIS"
           className="h-[54px] [@media(max-height:850px)]:h-12 w-full rounded-xl bg-none bg-[#08875e] text-lg font-semibold text-white shadow-[0_12px_28px_rgba(8,135,94,0.25)] transition duration-200 hover:bg-[#077650] hover:shadow-[0_14px_30px_rgba(8,135,94,0.32)] disabled:opacity-75 disabled:shadow-none"
         >
