@@ -37,11 +37,13 @@ const highlights = [
 
 // Local images (never a remote URL). Replace the files, keeping the names, or
 // point these constants at other files in /public/login:
-//  - BACKGROUND_URL: blurred shelves behind the whole panel;
+//  - BACKGROUND_URL: photo of a bright, well-stocked grocery aisle (Jack Lee,
+//    Unsplash License - free for commercial use, no attribution required;
+//    https://unsplash.com/photos/IH65r4HEQWQ), lightly blurred and tinted navy;
 //  - COUNTER_PHOTO: photo of the counter, scanner and laptop showing the
 //    dashboard, anchored to the bottom of the panel (cropped from the design
 //    reference - swap it for the final photograph when available).
-const BACKGROUND_URL = "/login/store-bg.svg";
+const BACKGROUND_URL = "/login/store-bg.webp";
 const COUNTER_PHOTO = "/login/store-counter.webp";
 
 /**
@@ -61,7 +63,7 @@ export function LoginInfo() {
       />
       <div
         aria-hidden="true"
-        className="absolute inset-0 -z-10 bg-[linear-gradient(100deg,rgba(16,43,76,0.93)_0%,rgba(16,43,76,0.72)_55%,rgba(16,43,76,0.55)_100%)]"
+        className="absolute inset-0 -z-10 bg-[linear-gradient(100deg,rgba(16,43,76,0.84)_0%,rgba(16,43,76,0.66)_50%,rgba(16,43,76,0.42)_100%)]"
       />
 
       <div className="flex flex-1 flex-col px-8 pt-7 xl:px-16 xl:pt-9 2xl:px-24 2xl:pt-12">
@@ -73,8 +75,8 @@ export function LoginInfo() {
           </span>
         </header>
 
-        <div className="mt-6 max-w-[34rem] xl:mt-12">
-          <h1 className="font-serif text-[34px] leading-[1.08] font-bold tracking-tight text-white xl:text-[44px] 2xl:text-[56px]">
+        <div className="mt-6 max-w-[34rem] xl:mt-10">
+          <h1 className="font-serif text-[34px] leading-[1.08] font-bold tracking-tight text-white xl:text-[44px] 2xl:text-[50px]">
             Gérez toute votre entreprise{" "}
             <span className="text-[#10C99A]">au même endroit.</span>
           </h1>
@@ -115,7 +117,7 @@ export function LoginInfo() {
         <div className="relative -z-10 mt-auto min-h-[8rem] flex-1 [@media(max-height:849px)]:hidden">
           <div
             aria-hidden="true"
-            className="absolute inset-x-[-2rem] top-0 -bottom-20 bg-cover bg-top xl:inset-x-[-4rem] 2xl:inset-x-[-6rem] [mask-image:linear-gradient(to_bottom,transparent_0%,black_30%)]"
+            className="absolute inset-x-[-2rem] top-0 -bottom-3 bg-cover bg-bottom xl:inset-x-[-4rem] 2xl:inset-x-[-6rem] [mask-image:linear-gradient(to_bottom,transparent_0%,black_30%)]"
             style={{ backgroundImage: `url(${COUNTER_PHOTO})` }}
           />
         </div>
