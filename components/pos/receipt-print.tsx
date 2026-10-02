@@ -33,7 +33,7 @@ type ReceiptPrintProps = {
   identity?: CompanyIdentity | null;
   /**
    * Counter POS (PC, admin + cashier) layout: vertical rules between the four
-   * product columns and the total printed "PRIX TTC" (left) / amount (right).
+   * product columns and the total printed "Montant TTC" (left) / amount (right).
    * Off by default, so the driver POS ticket and every other caller print
    * exactly as before.
    */
@@ -204,8 +204,7 @@ export function ReceiptPrint({
         <div className="receipt-print-grid receipt-print-head">
           <span className="receipt-print-qty">QTE</span>
           <span>DESIGNATION</span>
-          {/* Counter POS (PC) ticket only: the unit-price column is titled "Montant TTC". */}
-          <span className="receipt-print-number">{ruled ? "Montant TTC" : "Prix TTC"}</span>
+          <span className="receipt-print-number">Prix TTC</span>
           <span className="receipt-print-number">Montant</span>
         </div>
 
@@ -239,7 +238,7 @@ export function ReceiptPrint({
 
         {ruled ? (
           <div className="receipt-print-total receipt-print-total-ruled">
-            <span>PRIX TTC</span>
+            <span>Montant TTC</span>
             <strong>{formatCurrency(sale.totalTTC)}</strong>
           </div>
         ) : (

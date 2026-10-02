@@ -227,13 +227,13 @@ test("nothing is recomputed or stored: the helper is pure, a line without discou
 });
 
 // ---------------------------------------------------------------------------
-// Counter POS (PC) layout: `ruled` = dashed column separators, centred info block, centred PRIX TTC total
+// Counter POS (PC) layout: `ruled` = dashed column separators, centred info block, centred "Montant TTC" total
 // ---------------------------------------------------------------------------
 
-test("ruled: the total is PRIX TTC first, the real amount second, in one centred group", () => {
+test("ruled: the total is labelled Montant TTC first, the real amount second, in one centred group", () => {
   const sale = saleOf([{ name: "A", unitTTC: 928, quantity: 1 }]);
   const markup = html(sale, { ruled: true });
-  const match = markup.match(/<div class="receipt-print-total receipt-print-total-ruled"><span>PRIX TTC<\/span><strong>([^<]*)<\/strong><\/div>/);
+  const match = markup.match(/<div class="receipt-print-total receipt-print-total-ruled"><span>Montant TTC<\/span><strong>([^<]*)<\/strong><\/div>/);
   assert.ok(match, "label then amount");
   assert.equal(normalize(match[1]), normalize(html(sale).match(/<strong>(928[^<]*)<\/strong><span>TOTAL TTC/)![1]));
   assert.equal(markup.includes("TOTAL TTC"), false);
@@ -246,18 +246,23 @@ test("ruled: same rows, same data; only the table classes differ", () => {
   assert.match(html(sale, { ruled: true }), /receipt-print-separator receipt-print-separator-flush/);
 });
 
-test("ruled (counter POS on PC): the unit-price column is titled Montant TTC, values and columns unchanged", () => {
+test("ruled (counter POS on PC): column title is Prix TTC (unit price), total label is Montant TTC, values unchanged", () => {
   const sale = saleOf([{ name: "A", unitTTC: 40, quantity: 2 }]);
   const markup = html(sale, { ruled: true });
-  assert.match(markup, /<span class="receipt-print-number">Montant TTC<\/span><span class="receipt-print-number">Montant<\/span>/);
-  assert.equal(markup.includes("Prix TTC"), false);
+  // table header: unit-price column = "Prix TTC", next to the "Montant" column
+  assert.match(markup, /<span class="receipt-print-number">Prix TTC<\/span><span class="receipt-print-number">Montant<\/span>/);
+  // footer: label next to the total = "Montant TTC" (and no old "PRIX TTC" left)
+  assert.match(markup, /<span>Montant TTC<\/span><strong>/);
+  assert.equal(markup.includes("PRIX TTC"), false);
+  assert.equal(markup.includes('>Montant TTC</span><span class="receipt-print-number">'), false);
   assert.deepEqual(rows(markup), rows(html(sale)));
 });
 
-test("non-ruled tickets (driver POS, other formats) keep the Prix TTC title", () => {
+test("non-ruled tickets (driver POS, other formats) keep Prix TTC in the header and TOTAL TTC in the footer", () => {
   const markup = html(saleOf([{ name: "A", unitTTC: 40, quantity: 2 }]));
   assert.match(markup, /<span class="receipt-print-number">Prix TTC<\/span>/);
   assert.equal(markup.includes("Montant TTC"), false);
+  assert.match(markup, /<span>TOTAL TTC<\/span>/);
 });
 
 test("default (driver POS and everything else) is untouched: no ruled class, TOTAL TTC as before", () => {
@@ -313,12 +318,12 @@ test("ruled: the five info values are the SAME as the plain ticket, grouped in o
   assert.match(ruleBody(".receipt-print-meta-centered > div"), /overflow-wrap: anywhere/);
 });
 
-test("ruled CSS: PRIX TTC and the amount are centred together, amount larger; the amount value is untouched", () => {
+test("ruled CSS: Montant TTC and the amount are centred together, amount larger; the amount value is untouched", () => {
   assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled"), /justify-content: center/);
   assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled > strong"), /font-size: 15px/);
   assert.equal(/margin: 0 0 0 auto/.test(css), false, "no far-right pushing left");
   const sale = saleOf([{ name: "A", unitTTC: 128, quantity: 1 }]);
-  const amount = html(sale, { ruled: true }).match(/<span>PRIX TTC<\/span><strong>([^<]*)<\/strong>/)![1];
+  const amount = html(sale, { ruled: true }).match(/<span>Montant TTC<\/span><strong>([^<]*)<\/strong>/)![1];
   assert.equal(normalize(amount), "128,00 DH");
 });
 
