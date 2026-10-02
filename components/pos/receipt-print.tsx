@@ -204,7 +204,8 @@ export function ReceiptPrint({
         <div className="receipt-print-grid receipt-print-head">
           <span className="receipt-print-qty">QTE</span>
           <span>DESIGNATION</span>
-          <span className="receipt-print-number">Prix TTC</span>
+          {/* Counter POS (PC) ticket only: the unit-price column is titled "Montant TTC". */}
+          <span className="receipt-print-number">{ruled ? "Montant TTC" : "Prix TTC"}</span>
           <span className="receipt-print-number">Montant</span>
         </div>
 

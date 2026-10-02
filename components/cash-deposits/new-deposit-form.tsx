@@ -131,6 +131,10 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
   // 16.8px, 16px -> 22.4px): the values below are the explicit pixel sizes.
   const inputClassName = "h-14 rounded-2xl px-4 text-right text-[19.6px] max-lg:text-[19.6px]! tabular-nums";
   const fieldRowClassName = "flex items-center justify-between gap-3 px-4 py-3";
+  // Banknote / coin rows only: x0.8 of the former 80px row (py-3 + h-14 input
+  // -> py-2 + h-12 input = 64px). The other rows keep fieldRowClassName.
+  const denominationRowClassName = "flex items-center justify-between gap-3 px-4 py-2";
+  const denominationInputClassName = inputClassName.replace("h-14", "h-12");
 
   return (
     <div className="space-y-5 text-[19.6px]">
@@ -176,12 +180,12 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
                 const lineAmount = Number.isFinite(quantity) ? value * quantity : 0;
 
                 return (
-                  <div key={value} className={fieldRowClassName}>
+                  <div key={value} className={denominationRowClassName}>
                     <div className="min-w-0">
-                      <Label htmlFor={`deposit-qty-${value}`} className="text-[19.6px] font-semibold tabular-nums">
+                      <Label htmlFor={`deposit-qty-${value}`} className="text-[19.6px] leading-tight font-semibold tabular-nums">
                         {formatCurrency(value)}
                       </Label>
-                      <p className="mt-1 text-[16.8px] text-muted-foreground tabular-nums">
+                      <p className="mt-0.5 text-[16.8px] leading-tight text-muted-foreground tabular-nums">
                         {formatCurrency(lineAmount)}
                       </p>
                     </div>
@@ -197,7 +201,7 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
                         setQuantities((current) => ({ ...current, [value]: event.target.value }))
                       }
                       aria-label={`Quantite de ${formatCurrency(value)}`}
-                      className={`${inputClassName} w-36 shrink-0 sm:w-52`}
+                      className={`${denominationInputClassName} w-36 shrink-0 sm:w-52`}
                     />
                   </div>
                 );

@@ -246,6 +246,20 @@ test("ruled: same rows, same data; only the table classes differ", () => {
   assert.match(html(sale, { ruled: true }), /receipt-print-separator receipt-print-separator-flush/);
 });
 
+test("ruled (counter POS on PC): the unit-price column is titled Montant TTC, values and columns unchanged", () => {
+  const sale = saleOf([{ name: "A", unitTTC: 40, quantity: 2 }]);
+  const markup = html(sale, { ruled: true });
+  assert.match(markup, /<span class="receipt-print-number">Montant TTC<\/span><span class="receipt-print-number">Montant<\/span>/);
+  assert.equal(markup.includes("Prix TTC"), false);
+  assert.deepEqual(rows(markup), rows(html(sale)));
+});
+
+test("non-ruled tickets (driver POS, other formats) keep the Prix TTC title", () => {
+  const markup = html(saleOf([{ name: "A", unitTTC: 40, quantity: 2 }]));
+  assert.match(markup, /<span class="receipt-print-number">Prix TTC<\/span>/);
+  assert.equal(markup.includes("Montant TTC"), false);
+});
+
 test("default (driver POS and everything else) is untouched: no ruled class, TOTAL TTC as before", () => {
   const markup = html(saleOf([{ name: "A", unitTTC: 40, quantity: 1 }]));
   assert.equal(markup.includes("receipt-print-ruled"), false);
