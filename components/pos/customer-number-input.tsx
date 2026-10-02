@@ -110,6 +110,9 @@ type CustomerNumberInputProps = {
    * shell will opt in explicitly once it switches to this component.
    */
   showResolvedConfirmation?: boolean;
+  /** Optional extra classes (POS desktop sizing); omitted = unchanged look. */
+  labelClassName?: string;
+  inputClassName?: string;
 };
 
 /**
@@ -136,6 +139,8 @@ export function CustomerNumberInput({
   hideLabelOnMobile,
   resolveCustomer = defaultResolveCustomer,
   showResolvedConfirmation = false,
+  labelClassName: labelExtraClassName,
+  inputClassName,
 }: CustomerNumberInputProps) {
   // Below the POS mobile breakpoint the label is present for assistive tech
   // (sr-only) but visually gone, and the label gap is removed so the input
@@ -222,6 +227,7 @@ export function CustomerNumberInput({
         className={cn(
           "flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
           labelClassName,
+          labelExtraClassName,
         )}
       >
         <Hash aria-hidden="true" className="h-3.5 w-3.5" />
@@ -234,6 +240,7 @@ export function CustomerNumberInput({
         placeholder={placeholder}
         disabled={disabled || loading}
         aria-invalid={Boolean(error)}
+        className={inputClassName}
         onChange={(event) => {
           setValue(event.target.value);
           if (error) setError(null);

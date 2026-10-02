@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import type { PosBankAccountOptionDto } from "@/types/operations-dto";
 import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
 
@@ -52,6 +52,9 @@ type PaymentSelectorProps = {
   mixedTotal: number;
   /** Methods shown but not selectable (offline: CREDIT). Omitted = all enabled. */
   disabledMethods?: readonly PosPaymentMethodValue[];
+  /** Optional extra classes for the method field (POS desktop sizing); omitted = unchanged look. */
+  labelClassName?: string;
+  triggerClassName?: string;
 };
 
 export function PaymentSelector({
@@ -70,6 +73,8 @@ export function PaymentSelector({
   onMixedAmountsChange,
   mixedTotal,
   disabledMethods,
+  labelClassName,
+  triggerClassName,
 }: PaymentSelectorProps) {
   const selected = posPaymentMethods.find((method) => method.value === paymentMethod);
   // "Virement" is no longer offered for a NEW counter-POS sale. It stays in
@@ -86,7 +91,7 @@ export function PaymentSelector({
   return (
     <div className="space-y-3">
       <div className="space-y-2">
-        <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Label className={cn("flex items-center gap-1.5 text-xs font-medium text-muted-foreground", labelClassName)}>
           <CreditCard aria-hidden="true" className="h-3.5 w-3.5" />
           Mode de règlement
         </Label>
@@ -94,7 +99,7 @@ export function PaymentSelector({
           value={paymentMethod}
           onValueChange={(value) => value && onPaymentMethodChange(value as PosPaymentMethodValue)}
         >
-          <SelectTrigger className="w-full">
+          <SelectTrigger className={cn("w-full", triggerClassName)}>
             <SelectValue placeholder="Sélectionner">
               {() => selected?.label ?? "Sélectionner"}
             </SelectValue>

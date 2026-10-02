@@ -1637,11 +1637,11 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         className={`${mobileView === "cart" ? "flex" : "hidden"} order-1 min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:flex lg:h-full lg:min-h-0 lg:gap-4 lg:overflow-y-auto lg:p-4`}
       >
         <div className="contents lg:flex lg:shrink-0 lg:flex-col lg:gap-4">
-        <div className="grid gap-3 max-lg:grid-cols-[7fr_3fr] max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr]">
+        <div className="grid gap-3 max-lg:grid-cols-[7fr_3fr] max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr] lg:grid-cols-3">
           <div className="min-w-0">
             <div className="hidden lg:block">
               <CustomerCombobox
-                labelClassName="lg:text-[16.8px] lg:font-bold"
+                labelClassName="lg:text-[16.8px] lg:font-bold lg:whitespace-nowrap"
                 inputClassName="lg:h-11 lg:text-[19.6px] lg:font-bold"
                 value={selectedCustomer}
                 onChange={setSelectedCustomer}
@@ -1663,6 +1663,8 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
             resolveCustomer={resolveCustomerOffline}
             placeholder="N° Client"
             hideLabelOnMobile="lg"
+            labelClassName="lg:text-[16.8px] lg:font-bold lg:whitespace-nowrap lg:mb-2!"
+            inputClassName="lg:h-11 lg:rounded-lg lg:text-[19.6px] lg:font-bold"
           />
           <PaymentSelector
             paymentMethod={paymentMethod}
@@ -1680,6 +1682,8 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
             onMixedAmountsChange={setMixedAmounts}
             mixedTotal={totals.netAPayer}
             disabledMethods={offline.isOffline ? OFFLINE_DISABLED_PAYMENT_METHODS : undefined}
+            labelClassName="lg:text-[16.8px] lg:font-bold lg:whitespace-nowrap"
+            triggerClassName="lg:data-[size=default]:h-11 lg:text-[19.6px] lg:font-bold"
           />
         </div>
 
