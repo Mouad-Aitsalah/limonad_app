@@ -47,8 +47,9 @@ type CartTableProps = {
   /**
    * Counter-POS PC layout (>= lg only; < lg is identical either way): the
    * delete icon sits to the right of the product name instead of in its own
-   * last column, and the Qte / Prix TTC / Rem. DH controls and the Prix TTC /
-   * Total texts share one height and size. Opt-in so the driver POS, which
+   * last column, the Qte / Prix TTC / Rem. DH controls and the Prix TTC /
+   * Total texts share one height and size, product names are x0.9 and rows
+   * are shorter (cell padding py-4 -> py-2 = x0.8 of a one-line row). Opt-in so the driver POS, which
    * reuses this table, keeps its current look.
    */
   pcLayout?: boolean;
@@ -120,7 +121,7 @@ export function CartTable({
     // Mobile: w-full + min-w-0 -> the table is exactly the panel width and
     // the % columns fill it (no internal scroll). Desktop keeps its floor so
     // `table-fixed` never collapses the flexible Produit column.
-    <Table className={cn("table-fixed min-w-0", pcLayout ? "lg:min-w-[45.5rem]" : "lg:min-w-[48rem]")}>
+    <Table className="table-fixed min-w-0 lg:min-w-[48rem]">
       <TableHeader>
         <TableRow>
           <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP)}>Produit</TableHead>
@@ -150,7 +151,7 @@ export function CartTable({
           // Mobile: cells align to the top so QTE / PRIX / REM. / TOTAL stay
           // readable when the product name wraps to 2-3 lines. Desktop keeps
           // its previously-validated vertical-align (middle).
-          <TableRow key={line.productId} data-product-id={line.productId} className="max-lg:[&>td]:align-top">
+          <TableRow key={line.productId} data-product-id={line.productId} className={cn("max-lg:[&>td]:align-top", pcLayout && "lg:[&>td]:py-2")}>
             <TableCell className={cn(COL.produit, "relative pr-1")}>
               {/* Mobile-only compact delete - pulled out of the text flow
                   (absolute, top-right) so the name can use the full column
@@ -172,7 +173,13 @@ export function CartTable({
                     TableCell sets by default; wrapping happens on spaces and
                     `break-words` only splits a single word when it is itself
                     too wide for the column, so it can never overflow. */}
-                <p className="pr-5 font-medium whitespace-normal break-words text-foreground lg:pr-0 lg:text-[22.56px] lg:font-bold">
+                <p
+                  className={cn(
+                    "pr-5 font-medium whitespace-normal break-words text-foreground lg:pr-0 lg:text-[22.56px] lg:font-bold",
+                    // PC counter POS: name type x0.9 (22.56px -> 20.304px).
+                    pcLayout && "lg:text-[20.304px]",
+                  )}
+                >
                   {line.designation}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
