@@ -60,6 +60,8 @@ function productPurchasePriceTTC(product: ProductDto | null): number {
   return computePriceTTC(product.purchasePrice, product.taxRate);
 }
 
+type LineField = "product" | "qty" | "price" | "remise" | "brut" | "remise1" | "remise2";
+
 type LineDraft = {
   key: string;
   productId: string;
@@ -384,16 +386,15 @@ export function PurchaseForm({
     }));
   }
 
-  function addLine() {
+  function addLine(): string {
     linesDirtyRef.current = true;
     lineKeyCounter.current += 1;
+    const key = `line-${lineKeyCounter.current}`;
     setValues((prev) => ({
       ...prev,
-      lignes: [
-        ...prev.lignes,
-        createLine(`line-${lineKeyCounter.current}`, productOptions),
-      ],
+      lignes: [...prev.lignes, createLine(key, productOptions)],
     }));
+    return key;
   }
 
   function removeLine(key: string) {
@@ -425,6 +426,108 @@ export function PurchaseForm({
   }
 
   const isDouble = pricingMode === "DOUBLE_DISCOUNT_HT";
+
+  // ---- Keyboard entry (Enter) in the products table -----------------------
+  // Product -> Quantite -> Prix -> Remise -> Produit of the next line (a new
+  // line is appended after the last field of the last line). Enter only moves
+  // the focus: it never submits the form. See handleTableKeyDown*.
+  const formRef = React.useRef<HTMLFormElement>(null);
+  const pendingFocusRef = React.useRef<{ key: string; field: LineField } | null>(null);
+  // Line whose product input just received an Enter keydown (set in the
+  // capture phase, before the combobox handles it).
+  const enterOnProductRef = React.useRef<string | null>(null);
+  const fieldOrder: LineField[] = isDouble
+    ? ["qty", "brut", "remise1", "remise2"]
+    : ["qty", "price", "remise"];
+
+  function focusLineField(key: string, field: LineField) {
+    const holder = formRef.current?.querySelector<HTMLElement>(
+      `[data-line-key="${key}"][data-field="${field}"]`,
+    );
+    const target =
+      holder instanceof HTMLInputElement ? holder : holder?.querySelector("input");
+    if (!target) return false;
+    target.focus();
+    if (field !== "product") target.select();
+    return true;
+  }
+
+  // A line that does not exist yet is focused right after the render that
+  // creates it.
+  React.useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    if (focusLineField(pending.key, pending.field)) pendingFocusRef.current = null;
+  });
+
+  function goToNextLineProduct(key: string) {
+    const index = values.lignes.findIndex((line) => line.key === key);
+    const next = values.lignes[index + 1];
+    if (next) {
+      focusLineField(next.key, "product");
+      return;
+    }
+    const newKey = addLine();
+    pendingFocusRef.current = { key: newKey, field: "product" };
+  }
+
+  function advanceFrom(key: string, field: LineField) {
+    if (field === "product") {
+      focusLineField(key, "qty");
+      return;
+    }
+    const position = fieldOrder.indexOf(field);
+    if (position >= 0 && position < fieldOrder.length - 1) {
+      focusLineField(key, fieldOrder[position + 1]);
+      return;
+    }
+    goToNextLineProduct(key);
+  }
+
+  function lineFieldHolder(event: React.KeyboardEvent): HTMLElement | null {
+    return (event.target as HTMLElement).closest<HTMLElement>("[data-line-key][data-field]");
+  }
+
+  // Capture phase: numeric fields are fully handled here (Enter never reaches
+  // the form's implicit submission); for the product combobox we only note
+  // that Enter was pressed and let it select the highlighted suggestion.
+  function handleTableKeyDownCapture(event: React.KeyboardEvent) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    const holder = lineFieldHolder(event);
+    if (!holder) return;
+    const key = holder.dataset.lineKey!;
+    const field = holder.dataset.field as LineField;
+    if (field === "product") {
+      enterOnProductRef.current = key;
+      return;
+    }
+    event.preventDefault();
+    advanceFrom(key, field);
+  }
+
+  // Bubble phase: only reached for the product input when the combobox did NOT
+  // consume Enter (no highlighted suggestion). Never submit; if a product is
+  // already chosen, move on to the quantity.
+  function handleTableKeyDown(event: React.KeyboardEvent) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    const holder = lineFieldHolder(event);
+    if (!holder || holder.dataset.field !== "product") return;
+    const key = holder.dataset.lineKey!;
+    enterOnProductRef.current = null;
+    event.preventDefault();
+    const line = values.lignes.find((item) => item.key === key);
+    if (line?.product) focusLineField(key, "qty");
+  }
+
+  // Product picked: when it was picked with Enter, continue in Quantite once
+  // the combobox has closed and released the focus.
+  function afterProductPicked(key: string) {
+    if (enterOnProductRef.current !== key) return;
+    enterOnProductRef.current = null;
+    window.setTimeout(() => {
+      focusLineField(key, "qty");
+    }, 60);
+  }
 
   const totals = isDouble
     ? computeDraftPurchaseTotalsDoubleDiscountHT(
@@ -497,10 +600,314 @@ export function PurchaseForm({
 
   return (
     <form
+      ref={formRef}
       onSubmit={handleSubmit}
       className="flex flex-1 flex-col overflow-hidden"
     >
       <div className="flex-1 space-y-6 overflow-y-auto px-1 py-1">
+        <div>
+          <Label className="text-sm font-semibold text-foreground">
+            Type d&apos;achat
+          </Label>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={pricingMode === "CLASSIC_TTC" ? "default" : "outline"}
+              size="sm"
+              aria-pressed={pricingMode === "CLASSIC_TTC"}
+              onClick={() => switchMode("CLASSIC_TTC")}
+            >
+              Classique TTC
+            </Button>
+            <Button
+              type="button"
+              variant={
+                pricingMode === "DOUBLE_DISCOUNT_HT" ? "default" : "outline"
+              }
+              size="sm"
+              aria-pressed={pricingMode === "DOUBLE_DISCOUNT_HT"}
+              onClick={() => switchMode("DOUBLE_DISCOUNT_HT")}
+            >
+              Double remise HT
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {isDouble
+              ? "Prix brut HT (repris de la fiche produit, modifiable) puis remise 1 puis remise 2 successives."
+              : "Prix d'achat TTC et une remise, comme aujourd'hui."}
+          </p>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">Produits</h3>
+            <Button type="button" variant="outline" size="sm" onClick={addLine}>
+              <Plus aria-hidden="true" className="h-4 w-4" />
+              Ajouter ligne
+            </Button>
+          </div>
+
+          {errors.lignesMessage && (
+            <p className="mt-2 text-xs text-destructive">
+              {errors.lignesMessage}
+            </p>
+          )}
+
+          <div
+            className="mt-3 rounded-2xl border border-border"
+            onKeyDownCapture={handleTableKeyDownCapture}
+            onKeyDown={handleTableKeyDown}
+          >
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Produit</TableHead>
+                  <TableHead className="w-24 text-right">Quantité</TableHead>
+                  {isDouble ? (
+                    <>
+                      <TableHead className="w-28 text-right">
+                        Prix brut HT
+                      </TableHead>
+                      <TableHead className="w-24 text-right">Remise 1 %</TableHead>
+                      <TableHead className="w-24 text-right">Remise 2 %</TableHead>
+                      <TableHead className="text-right">Prix net HT</TableHead>
+                    </>
+                  ) : (
+                    <>
+                      <TableHead className="w-28 text-right">
+                        Prix Achat TTC
+                      </TableHead>
+                      <TableHead className="w-24 text-right">Remise %</TableHead>
+                      <TableHead className="text-right">Sous-total TTC</TableHead>
+                    </>
+                  )}
+                  <TableHead className="w-8" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {values.lignes.map((line) => {
+                  const invalid = !!errors.invalidLineKeys[line.key];
+                  const taxRate =
+                    line.product?.taxRate ?? DEFAULT_PURCHASE_TVA_RATE;
+                  const netUnitHT = computeDoubleDiscountLine({
+                    quantite: line.quantite,
+                    grossHT: line.prixBrutHT,
+                    discount1: line.remise1Percent,
+                    discount2: line.remise2Percent,
+                    taxRate,
+                  }).netUnitHTDisplay;
+
+                  return (
+                    <TableRow key={line.key}>
+                      <TableCell>
+                        <div data-line-key={line.key} data-field="product">
+                          <ProductCombobox
+                            value={line.product}
+                            onChange={(product) => {
+                              if (!product) return;
+                              updateLine(line.key, {
+                                productId: product.id,
+                                product,
+                                prixAchatTTC: productPurchasePriceTTC(product),
+                                prixBrutHT: product.purchasePrice,
+                              });
+                              afterProductPicked(line.key);
+                            }}
+                            preload={productOptions}
+                            placeholder="Sélectionner"
+                            label={null}
+                            autoHighlight
+                          />
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <input
+                          type="number"
+                          min={0}
+                          value={line.quantite}
+                          data-line-key={line.key}
+                          data-field="qty"
+                          onChange={(event) =>
+                            updateLine(line.key, {
+                              quantite: Number(event.target.value),
+                            })
+                          }
+                          aria-invalid={invalid}
+                          className={cn(
+                            "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
+                            invalid && "border-destructive",
+                          )}
+                        />
+                      </TableCell>
+
+                      {isDouble ? (
+                        <>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={line.prixBrutHT}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  prixBrutHT: Number(event.target.value),
+                                })
+                              }
+                              data-line-key={line.key}
+                              data-field="brut"
+                              aria-label="Prix brut HT"
+                              aria-invalid={invalid}
+                              className={cn(
+                                "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
+                                invalid && "border-destructive",
+                              )}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={line.remise1Percent}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  remise1Percent: clampPercent(
+                                    Number(event.target.value),
+                                  ),
+                                })
+                              }
+                              data-line-key={line.key}
+                              data-field="remise1"
+                              aria-label="Remise 1 en pourcentage"
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={line.remise2Percent}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  remise2Percent: clampPercent(
+                                    Number(event.target.value),
+                                  ),
+                                })
+                              }
+                              data-line-key={line.key}
+                              data-field="remise2"
+                              aria-label="Remise 2 en pourcentage"
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            {formatCurrency(netUnitHT)}
+                          </TableCell>
+                        </>
+                      ) : (
+                        <>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={line.prixAchatTTC}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  prixAchatTTC: Number(event.target.value),
+                                })
+                              }
+                              data-line-key={line.key}
+                              data-field="price"
+                              aria-label="Prix d'achat TTC"
+                              aria-invalid={invalid}
+                              className={cn(
+                                "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
+                                invalid && "border-destructive",
+                              )}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={line.remisePercent}
+                              onChange={(event) =>
+                                updateLine(line.key, {
+                                  remisePercent: clampPercent(
+                                    Number(event.target.value),
+                                  ),
+                                })
+                              }
+                              data-line-key={line.key}
+                              data-field="remise"
+                              aria-label="Remise en pourcentage"
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            {formatCurrency(
+                              computeDraftLineTotalTTC({
+                                quantite: line.quantite,
+                                prixAchatTTC: line.prixAchatTTC,
+                                remisePercent: line.remisePercent,
+                              }),
+                            )}
+                          </TableCell>
+                        </>
+                      )}
+
+                      <TableCell>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Supprimer la ligne"
+                          disabled={values.lignes.length === 1}
+                          onClick={() => removeLine(line.key)}
+                          className="text-muted-foreground hover:text-red-600"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+
+        <Separator />
+
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Résumé</h3>
+          <div className="mt-3 ml-auto max-w-xs space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Total HT</span>
+              <span className="tabular-nums text-foreground">
+                {formatCurrency(totals.totalHT)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">TVA</span>
+              <span className="tabular-nums text-foreground">
+                {formatCurrency(totals.totalTVA)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-base font-semibold">
+              <span className="text-foreground">Total TTC</span>
+              <span className="tabular-nums text-emerald-700">
+                {formatCurrency(totals.totalTTC)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <Separator />
+
         <div>
           <h3 className="text-sm font-semibold text-foreground">
             Informations générales
@@ -666,288 +1073,6 @@ export function PurchaseForm({
           </div>
         </div>
 
-        <Separator />
-
-        <div>
-          <Label className="text-sm font-semibold text-foreground">
-            Type d&apos;achat
-          </Label>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant={pricingMode === "CLASSIC_TTC" ? "default" : "outline"}
-              size="sm"
-              aria-pressed={pricingMode === "CLASSIC_TTC"}
-              onClick={() => switchMode("CLASSIC_TTC")}
-            >
-              Classique TTC
-            </Button>
-            <Button
-              type="button"
-              variant={
-                pricingMode === "DOUBLE_DISCOUNT_HT" ? "default" : "outline"
-              }
-              size="sm"
-              aria-pressed={pricingMode === "DOUBLE_DISCOUNT_HT"}
-              onClick={() => switchMode("DOUBLE_DISCOUNT_HT")}
-            >
-              Double remise HT
-            </Button>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            {isDouble
-              ? "Prix brut HT (repris de la fiche produit, modifiable) puis remise 1 puis remise 2 successives."
-              : "Prix d'achat TTC et une remise, comme aujourd'hui."}
-          </p>
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-foreground">Produits</h3>
-            <Button type="button" variant="outline" size="sm" onClick={addLine}>
-              <Plus aria-hidden="true" className="h-4 w-4" />
-              Ajouter ligne
-            </Button>
-          </div>
-
-          {errors.lignesMessage && (
-            <p className="mt-2 text-xs text-destructive">
-              {errors.lignesMessage}
-            </p>
-          )}
-
-          <div className="mt-3 rounded-2xl border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Produit</TableHead>
-                  <TableHead className="w-24 text-right">Quantité</TableHead>
-                  {isDouble ? (
-                    <>
-                      <TableHead className="w-28 text-right">
-                        Prix brut HT
-                      </TableHead>
-                      <TableHead className="w-24 text-right">Remise 1 %</TableHead>
-                      <TableHead className="w-24 text-right">Remise 2 %</TableHead>
-                      <TableHead className="text-right">Prix net HT</TableHead>
-                    </>
-                  ) : (
-                    <>
-                      <TableHead className="w-28 text-right">
-                        Prix Achat TTC
-                      </TableHead>
-                      <TableHead className="w-24 text-right">Remise %</TableHead>
-                      <TableHead className="text-right">Sous-total TTC</TableHead>
-                    </>
-                  )}
-                  <TableHead className="w-8" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {values.lignes.map((line) => {
-                  const invalid = !!errors.invalidLineKeys[line.key];
-                  const taxRate =
-                    line.product?.taxRate ?? DEFAULT_PURCHASE_TVA_RATE;
-                  const netUnitHT = computeDoubleDiscountLine({
-                    quantite: line.quantite,
-                    grossHT: line.prixBrutHT,
-                    discount1: line.remise1Percent,
-                    discount2: line.remise2Percent,
-                    taxRate,
-                  }).netUnitHTDisplay;
-
-                  return (
-                    <TableRow key={line.key}>
-                      <TableCell>
-                        <ProductCombobox
-                          value={line.product}
-                          onChange={(product) => {
-                            if (!product) return;
-                            updateLine(line.key, {
-                              productId: product.id,
-                              product,
-                              prixAchatTTC: productPurchasePriceTTC(product),
-                              prixBrutHT: product.purchasePrice,
-                            });
-                          }}
-                          preload={productOptions}
-                          placeholder="Sélectionner"
-                          label={null}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <input
-                          type="number"
-                          min={0}
-                          value={line.quantite}
-                          onChange={(event) =>
-                            updateLine(line.key, {
-                              quantite: Number(event.target.value),
-                            })
-                          }
-                          aria-invalid={invalid}
-                          className={cn(
-                            "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
-                            invalid && "border-destructive",
-                          )}
-                        />
-                      </TableCell>
-
-                      {isDouble ? (
-                        <>
-                          <TableCell>
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={line.prixBrutHT}
-                              onChange={(event) =>
-                                updateLine(line.key, {
-                                  prixBrutHT: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Prix brut HT"
-                              aria-invalid={invalid}
-                              className={cn(
-                                "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
-                                invalid && "border-destructive",
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <input
-                              type="number"
-                              min={0}
-                              max={100}
-                              value={line.remise1Percent}
-                              onChange={(event) =>
-                                updateLine(line.key, {
-                                  remise1Percent: clampPercent(
-                                    Number(event.target.value),
-                                  ),
-                                })
-                              }
-                              aria-label="Remise 1 en pourcentage"
-                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <input
-                              type="number"
-                              min={0}
-                              max={100}
-                              value={line.remise2Percent}
-                              onChange={(event) =>
-                                updateLine(line.key, {
-                                  remise2Percent: clampPercent(
-                                    Number(event.target.value),
-                                  ),
-                                })
-                              }
-                              aria-label="Remise 2 en pourcentage"
-                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
-                            />
-                          </TableCell>
-                          <TableCell className="text-right font-medium tabular-nums">
-                            {formatCurrency(netUnitHT)}
-                          </TableCell>
-                        </>
-                      ) : (
-                        <>
-                          <TableCell>
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={line.prixAchatTTC}
-                              onChange={(event) =>
-                                updateLine(line.key, {
-                                  prixAchatTTC: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Prix d'achat TTC"
-                              aria-invalid={invalid}
-                              className={cn(
-                                "h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15",
-                                invalid && "border-destructive",
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <input
-                              type="number"
-                              min={0}
-                              max={100}
-                              value={line.remisePercent}
-                              onChange={(event) =>
-                                updateLine(line.key, {
-                                  remisePercent: clampPercent(
-                                    Number(event.target.value),
-                                  ),
-                                })
-                              }
-                              aria-label="Remise en pourcentage"
-                              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-right text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15"
-                            />
-                          </TableCell>
-                          <TableCell className="text-right font-medium tabular-nums">
-                            {formatCurrency(
-                              computeDraftLineTotalTTC({
-                                quantite: line.quantite,
-                                prixAchatTTC: line.prixAchatTTC,
-                                remisePercent: line.remisePercent,
-                              }),
-                            )}
-                          </TableCell>
-                        </>
-                      )}
-
-                      <TableCell>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label="Supprimer la ligne"
-                          disabled={values.lignes.length === 1}
-                          onClick={() => removeLine(line.key)}
-                          className="text-muted-foreground hover:text-red-600"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
-
-        <Separator />
-
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">Résumé</h3>
-          <div className="mt-3 ml-auto max-w-xs space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Total HT</span>
-              <span className="tabular-nums text-foreground">
-                {formatCurrency(totals.totalHT)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">TVA</span>
-              <span className="tabular-nums text-foreground">
-                {formatCurrency(totals.totalTVA)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-base font-semibold">
-              <span className="text-foreground">Total TTC</span>
-              <span className="tabular-nums text-emerald-700">
-                {formatCurrency(totals.totalTTC)}
-              </span>
-            </div>
-          </div>
-        </div>
       </div>
 
       <DialogFooter>

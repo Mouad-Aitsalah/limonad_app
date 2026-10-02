@@ -26,6 +26,8 @@ type ProductComboboxProps = {
   placeholder?: string;
   label?: string | null;
   disabled?: boolean;
+  /** Highlight the first suggestion while typing so Enter picks it (opt-in; default off). */
+  autoHighlight?: boolean;
 };
 
 /**
@@ -45,6 +47,7 @@ export function ProductCombobox({
   placeholder = "Selectionner un produit",
   label = "Produit",
   disabled = false,
+  autoHighlight = false,
 }: ProductComboboxProps) {
   const [query, setQuery] = React.useState("");
   const { results } = useProductPickerSearch(preload, query);
@@ -67,6 +70,7 @@ export function ProductCombobox({
         itemToStringLabel={(product: ProductDto | null) => product?.name ?? ""}
         isItemEqualToValue={(a: ProductDto, b: ProductDto) => a.id === b.id}
         disabled={disabled}
+        autoHighlight={autoHighlight}
       >
         <ComboboxInputGroup>
           <ComboboxInput placeholder={value?.name ?? placeholder} />
