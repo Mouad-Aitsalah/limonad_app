@@ -83,27 +83,28 @@ export function DepositHistoryTable({
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">N° versement</Label>
+          <Label className="text-[16.8px] text-muted-foreground">N° versement</Label>
           <Input
+            className="h-14 text-[19.6px] max-lg:text-[19.6px]!"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="VER-..."
           />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Date du</Label>
-          <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+          <Label className="text-[16.8px] text-muted-foreground">Date du</Label>
+          <Input type="date" className="h-14 text-[19.6px] max-lg:text-[19.6px]!" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Date au</Label>
-          <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+          <Label className="text-[16.8px] text-muted-foreground">Date au</Label>
+          <Input type="date" className="h-14 text-[19.6px] max-lg:text-[19.6px]!" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Statut</Label>
+          <Label className="text-[16.8px] text-muted-foreground">Statut</Label>
           <select
             value={status}
             onChange={(event) => setStatus(event.target.value)}
-            className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-emerald-500 focus:ring-3 focus:ring-emerald-500/15"
+            className="h-14 w-full rounded-lg border border-input bg-background px-3 text-[19.6px] max-lg:text-[19.6px]! outline-none transition focus:border-emerald-500 focus:ring-3 focus:ring-emerald-500/15"
           >
             <option value="">Tous</option>
             <option value="VALIDATED">Valide</option>
@@ -112,11 +113,11 @@ export function DepositHistoryTable({
         </div>
         {context.canFilterByDepot && depots.length > 1 ? (
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">POS / Caisse</Label>
+            <Label className="text-[16.8px] text-muted-foreground">POS / Caisse</Label>
             <select
               value={depotId}
               onChange={(event) => setDepotId(event.target.value)}
-              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-emerald-500 focus:ring-3 focus:ring-emerald-500/15"
+              className="h-14 w-full rounded-lg border border-input bg-background px-3 text-[19.6px] max-lg:text-[19.6px]! outline-none transition focus:border-emerald-500 focus:ring-3 focus:ring-emerald-500/15"
             >
               <option value="">Tous</option>
               {depots.map((depot) => (
@@ -129,11 +130,11 @@ export function DepositHistoryTable({
         ) : null}
         {users.length > 1 ? (
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Caissier</Label>
+            <Label className="text-[16.8px] text-muted-foreground">Caissier</Label>
             <select
               value={userId}
               onChange={(event) => setUserId(event.target.value)}
-              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-emerald-500 focus:ring-3 focus:ring-emerald-500/15"
+              className="h-14 w-full rounded-lg border border-input bg-background px-3 text-[19.6px] max-lg:text-[19.6px]! outline-none transition focus:border-emerald-500 focus:ring-3 focus:ring-emerald-500/15"
             >
               <option value="">Tous</option>
               {users.map((user) => (
@@ -146,11 +147,11 @@ export function DepositHistoryTable({
         ) : null}
       </div>
 
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[19.6px] text-muted-foreground">
         {filtered.length} versement{filtered.length > 1 ? "s" : ""}.
       </p>
 
-      <div className="overflow-x-auto rounded-2xl border border-border">
+      <div className="overflow-x-auto rounded-2xl border border-border [&_td]:text-[21.1px] [&_td_button]:h-12 [&_td_button]:text-[18.4px] [&_th]:text-[16.1px]">
         <Table>
           <TableHeader>
             <TableRow>

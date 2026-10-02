@@ -127,57 +127,66 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
   const now = new Date();
   const validated = lastDeposit !== null;
 
+  // Type of this screen is scaled x1.4 on purpose (14px -> 19.6px, 12px ->
+  // 16.8px, 16px -> 22.4px): the values below are the explicit pixel sizes.
+  const inputClassName = "h-14 rounded-2xl px-4 text-right text-[19.6px] max-lg:text-[19.6px]! tabular-nums";
+  const fieldRowClassName = "flex items-center justify-between gap-3 px-4 py-3";
+
   return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm sm:grid-cols-4">
+    <div className="space-y-5 text-[19.6px]">
+      <div className="grid grid-cols-2 gap-4 rounded-2xl border border-border bg-muted/40 p-5 sm:grid-cols-4">
         <div>
-          <p className="text-xs text-muted-foreground">Caissier</p>
+          <p className="text-[16.8px] text-muted-foreground">Caissier</p>
           <p className="font-medium text-foreground">{context.userName}</p>
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">Date</p>
+          <p className="text-[16.8px] text-muted-foreground">Date</p>
           <p className="font-medium text-foreground" suppressHydrationWarning>
             {now.toLocaleDateString("fr-FR")}
           </p>
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">Heure</p>
+          <p className="text-[16.8px] text-muted-foreground">Heure</p>
           <p className="font-medium text-foreground" suppressHydrationWarning>
             {now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
           </p>
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">POS / Caisse</p>
+          <p className="text-[16.8px] text-muted-foreground">POS / Caisse</p>
           <p className="font-medium text-foreground">{context.depotName}</p>
         </div>
       </div>
 
       {validated ? (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-emerald-800">
           {lastDeposit.number} valide et enregistre. Le detail des coupures n&apos;est plus
           modifiable depuis cet ecran - utilisez &laquo;&nbsp;Nouveau versement&nbsp;&raquo; pour en
           declarer un autre.
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_28rem] xl:items-start">
         <div className="space-y-5">
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-foreground">Coupures comptees en caisse</p>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {cashDenominations.map((value) => {
-            const quantity = Number(quantities[value] || 0);
-            const lineAmount = Number.isFinite(quantity) ? value * quantity : 0;
+          {/* One single column: label on the left, field on the right. */}
+          <div className="space-y-3">
+            <p className="text-[22.4px] font-semibold text-foreground">Coupures comptees en caisse</p>
+            <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
+              {cashDenominations.map((value) => {
+                const quantity = Number(quantities[value] || 0);
+                const lineAmount = Number.isFinite(quantity) ? value * quantity : 0;
 
-            return (
-              <Card key={value} className="ring-0 shadow-[0_6px_18px_rgba(15,23,42,0.05)]">
-                <CardContent className="space-y-2.5">
-                  <p className="text-sm font-semibold text-foreground tabular-nums">
-                    {formatCurrency(value)}
-                  </p>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Quantite</Label>
+                return (
+                  <div key={value} className={fieldRowClassName}>
+                    <div className="min-w-0">
+                      <Label htmlFor={`deposit-qty-${value}`} className="text-[19.6px] font-semibold tabular-nums">
+                        {formatCurrency(value)}
+                      </Label>
+                      <p className="mt-1 text-[16.8px] text-muted-foreground tabular-nums">
+                        {formatCurrency(lineAmount)}
+                      </p>
+                    </div>
                     <Input
+                      id={`deposit-qty-${value}`}
                       type="number"
                       min={0}
                       step={1}
@@ -187,109 +196,133 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
                       onChange={(event) =>
                         setQuantities((current) => ({ ...current, [value]: event.target.value }))
                       }
+                      aria-label={`Quantite de ${formatCurrency(value)}`}
+                      className={`${inputClassName} w-36 shrink-0 sm:w-52`}
                     />
                   </div>
-                  <p className="text-right text-sm font-medium text-foreground tabular-nums">
-                    {formatCurrency(lineAmount)}
-                  </p>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      </div>
+                );
+              })}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label>Montant especes a verser</Label>
-          <Input
-            type="number"
-            min={0}
-            step={0.01}
-            disabled={validated}
-            value={cashDepositInput}
-            onFocus={(event) => event.currentTarget.select()}
-            onChange={(event) => setCashDepositInput(event.target.value)}
-            placeholder="0.00"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label>Montant cheques</Label>
-          <Input
-            type="number"
-            min={0}
-            step={0.01}
-            disabled={validated}
-            value={checkTotalInput}
-            onFocus={(event) => event.currentTarget.select()}
-            onChange={(event) => setCheckTotalInput(event.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label>Commentaire (facultatif)</Label>
-          <Textarea
-            disabled={validated}
-            value={notes}
-            onChange={(event) => setNotes(event.target.value)}
-            placeholder="Remarque sur ce versement..."
-            className="min-h-10"
-          />
-        </div>
-      </div>
+              <div className={fieldRowClassName}>
+                <Label htmlFor="deposit-cash-amount" className="text-[19.6px] font-semibold">
+                  Montant especes a verser
+                </Label>
+                <Input
+                  id="deposit-cash-amount"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  disabled={validated}
+                  value={cashDepositInput}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onChange={(event) => setCashDepositInput(event.target.value)}
+                  placeholder="0.00"
+                  className={`${inputClassName} w-36 shrink-0 sm:w-52`}
+                />
+              </div>
 
-      <div className="rounded-2xl border border-border bg-muted/50 p-4">
-        <div className="grid gap-2 text-sm sm:grid-cols-3">
-          <div className="flex justify-between sm:block">
-            <span className="text-muted-foreground">Especes a verser</span>
-            <span className="font-medium text-foreground tabular-nums sm:ml-2">
-              {formatCurrency(Number.isFinite(cashDepositAmount) ? cashDepositAmount : 0)}
-            </span>
+              <div className={fieldRowClassName}>
+                <Label htmlFor="deposit-check-total" className="text-[19.6px] font-semibold">
+                  Cheque
+                </Label>
+                <Input
+                  id="deposit-check-total"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  disabled={validated}
+                  value={checkTotalInput}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onChange={(event) => setCheckTotalInput(event.target.value)}
+                  className={`${inputClassName} w-36 shrink-0 sm:w-52`}
+                />
+              </div>
+
+              <div className={fieldRowClassName}>
+                <Label htmlFor="deposit-notes" className="text-[19.6px] font-semibold">
+                  Commentaire (facultatif)
+                </Label>
+                <Textarea
+                  id="deposit-notes"
+                  disabled={validated}
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="Remarque sur ce versement..."
+                  className="min-h-14 w-36 shrink-0 rounded-2xl px-4 py-3 text-[19.6px] max-lg:text-[19.6px]! sm:w-52"
+                />
+              </div>
+
+              <div className="space-y-2 bg-muted/50 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Especes a verser</span>
+                  <span className="font-medium text-foreground tabular-nums">
+                    {formatCurrency(Number.isFinite(cashDepositAmount) ? cashDepositAmount : 0)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Cheques</span>
+                  <span className="font-medium text-foreground tabular-nums">
+                    {formatCurrency(Number.isFinite(checkTotal) ? checkTotal : 0)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3 border-t border-border pt-2 text-[25.2px] font-semibold">
+                  <span>Total</span>
+                  <span className="tabular-nums">{formatCurrency(total)}</span>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="flex justify-between sm:block">
-            <span className="text-muted-foreground">Cheques</span>
-            <span className="font-medium text-foreground tabular-nums sm:ml-2">
-              {formatCurrency(Number.isFinite(checkTotal) ? checkTotal : 0)}
-            </span>
-          </div>
-          <div className="flex justify-between border-t border-border pt-2 text-base font-semibold sm:col-span-1 sm:border-0 sm:pt-0 sm:text-lg">
-            <span>Total versement</span>
-            <span className="tabular-nums">{formatCurrency(total)}</span>
-          </div>
-        </div>
-      </div>
 
-      <div className="flex flex-wrap gap-2">
-        {!validated ? (
-          <Button type="button" size="lg" disabled={saving} onClick={handleValidate}>
-            <Wallet className="h-4 w-4" />
-            {saving ? "Validation..." : "Valider le versement"}
-          </Button>
-        ) : (
-          <>
-            <Button type="button" size="lg" onClick={handlePrint}>
-              <Printer className="h-4 w-4" />
-              Imprimer
-            </Button>
-            <Button type="button" variant="outline" size="lg" onClick={resetForm}>
-              <RotateCcw className="h-4 w-4" />
-              Nouveau versement
-            </Button>
-          </>
-        )}
-        {!validated ? (
-          <Button type="button" variant="outline" size="lg" disabled={saving} onClick={resetForm}>
-            Annuler
-          </Button>
-        ) : null}
-      </div>
-
+          <div className="flex flex-wrap gap-3">
+            {!validated ? (
+              <Button
+                type="button"
+                size="lg"
+                disabled={saving}
+                onClick={handleValidate}
+                className="h-14 gap-3 px-6 text-[21.3px]"
+              >
+                <Wallet className="h-5 w-5" />
+                {saving ? "Validation..." : "Valider le versement"}
+              </Button>
+            ) : (
+              <>
+                <Button type="button" size="lg" onClick={handlePrint} className="h-14 gap-3 px-6 text-[21.3px]">
+                  <Printer className="h-5 w-5" />
+                  Imprimer
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="lg"
+                  onClick={resetForm}
+                  className="h-14 gap-3 px-6 text-[21.3px]"
+                >
+                  <RotateCcw className="h-5 w-5" />
+                  Nouveau versement
+                </Button>
+              </>
+            )}
+            {!validated ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                disabled={saving}
+                onClick={resetForm}
+                className="h-14 px-6 text-[21.3px]"
+              >
+                Annuler
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         <Card className="border-emerald-200/80 bg-emerald-50/40 shadow-[0_10px_30px_rgba(5,150,105,0.08)] xl:sticky xl:top-6">
           <CardContent className="space-y-5 p-5">
             <div>
-              <p className="text-xs font-semibold tracking-[0.14em] text-emerald-700">SITUATION DE LA CAISSE</p>
-              <p className="mt-1 text-sm text-muted-foreground">{context.depotName} - {context.userName}</p>
+              <p className="text-[16.8px] font-semibold tracking-[0.14em] text-emerald-700">SITUATION DE LA CAISSE</p>
+              <p className="mt-1 text-[19.6px] text-muted-foreground">{context.depotName} - {context.userName}</p>
             </div>
             <SummaryLine label="Ventes especes du jour" value={context.cashSummary.cashSales} />
             <SummaryLine label="Charges especes du jour" value={-context.cashSummary.cashExpenses} negative />
@@ -297,7 +330,7 @@ export function NewDepositForm({ context, onDepositCreated }: NewDepositFormProp
               <SummaryLine label="Disponible caisse" value={context.cashSummary.availableCash} strong />
             </div>
             {context.cashSummary.hasCashShortfall ? (
-              <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+              <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[16.8px] leading-6 text-amber-900">
                 Les sorties especes depassent les encaissements especes de la journee.
               </p>
             ) : null}
@@ -329,9 +362,9 @@ function SummaryLine({
   negative?: boolean;
 }) {
   return (
-    <div className="flex items-end justify-between gap-4">
-      <span className={strong ? "font-semibold text-foreground" : "text-sm text-muted-foreground"}>{label}</span>
-      <span className={strong ? "text-lg font-semibold tabular-nums text-foreground" : "font-medium tabular-nums text-foreground"}>
+    <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+      <span className={strong ? "text-[19.6px] font-semibold text-foreground" : "text-[19.6px] text-muted-foreground"}>{label}</span>
+      <span className={strong ? "text-[25.2px] font-semibold tabular-nums text-foreground" : "text-[19.6px] font-medium tabular-nums text-foreground"}>
         {negative ? "- " : ""}{formatCurrency(Math.abs(value))}
       </span>
     </div>

@@ -1,10 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Banknote, FileCheck, Receipt, Wallet } from "lucide-react";
 import { toast } from "sonner";
 
-import { MetricCard } from "@/components/ui/metric-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { CashDepositContextDto, CashDepositDto, CashDepositSummaryDto } from "@/types/cash-deposits";
 import type { DepotDto } from "@/types/operations-dto";
@@ -89,57 +87,27 @@ export function CashDepositsView({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">Versements</h1>
-        <p className="text-sm text-muted-foreground">
+        {/* Page type scaled x1.4 (24px -> 33.6px title, 14px -> 19.6px text). */}
+        <h1 className="font-heading text-[33.6px] leading-tight font-semibold text-foreground">Versements</h1>
+        <p className="text-[19.6px] leading-snug text-muted-foreground">
           Declarez l&apos;argent physiquement present en caisse et consultez l&apos;historique
           par POS.
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          eyebrow="Aujourd'hui"
-          title="Versements"
-          value={String(context.todayCount)}
-          icon={Receipt}
-          accent="blue"
-        />
-        <MetricCard
-          eyebrow="Aujourd'hui"
-          title="Total verse"
-          value={formatDh(context.todayTotal)}
-          icon={Wallet}
-          accent="green"
-        />
-        <MetricCard
-          eyebrow="Aujourd'hui"
-          title="Total especes"
-          value={formatDh(context.todayCashTotal)}
-          icon={Banknote}
-          accent="teal"
-        />
-        <MetricCard
-          eyebrow="Aujourd'hui"
-          title="Total cheques"
-          value={formatDh(context.todayCheckTotal)}
-          icon={FileCheck}
-          accent="orange"
-        />
-      </div>
-
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList variant="line" className="rounded-2xl border border-border bg-muted/30 p-1">
-          <TabsTrigger value="new">Nouveau versement</TabsTrigger>
-          <TabsTrigger value="history">Historique</TabsTrigger>
+        <TabsList variant="line" className="min-h-[4.2rem] rounded-2xl border border-border bg-muted/30 p-1">
+          <TabsTrigger value="new" className="px-5 text-[19.6px]">Nouveau versement</TabsTrigger>
+          <TabsTrigger value="history" className="px-5 text-[19.6px]">Historique</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="new">
+        <TabsContent value="new" className="text-[19.6px]">
           <div className="rounded-3xl border border-border bg-card p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] sm:p-6">
             <NewDepositForm context={context} onDepositCreated={handleDepositCreated} />
           </div>
         </TabsContent>
 
-        <TabsContent value="history">
+        <TabsContent value="history" className="text-[19.6px]">
           <div className="rounded-3xl border border-border bg-card p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] sm:p-6">
             <DepositHistoryTable
               deposits={history}
@@ -160,8 +128,4 @@ export function CashDepositsView({
       <DepositReceiptPrint deposit={printTarget} />
     </div>
   );
-}
-
-function formatDh(value: number) {
-  return `${value.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} DH`;
 }
