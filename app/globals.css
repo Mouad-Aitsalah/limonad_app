@@ -968,3 +968,82 @@ body {
     animation: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Desktop readability (x1.3) - PC only, limited to the pages listed in
+   lib/desktop-scale-routes.ts.
+
+   - `.page-shell[data-desktop-scale]` is set by DashboardShell on those pages
+     only; `html[data-desktop-scale-popups]` additionally scales the portaled
+     UI (dialogs, selects, menus) opened from them.
+   - Tailwind v4 font sizes are `font-size: var(--text-*)`, so redefining the
+     tokens inside the scope scales every `text-xs ... text-9xl` class (and its
+     proportional line-height) without touching any component.
+   - Arbitrary `text-[...]` sizes are not tokens: the ones used by the shared
+     components of these pages are overridden explicitly below.
+   - Only inside `min-width: 64rem` (the project's `lg` desktop breakpoint):
+     phones and tablets are untouched. Header, sidebar and every other page
+     are outside the scope. The header user menu is exempt (.desktop-scale-exempt).
+   --------------------------------------------------------------------------- */
+@media (min-width: 64rem) {
+  .page-shell[data-desktop-scale] {
+    /* Text that inherits the body size (no text-* class). */
+    font-size: calc(1rem * 1.3);
+  }
+
+  .page-shell[data-desktop-scale],
+  html[data-desktop-scale-popups]
+    :is(
+      [data-slot="dialog-content"],
+      [data-slot="select-content"],
+      [data-slot="combobox-content"],
+      [data-slot="dropdown-menu-content"]:not(.desktop-scale-exempt),
+      [data-slot="dropdown-menu-sub-content"]
+    ) {
+    --text-xs: calc(0.75rem * 1.3);
+    --text-sm: calc(0.875rem * 1.3);
+    --text-base: calc(1rem * 1.3);
+    --text-lg: calc(1.125rem * 1.3);
+    --text-xl: calc(1.25rem * 1.3);
+    --text-2xl: calc(1.5rem * 1.3);
+    --text-3xl: calc(1.875rem * 1.3);
+    --text-4xl: calc(2.25rem * 1.3);
+    --text-5xl: calc(3rem * 1.3);
+    --text-6xl: calc(3.75rem * 1.3);
+    --text-7xl: calc(4.5rem * 1.3);
+    --text-8xl: calc(6rem * 1.3);
+    --text-9xl: calc(8rem * 1.3);
+
+    /* Arbitrary sizes of the shared components (table, button, badge, page
+       header, metric card, eyebrow) and of the pages' own markup. */
+    .text-\[0\.68rem\],
+    .page-eyebrow {
+      font-size: calc(0.68rem * 1.3);
+    }
+    .text-\[0\.72rem\] {
+      font-size: calc(0.72rem * 1.3);
+    }
+    .text-\[0\.82rem\] {
+      font-size: calc(0.82rem * 1.3);
+    }
+    .text-\[0\.94rem\] {
+      font-size: calc(0.94rem * 1.3);
+    }
+    .text-\[0\.95rem\] {
+      font-size: calc(0.95rem * 1.3);
+    }
+    .text-\[11px\] {
+      font-size: calc(11px * 1.3);
+    }
+    .text-\[2rem\] {
+      font-size: calc(2rem * 1.3);
+    }
+    .text-\[2\.1rem\] {
+      font-size: calc(2.1rem * 1.3);
+    }
+    /* After the rule above: at >= lg the sm: variant is the one that applies. */
+    .sm\:text-\[2\.7rem\] {
+      font-size: calc(2.7rem * 1.3);
+    }
+  }
+}

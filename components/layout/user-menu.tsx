@@ -78,7 +78,7 @@ export function UserMenu({ userName, userRole, userEmail }: UserMenuProps) {
         </div>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="min-w-64 rounded-3xl p-2">
+      <DropdownMenuContent align="end" className="desktop-scale-exempt min-w-64 rounded-3xl p-2">
         <DropdownMenuGroup>
           <DropdownMenuLabel className="rounded-2xl bg-[var(--surface-muted)] px-3 py-3">
             <p className="text-sm font-semibold text-[var(--text-primary)]">{userName}</p>
