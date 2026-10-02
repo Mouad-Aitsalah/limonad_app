@@ -691,24 +691,47 @@ body {
     margin-left: auto;
   }
 
-  /* Counter POS ticket only (ReceiptPrint `ruled`): vertical rules between
-     the four product columns, and the total as "PRIX TTC" (far left) /
-     amount (far right). Borders (not backgrounds) so they always print.
-     Column widths are kept: the former 1mm gaps become cell padding. Rows
-     touch each other (no row gap) so each rule is one continuous line from
-     the title row down to the last product; the flush separator under the
-     title row has no margin for the same reason. */
+  /* Counter POS ticket only (ReceiptPrint `ruled`).
+     - Product table: DASHED vertical separators (same 1px dashed look as the
+       horizontal .receipt-print-separator lines) instead of continuous rules.
+       Borders (not backgrounds) so they always print. Rows touch each other
+       (no row gap) so each dashed line runs from the title row down to the
+       last product; the flush separator under the title row has no margin for
+       the same reason.
+     - Columns: QTE gets 1mm more than the plain ticket and DESIGNATION is
+       pushed right with its own left padding, so the quantity and the name no
+       longer touch; the price / amount columns keep their exact widths. A
+       long name still clips at two lines (.receipt-print-product), never
+       overlapping the price columns.
+     - The invoice info block and the PRIX TTC total are centred groups. */
   .receipt-print-area[data-document="sale"] .receipt-print-ruled .receipt-print-grid {
+    grid-template-columns: 8mm minmax(0, 1fr) 15mm 20mm;
     gap: 0;
     align-items: stretch;
+  }
+
+  .receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-ruled .receipt-print-grid {
+    grid-template-columns: 6.5mm minmax(0, 1fr) 13mm 16mm;
   }
 
   .receipt-print-ruled .receipt-print-grid > span {
     padding: 0.4mm 0.5mm;
   }
 
+  .receipt-print-ruled .receipt-print-grid > span:nth-child(2) {
+    padding-left: 3mm;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-ruled .receipt-print-grid > span:nth-child(2) {
+    padding-left: 2mm;
+  }
+
+  .receipt-print-ruled .receipt-print-grid > span.receipt-print-number {
+    padding-right: 1mm;
+  }
+
   .receipt-print-ruled .receipt-print-grid > span + span {
-    border-left: 1px solid #000;
+    border-left: 1px dashed #000;
   }
 
   .receipt-print-area[data-document="sale"] .receipt-print-ruled .receipt-print-lines {
@@ -719,14 +742,55 @@ body {
     margin: 0;
   }
 
+  /* Invoice info (N° Facture / Client / N° client / date + time), centred,
+     x1.3 of the ticket's own size (10px -> 13px, 9px -> 11.7px on 58mm). Long
+     values wrap instead of overflowing. */
+  .receipt-print-meta-centered {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.8mm;
+    text-align: center;
+    font-size: 13px;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-meta-centered {
+    font-size: 11.7px;
+  }
+
+  .receipt-print-meta-centered > div {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .receipt-print-meta-datetime {
+    display: flex;
+    justify-content: center;
+    gap: 4mm;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* "PRIX TTC" and the amount, brought together in the middle: the label
+     stays the ticket's bold 12px, the amount is larger (15px) so it is the
+     first thing read. */
+  .receipt-print-ruled .receipt-print-total-ruled {
+    justify-content: center;
+    gap: 4mm;
+  }
+
   .receipt-print-ruled .receipt-print-total-ruled > span {
     margin: 0;
-    text-align: left;
+    text-align: center;
   }
 
   .receipt-print-ruled .receipt-print-total-ruled > strong {
-    margin: 0 0 0 auto;
-    text-align: right;
+    margin: 0;
+    text-align: center;
+    font-size: 15px;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-ruled .receipt-print-total-ruled > strong {
+    font-size: 13px;
   }
 
   /* Unpaid ("facture du jour" printed before collection) marker - a plain

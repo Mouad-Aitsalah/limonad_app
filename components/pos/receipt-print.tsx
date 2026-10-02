@@ -140,24 +140,50 @@ export function ReceiptPrint({
           <p className="receipt-print-brand">{RECEIPT_BRAND_NAME}</p>
         </header>
 
-        <div className="receipt-print-meta">
-          <div>
-            <span>{offlineReference ? "Référence : " : "N° Facture : "}</span>
-            <strong>{offlineReference ?? sale.displayNumber}</strong>
-          </div>
-          <div className="receipt-print-right">{formatReceiptDate(receiptDate)}</div>
-          <div>
-            <span>Client : </span>
-            <strong>{customerName}</strong>
-          </div>
-          <div className="receipt-print-right">{formatReceiptTime(receiptDate)}</div>
-          {customerCode ? (
+        {ruled ? (
+          // Counter POS ticket: the same five values, grouped in ONE centred
+          // block (see .receipt-print-meta-centered) instead of spread across
+          // the ticket width. Same data, same formats - only the layout differs.
+          <div className="receipt-print-meta-centered">
             <div>
-              <span>N° client : </span>
-              <strong>{customerCode}</strong>
+              <span>{offlineReference ? "Référence : " : "N° Facture : "}</span>
+              <strong>{offlineReference ?? sale.displayNumber}</strong>
             </div>
-          ) : null}
-        </div>
+            <div>
+              <span>Client : </span>
+              <strong>{customerName}</strong>
+            </div>
+            {customerCode ? (
+              <div>
+                <span>N° client : </span>
+                <strong>{customerCode}</strong>
+              </div>
+            ) : null}
+            <div className="receipt-print-meta-datetime">
+              <span>{formatReceiptDate(receiptDate)}</span>
+              <span>{formatReceiptTime(receiptDate)}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="receipt-print-meta">
+            <div>
+              <span>{offlineReference ? "Référence : " : "N° Facture : "}</span>
+              <strong>{offlineReference ?? sale.displayNumber}</strong>
+            </div>
+            <div className="receipt-print-right">{formatReceiptDate(receiptDate)}</div>
+            <div>
+              <span>Client : </span>
+              <strong>{customerName}</strong>
+            </div>
+            <div className="receipt-print-right">{formatReceiptTime(receiptDate)}</div>
+            {customerCode ? (
+              <div>
+                <span>N° client : </span>
+                <strong>{customerCode}</strong>
+              </div>
+            ) : null}
+          </div>
+        )}
 
         {/* The "EN ATTENTE DE RÈGLEMENT" box above the table is no longer
             printed (the "Statut" line in the footer still says it). Only the

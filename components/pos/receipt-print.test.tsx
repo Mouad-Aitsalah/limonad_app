@@ -225,10 +225,10 @@ test("nothing is recomputed or stored: the helper is pure, a line without discou
 });
 
 // ---------------------------------------------------------------------------
-// Counter POS (PC) layout: `ruled` = vertical rules + "PRIX TTC" left / amount right
+// Counter POS (PC) layout: `ruled` = dashed column separators, centred info block, centred PRIX TTC total
 // ---------------------------------------------------------------------------
 
-test("ruled: the total is PRIX TTC first (left), the real amount second (right)", () => {
+test("ruled: the total is PRIX TTC first, the real amount second, in one centred group", () => {
   const sale = saleOf([{ name: "A", unitTTC: 928, quantity: 1 }]);
   const markup = html(sale, { ruled: true });
   const match = markup.match(/<div class="receipt-print-total receipt-print-total-ruled"><span>PRIX TTC<\/span><strong>([^<]*)<\/strong><\/div>/);
@@ -251,15 +251,57 @@ test("default (driver POS and everything else) is untouched: no ruled class, TOT
   assert.match(markup, /<span>TOTAL TTC<\/span>/);
 });
 
-test("ruled CSS: exactly 3 vertical rules (borders, so they always print), scoped to the ruled ticket inside @media print", () => {
+test("ruled CSS: exactly 3 DASHED vertical separators (borders, so they always print), no continuous rule left, scoped to the ruled ticket inside @media print", () => {
   const rule = ruleBody(".receipt-print-ruled .receipt-print-grid > span + span");
-  assert.match(rule, /border-left: 1px solid #000/);
+  assert.match(rule, /border-left: 1px dashed #000/);
+  assert.equal(/solid/.test(rule), false, "no continuous vertical rule");
+  assert.equal(css.includes("border-left: 1px solid #000"), false, "no solid vertical rule anywhere in the ticket CSS");
   assert.equal(css.includes(".receipt-print-ruled .receipt-print-grid > span {"), true);
-  assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled > strong"), /margin: 0 0 0 auto/);
-  assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled > span"), /text-align: left/);
   const printStart = css.lastIndexOf("@media print", css.indexOf(".receipt-print-ruled .receipt-print-grid > span + span"));
   assert.ok(printStart >= 0 && printStart < css.indexOf(".receipt-print-area {"));
-  // 4 spans per row -> "span + span" gives a rule before columns 2, 3 and 4 only.
+  // 4 spans per row -> "span + span" gives a separator before columns 2, 3 and 4 only.
   const row = html(saleOf([{ name: "A", unitTTC: 40, quantity: 1 }]), { ruled: true }).match(/<div class="receipt-print-grid receipt-print-head">(.*?)<\/div>/)![1];
   assert.equal((row.match(/<span/g) ?? []).length, 4);
+  // the horizontal dashed separators are untouched
+  assert.match(ruleBody(".receipt-print-separator"), /border-top: 1px dashed #000/);
+});
+
+test("ruled CSS: QTE / DESIGNATION get more room, the price and amount columns keep their exact widths", () => {
+  const w80 = ruleBody('.receipt-print-area[data-document="sale"] .receipt-print-ruled .receipt-print-grid');
+  assert.match(w80, /grid-template-columns: 8mm minmax\(0, 1fr\) 15mm 20mm/); // was 7mm for QTE
+  const w58 = ruleBody('.receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-ruled .receipt-print-grid');
+  assert.match(w58, /grid-template-columns: 6.5mm minmax\(0, 1fr\) 13mm 16mm/); // was 5mm
+  assert.match(ruleBody(".receipt-print-ruled .receipt-print-grid > span:nth-child(2)"), /padding-left: 3mm/);
+  // the plain ticket (driver POS) keeps its own widths
+  assert.match(ruleBody('.receipt-print-area[data-document="sale"] .receipt-print-grid'), /grid-template-columns: 7mm minmax\(0, 1fr\) 15mm 20mm/);
+});
+
+test("ruled: the five info values are the SAME as the plain ticket, grouped in one centred block (x1.3 type)", () => {
+  const sale = { ...saleOf([{ name: "Coca", unitTTC: 40, quantity: 2 }]), customer: { id: "c1", name: "Driss Chahboun", code: "3421/7" } } as unknown as SaleDto;
+  const plain = html(sale);
+  const ruled = html(sale, { ruled: true });
+  assert.match(ruled, /receipt-print-meta-centered/);
+  assert.equal(ruled.includes('class="receipt-print-meta"'), false);
+  assert.equal(plain.includes("receipt-print-meta-centered"), false);
+  const text = (markup: string) => markup.replace(/<[^>]+>/g, "|").replace(/\|+/g, "|");
+  for (const value of ["N° Facture : ", "Client : ", "Driss Chahboun", "N° client : "]) {
+    assert.ok(text(ruled).includes(value), value);
+    assert.ok(text(plain).includes(value), `plain: ${value}`);
+  }
+  // date and time are exactly the plain ticket's own strings
+  const dateTime = ruled.match(/receipt-print-meta-datetime"><span>([^<]*)<\/span><span>([^<]*)<\/span>/)!;
+  assert.ok(plain.includes(`>${dateTime[1]}<`) && plain.includes(`>${dateTime[2]}<`));
+  assert.match(ruleBody(".receipt-print-meta-centered"), /font-size: 13px/);
+  assert.match(ruleBody(".receipt-print-meta-centered"), /align-items: center/);
+  assert.match(ruleBody('.receipt-print-area[data-paper="58"] .receipt-print-meta-centered'), /font-size: 11.7px/);
+  assert.match(ruleBody(".receipt-print-meta-centered > div"), /overflow-wrap: anywhere/);
+});
+
+test("ruled CSS: PRIX TTC and the amount are centred together, amount larger; the amount value is untouched", () => {
+  assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled"), /justify-content: center/);
+  assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled > strong"), /font-size: 15px/);
+  assert.equal(/margin: 0 0 0 auto/.test(css), false, "no far-right pushing left");
+  const sale = saleOf([{ name: "A", unitTTC: 128, quantity: 1 }]);
+  const amount = html(sale, { ruled: true }).match(/<span>PRIX TTC<\/span><strong>([^<]*)<\/strong>/)![1];
+  assert.equal(normalize(amount), "128,00 DH");
 });

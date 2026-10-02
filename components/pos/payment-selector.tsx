@@ -72,6 +72,14 @@ export function PaymentSelector({
   disabledMethods,
 }: PaymentSelectorProps) {
   const selected = posPaymentMethods.find((method) => method.value === paymentMethod);
+  // "Virement" is no longer offered for a NEW counter-POS sale. It stays in
+  // the list only while it is the CURRENT value - a bank-transfer invoice
+  // opened for edition, or a cart restored with that method, keeps showing
+  // (and saving) its real mode instead of an empty selector. Nothing else
+  // changes: the type, the validation and the server rules still know it.
+  const offeredMethods = posPaymentMethods.filter(
+    (method) => method.value !== "BANK_TRANSFER" || paymentMethod === "BANK_TRANSFER",
+  );
   const mixedError =
     paymentMethod === "MIXED" ? describeMixedPaymentError(mixedAmounts, mixedTotal) : null;
 
@@ -92,7 +100,7 @@ export function PaymentSelector({
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {posPaymentMethods.map((method) => (
+            {offeredMethods.map((method) => (
               <SelectItem
                 key={method.value}
                 value={method.value}
