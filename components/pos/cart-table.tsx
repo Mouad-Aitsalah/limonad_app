@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { isSellingBelowCost } from "@/lib/pos-margin";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { CartLineComputed } from "@/components/pos/pos-layout";
 import type { PosOperationType } from "@/types/pos";
@@ -98,6 +99,10 @@ export function CartTable({
 }: CartTableProps) {
   const isTransfer = operationType === "transfer";
   const priceEditable = canEditPrice && !isTransfer && !readOnly && !!onPriceChange;
+  // PC counter POS only; the data is absent (-> false) for cashiers, drivers,
+  // frozen / pending lines and transfers.
+  const belowCost = (line: CartLineComputed) =>
+    pcLayout && !isTransfer && isSellingBelowCost(line.unitPriceTTC, line.purchasePriceTTC);
 
   if (lines.length === 0) {
     return (
@@ -245,6 +250,8 @@ export function CartTable({
             <TableCell className={cn(COL.prix, "text-center tabular-nums")}>
               {priceEditable ? (
                 <input
+                  data-below-cost={belowCost(line) ? "true" : undefined}
+                  title={belowCost(line) ? "Prix inférieur au prix d'achat" : undefined}
                   type="number"
                   min={0}
                   step="0.01"
@@ -260,6 +267,11 @@ export function CartTable({
                   className={cn(
                     "h-7 w-9 rounded-md border bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-20",
                     pcLayout && "lg:h-[2.625rem] lg:w-[6.5rem] lg:text-[21px]",
+                    // Below-cost warning (PC counter POS only, display only).
+                    // The focus variants are repeated because the base focus
+                    // style (emerald) would otherwise win while typing.
+                    belowCost(line) &&
+                      "lg:border-red-400 lg:bg-red-50 lg:text-red-700 lg:focus-visible:border-red-500 lg:focus-visible:ring-red-500/20",
                     line.priceOverridden
                       ? "border-amber-400 font-medium text-amber-700"
                       : "border-input",

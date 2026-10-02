@@ -502,6 +502,9 @@ export async function searchPosProducts(params: {
     imageUrl: true,
     updatedAt: true,
     salePrice: true,
+    // Admin-only below-cost alert in the counter POS cart; other roles never
+    // select the purchase price.
+    purchasePrice: currentUser.role === "admin",
     taxRate: true,
     defaultSupplierId: true,
     defaultSupplier: { select: { name: true, logoUrl: true } },
@@ -515,6 +518,7 @@ export async function searchPosProducts(params: {
     imageUrl: string | null;
     updatedAt: Date;
     salePrice: Prisma.Decimal;
+    purchasePrice?: Prisma.Decimal;
     taxRate: Prisma.Decimal;
     defaultSupplierId: string | null;
     defaultSupplier: { name: string; logoUrl: string | null } | null;
@@ -543,6 +547,9 @@ export async function searchPosProducts(params: {
         imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
         salePriceHT,
         salePriceTTC: computePriceTTC(salePriceHT, taxRate),
+        ...(currentUser.role === "admin" && product.purchasePrice
+          ? { purchasePriceHT: product.purchasePrice.toNumber() }
+          : {}),
         taxRate,
         availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
         supplierId: product.defaultSupplierId,

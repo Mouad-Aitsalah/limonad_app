@@ -660,6 +660,11 @@ export interface DriverPosProductDto {
    *  which issues or needs a token - only getDriverPosContext (online) and
    *  the offline cache reconstruction (pos-context.ts) ever set it. */
   priceToken?: string;
+  /** Product.purchasePrice (HT). ADMIN-ONLY and COUNTER-POS-ONLY: set by
+   *  getCounterPosContext / searchPosProducts for the admin role so the cart
+   *  can flag a below-cost unit price. Never sent to cashiers or drivers, and
+   *  never used for pricing or totals. Absent = unknown -> no alert. */
+  purchasePriceHT?: number;
 }
 
 /** Active 5141 accounting account, offered as the "Compte bancaire" choice

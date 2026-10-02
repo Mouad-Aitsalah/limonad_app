@@ -226,6 +226,8 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
         imageUrl: true,
         updatedAt: true,
         salePrice: true,
+        // Admin-only below-cost alert in the cart (see purchasePriceHT below).
+        purchasePrice: sessionUser.role === "admin",
         taxRate: true,
         defaultSupplierId: true,
         defaultSupplier: { select: { name: true, logoUrl: true, updatedAt: true } },
@@ -278,6 +280,9 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
       salePriceHT,
       salePriceTTC: computePriceTTC(salePriceHT, taxRate),
+      ...(sessionUser.role === "admin" && "purchasePrice" in product && product.purchasePrice
+        ? { purchasePriceHT: product.purchasePrice.toNumber() }
+        : {}),
       taxRate,
       // No stock row at this depot -> shown as 0 (still sellable).
       availableQuantity: level ? level.quantity - level.reservedQuantity : 0,

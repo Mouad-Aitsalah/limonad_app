@@ -39,6 +39,7 @@ import { CheckoutDialog } from "@/components/pos/checkout-dialog";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { computeDiscountedLineTotals, reconstructDiscountUnitAmount } from "@/lib/pos-discount";
+import { purchasePriceTTC } from "@/lib/pos-margin";
 import { OfflineStatusBar } from "@/components/pos/offline-status-bar";
 import { useCounterPosOffline } from "@/components/pos/use-counter-pos-offline";
 import {
@@ -94,6 +95,8 @@ export type CartLineComputed = {
   tvaAmount: number;
   totalTTC: number;
   transferValue: number;
+  /** Purchase price TTC (admin counter POS only). Unknown -> no below-cost alert. */
+  purchasePriceTTC?: number | null;
 };
 
 export type CartTotals = {
@@ -150,6 +153,7 @@ function mapContextProductsToPosProducts(
     tauxTVA: product.taxRate,
     quantiteStock: product.availableQuantity,
     imageUrl: product.imageUrl,
+    prixAchatHT: product.purchasePriceHT,
   }));
 }
 
@@ -416,6 +420,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         tvaAmount,
         totalTTC,
         transferValue: 0,
+        purchasePriceTTC: purchasePriceTTC(product?.prixAchatHT, tauxTVA),
       };
     });
   }, [cart, openPendingSale, productById, editLineInfoById]);

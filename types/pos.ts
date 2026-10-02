@@ -10,6 +10,8 @@ export type PosProduct = {
   tauxTVA: number;
   quantiteStock: number;
   imageUrl?: string | null;
+  /** Purchase price HT - admin counter POS only; see DriverPosProductDto.purchasePriceHT. */
+  prixAchatHT?: number;
 };
 
 // CARD is deliberately not offered here anymore (COMDIS no longer takes
