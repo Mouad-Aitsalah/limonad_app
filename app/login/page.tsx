@@ -11,9 +11,9 @@ export const metadata: Metadata = {
 
 export default function LoginPage() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted/40 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="grid w-full max-w-[1200px] items-stretch gap-6 lg:grid-cols-[1.35fr_0.85fr]">
-        <LoginInfo />
+    <main className="grid min-h-screen bg-[#eef4fb] lg:grid-cols-[56fr_44fr]">
+      <LoginInfo />
+      <div className="flex items-center justify-center px-4 py-8 sm:px-8 lg:px-10 xl:px-14">
         <Suspense fallback={null}>
           <LoginForm />
         </Suspense>
