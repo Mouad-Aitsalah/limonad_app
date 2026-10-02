@@ -1703,6 +1703,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
             onDiscountChange={updateDiscount}
             onPriceChange={updatePrice}
             onRemove={removeFromCart}
+            pcLayout
           />
         </div>
 

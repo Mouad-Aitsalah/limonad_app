@@ -44,6 +44,14 @@ type CartTableProps = {
   onDiscountChange: (productId: string, discountUnitAmount: number) => void;
   onPriceChange?: (productId: string, unitPriceTTC: number | null) => void;
   onRemove: (productId: string) => void;
+  /**
+   * Counter-POS PC layout (>= lg only; < lg is identical either way): the
+   * delete icon sits to the right of the product name instead of in its own
+   * last column, and the Qte / Prix TTC / Rem. DH controls and the Prix TTC /
+   * Total texts share one height and size. Opt-in so the driver POS, which
+   * reuses this table, keeps its current look.
+   */
+  pcLayout?: boolean;
 };
 
 // Column widths are the single source of truth (`table-fixed` makes every
@@ -85,6 +93,7 @@ export function CartTable({
   onDiscountChange,
   onPriceChange,
   onRemove,
+  pcLayout = false,
 }: CartTableProps) {
   const isTransfer = operationType === "transfer";
   const priceEditable = canEditPrice && !isTransfer && !readOnly && !!onPriceChange;
@@ -111,7 +120,7 @@ export function CartTable({
     // Mobile: w-full + min-w-0 -> the table is exactly the panel width and
     // the % columns fill it (no internal scroll). Desktop keeps its floor so
     // `table-fixed` never collapses the flexible Produit column.
-    <Table className="table-fixed min-w-0 lg:min-w-[48rem]">
+    <Table className={cn("table-fixed min-w-0", pcLayout ? "lg:min-w-[45.5rem]" : "lg:min-w-[48rem]")}>
       <TableHeader>
         <TableRow>
           <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP)}>Produit</TableHead>
@@ -133,7 +142,7 @@ export function CartTable({
           <TableHead className={cn(COL.total, "text-right", H_MOBILE, H_DESKTOP)}>
             {isTransfer ? "Valeur" : "Total"}
           </TableHead>
-          <TableHead className={COL.action} />
+          {!pcLayout && <TableHead className={COL.action} />}
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -156,7 +165,8 @@ export function CartTable({
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
-              <div className="min-w-0">
+              <div className={cn("min-w-0", pcLayout && "lg:flex lg:items-start lg:justify-between lg:gap-3")}>
+                <div className="min-w-0">
                 {/* Full product name - never clipped with an ellipsis.
                     `whitespace-normal` overrides the `whitespace-nowrap`
                     TableCell sets by default; wrapping happens on spaces and
@@ -168,6 +178,20 @@ export function CartTable({
                 <p className="truncate text-xs text-muted-foreground">
                   {line.reference}
                 </p>
+                </div>
+                {pcLayout && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Retirer ${line.designation} du panier`}
+                    disabled={readOnly}
+                    onClick={() => onRemove(line.productId)}
+                    className="hidden shrink-0 text-muted-foreground hover:text-red-600 lg:inline-flex"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
             </TableCell>
             <TableCell className={COL.qte}>
@@ -228,13 +252,14 @@ export function CartTable({
                   aria-label={`Prix TTC de ${line.designation}`}
                   className={cn(
                     "h-7 w-9 rounded-md border bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-20",
+                    pcLayout && "lg:h-[2.625rem] lg:w-[6.5rem] lg:text-[21px]",
                     line.priceOverridden
                       ? "border-amber-400 font-medium text-amber-700"
                       : "border-input",
                   )}
                 />
               ) : (
-                <span className="max-lg:text-xs">
+                <span className={cn("max-lg:text-xs", pcLayout && "lg:text-[21px] lg:font-medium")}>
                   {formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC)}
                 </span>
               )}
@@ -261,23 +286,26 @@ export function CartTable({
               className={cn(
                 COL.total,
                 "text-right font-medium tabular-nums max-lg:overflow-hidden max-lg:text-xs",
+                pcLayout && "lg:text-[21px]",
               )}
             >
               {formatCurrency(isTransfer ? line.transferValue : line.totalTTC)}
             </TableCell>
-            <TableCell className={COL.action}>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Retirer ${line.designation} du panier`}
-                disabled={readOnly}
-                onClick={() => onRemove(line.productId)}
-                className="text-muted-foreground hover:text-red-600"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </TableCell>
+            {!pcLayout && (
+              <TableCell className={COL.action}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Retirer ${line.designation} du panier`}
+                  disabled={readOnly}
+                  onClick={() => onRemove(line.productId)}
+                  className="text-muted-foreground hover:text-red-600"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </TableCell>
+            )}
           </TableRow>
         ))}
       </TableBody>
