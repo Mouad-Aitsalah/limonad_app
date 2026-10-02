@@ -170,7 +170,9 @@ test("row VALUES are 1.3x (10px -> 13px) on the 80 mm sale ticket; the column ti
   assert.match(ruleBody(".receipt-print-ticket"), /font-size: 10px/);
   // Titles: no font size of their own anywhere (they inherit the ticket's 10px, as originally).
   assert.equal(/font-size/.test(ruleBody(".receipt-print-head")), false);
-  assert.equal(/\.receipt-print-head[^{]*\{[^}]*font-size/.test(css), false);
+  // (the only title rule with a font size is the DRIVER ticket's own 58mm one, scoped to .receipt-print-driver)
+  const headSizeRules = [...css.matchAll(/([^{}]*\.receipt-print-head[^{]*)\{[^}]*font-size/g)].map((m) => m[1].trim());
+  assert.ok(headSizeRules.every((selector) => selector.includes(".receipt-print-driver")), headSizeRules.join(" | "));
   // The rows rule does not reach the titles: they are printed before, outside .receipt-print-lines.
   const markup = html(saleOf([{ name: "A", unitTTC: 40, quantity: 2 }]));
   const head = markup.indexOf("receipt-print-head");
@@ -304,4 +306,59 @@ test("ruled CSS: PRIX TTC and the amount are centred together, amount larger; th
   const sale = saleOf([{ name: "A", unitTTC: 128, quantity: 1 }]);
   const amount = html(sale, { ruled: true }).match(/<span>PRIX TTC<\/span><strong>([^<]*)<\/strong>/)![1];
   assert.equal(normalize(amount), "128,00 DH");
+});
+
+// ---------------------------------------------------------------------------
+// DRIVER ticket (plain ReceiptPrint): x1.3 type, bold, bigger total - and the counter POS ticket untouched
+// ---------------------------------------------------------------------------
+
+test("driver ticket: the plain ticket carries .receipt-print-driver, the counter (ruled) ticket never does", () => {
+  const sale = saleOf([{ name: "A", unitTTC: 40, quantity: 2 }]);
+  assert.match(html(sale), /receipt-print-ticket receipt-print-driver/);
+  assert.equal(html(sale).includes("receipt-print-ruled"), false);
+  assert.equal(html(sale, { ruled: true }).includes("receipt-print-driver"), false);
+  // same data on both: only the class differs
+  assert.deepEqual(rows(html(sale)), rows(html(sale, { ruled: true })));
+});
+
+test("driver CSS: every size is x1.3 of the former one, everything bold, the total is the biggest line", () => {
+  assert.match(ruleBody(".receipt-print-ticket.receipt-print-driver"), /font-size: 13px/); // was 10px
+  assert.match(ruleBody(".receipt-print-ticket.receipt-print-driver"), /font-weight: 700/);
+  assert.match(ruleBody('.receipt-print-area[data-paper="58"] .receipt-print-ticket.receipt-print-driver'), /font-size: 11.7px/); // was 9px
+  assert.match(ruleBody(".receipt-print-driver .receipt-print-brand"), /font-size: 20.8px/); // was 16px
+  assert.match(ruleBody('.receipt-print-area[data-document="sale"]:not([data-paper="58"]) .receipt-print-driver .receipt-print-lines'), /font-size: 16.9px/); // was 13px
+  const total = ruleBody(".receipt-print-driver .receipt-print-total");
+  assert.match(total, /font-size: 20px/); // was 12px
+  assert.match(total, /font-weight: 800/);
+  assert.match(total, /flex-wrap: wrap/); // wraps instead of overlapping
+  assert.match(ruleBody('.receipt-print-area[data-paper="58"] .receipt-print-driver .receipt-print-total'), /font-size: 14px/);
+  assert.match(ruleBody(".receipt-print-driver .receipt-print-number"), /white-space: nowrap/);
+  assert.match(ruleBody(".receipt-print-driver .receipt-print-product"), /max-height: 3.75em/); // 3 lines instead of 2
+});
+
+test("driver CSS: the bigger rows get wider price / amount columns on both paper widths (no lost digit)", () => {
+  assert.match(ruleBody('.receipt-print-area[data-document="sale"] .receipt-print-driver .receipt-print-grid'), /grid-template-columns: 8mm minmax\(0, 1fr\) 18mm 22mm/);
+  assert.match(ruleBody('.receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-driver .receipt-print-grid'), /grid-template-columns: 5.5mm minmax\(0, 1fr\) 13.5mm 16mm/);
+  assert.match(ruleBody('.receipt-print-area[data-paper="58"] .receipt-print-driver .receipt-print-head'), /font-size: 9px/); // titles keep the former size on 58mm
+  assert.match(ruleBody('.receipt-print-area[data-paper="58"] .receipt-print-driver .receipt-print-lines .receipt-print-number'), /font-size: 10.5px/);
+  // 80mm: 76mm of content - 8 + 17 + 22 + 3 gaps leaves 25mm for the name; the 5 numeric characters of a 6-char amount at 16.9px bold fit 22mm
+  const printable = 80 - 2 * 2;
+  assert.ok(printable - (8 + 18 + 22 + 3) >= 25);
+});
+
+test("driver CSS: all the driver rules are scoped to .receipt-print-driver; the counter POS ticket's own rules did not move", () => {
+  const start = css.indexOf("/* DRIVER ticket only");
+  const end = css.indexOf('/* Unpaid ("facture du jour"');
+  assert.ok(start > 0 && end > start);
+  const block = css.slice(start, end);
+  const selectors = [...block.matchAll(/^\s{2}([^\s/*@}][^{]*)\{/gm)].map((m) => m[1].trim());
+  assert.ok(selectors.length >= 10);
+  for (const selector of selectors) assert.ok(selector.includes(".receipt-print-driver"), selector);
+  // the counter ticket (ruled) keeps its exact values
+  assert.match(ruleBody('.receipt-print-area[data-document="sale"] .receipt-print-ruled .receipt-print-grid'), /grid-template-columns: 8mm minmax\(0, 1fr\) 15mm 20mm/);
+  assert.match(ruleBody(".receipt-print-ruled .receipt-print-total-ruled > strong"), /font-size: 15px/);
+  assert.match(ruleBody(".receipt-print-meta-centered"), /font-size: 13px/);
+  // and the shared base ticket values are the original ones
+  assert.match(ruleBody(".receipt-print-ticket"), /font-size: 10px/);
+  assert.match(ruleBody(".receipt-print-total"), /font-size: 12px/);
 });

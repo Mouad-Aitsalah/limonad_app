@@ -127,7 +127,14 @@ export function ReceiptPrint({
       data-paper={paperWidth}
       data-document="sale"
     >
-      <div className={ruled ? "receipt-print-ticket receipt-print-ruled" : "receipt-print-ticket"}>
+      {/* `receipt-print-driver`: the plain ticket (driver POS). The counter POS
+          ticket is the `ruled` one - every driver-only style hangs on this
+          class, so the counter ticket can never be affected by it. */}
+      <div
+        className={
+          ruled ? "receipt-print-ticket receipt-print-ruled" : "receipt-print-ticket receipt-print-driver"
+        }
+      >
         <header className="receipt-print-header">
           {identity?.logoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element

@@ -10,14 +10,18 @@
  * discount, rebuilt from the totals really charged) - so no "Remise" line ever
  * exists here, exactly like the web ticket. Same rules as the web ticket:
  * no "EN ATTENTE DE REGLEMENT" box on top (the footer "Statut" line stays),
- * column titles at the ticket's base size, row VALUES ~1.3x. Thermal-specific
+ * column titles and row values both in font A and bold (driver ticket readability
+ * pass: titles were font B, i.e. 1.33x smaller, and nothing but the brand and the
+ * total was bold). Thermal-specific
  * layout (asked after a real print test): a clear gap between QTE and
  * DESIGNATION, and the total as "TOTAL TTC" on the left, the amount on the right.
  *
- * Sizes: ESC/POS only knows integer multiples, so the web ratio (10px titles,
- * 13px values) is reproduced with the printer's two built-in fonts: font B
- * (9x17 dots) for the titles and font A (12x24 dots) for the values - a 1.33x
- * ratio, i.e. the requested ~1.3x.
+ * Sizes: ESC/POS only knows integer multiples and two built-in fonts: font B
+ * (9x17 dots) and font A (12x24 dots, the biggest standard one). Everything is
+ * now font A (1.33x the former titles, the requested ~1.3x) and bold; a finer
+ * step does not exist without turning text into images (which this ticket
+ * never does). The total is the one exception, printed at double width AND
+ * height (or double height when the amount is too long for that).
  *
  * Text encoding: Latin text uses a printer code page (PC858 by default, index
  * 19, which has every French accent). Anything the code page cannot print
@@ -264,7 +268,7 @@ export function columnsLine(
 }
 
 /** DESIGNATION / product names start this far from the left margin (dots): twice the old QTE -> DESIGNATION gap. */
-const NAME_X_MIN = 117;
+const NAME_X_MIN = 126;
 
 // ---------------------------------------------------------------------------
 // The ticket (same content as ReceiptPrint)
@@ -279,9 +283,9 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
   function textOrRaster(text: string, style: { align?: Align; bold?: boolean; fontPx?: number } = {}): ReceiptLine {
     const printable = printableText(text, codePage);
     if (printable.encodable) {
-      return { kind: "text", text: printable.text, font: "A", bold: style.bold, align: style.align ?? "left", codePage };
+      return { kind: "text", text: printable.text, font: "A", bold: style.bold ?? true, align: style.align ?? "left", codePage };
     }
-    return { kind: "raster", text: normalizeSpaces(text), fontPx: style.fontPx ?? 24, bold: style.bold, align: style.align ?? "left" };
+    return { kind: "raster", text: normalizeSpaces(text), fontPx: style.fontPx ?? 24, bold: style.bold ?? true, align: style.align ?? "left" };
   }
 
   const receiptDate = sale.validatedAt ?? sale.createdAt;
@@ -333,17 +337,18 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
   const nameX = Math.max(NAME_X_MIN, longestQty * CHAR_DOTS_A + 60);
   const nameW = Math.max(8, Math.floor((priceEdge - priceW * CHAR_DOTS_A - CHAR_DOTS_A - nameX) / CHAR_DOTS_A));
 
-  // Titles: font B (base size), on the same x positions as the values.
+  // Titles: font A like the values (was font B: 1.33x bigger, read from a real
+  // ticket photo), bold, on the same x positions as the values.
   lines.push(
     columnsLine(
-      "B",
+      "A",
       [
         { x: 0, text: "QTE" },
         { x: nameX, text: "DESIGNATION" },
-        { x: priceEdge - "Prix TTC".length * CHAR_DOTS_B, text: "Prix TTC" },
-        { x: PRINTABLE_DOTS - "Montant".length * CHAR_DOTS_B, text: "Montant" },
+        { x: priceEdge - "Prix TTC".length * CHAR_DOTS_A, text: "Prix TTC" },
+        { x: PRINTABLE_DOTS - "Montant".length * CHAR_DOTS_A, text: "Montant" },
       ],
-      { bold: true },
+      { bold: true, codePage },
     ),
   );
   lines.push({ kind: "text", text: RULE_A, font: "A" });
@@ -359,13 +364,13 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
     const total = lineAmounts[index];
     const name = printableText(line.productName, codePage);
     if (name.encodable) {
-      const parts = wrap(name.text, nameW, 2);
+      const parts = wrap(name.text, nameW, 3);
       parts.forEach((part, partIndex) => {
         const cells =
           partIndex === 0
             ? [numberCells(String(line.quantity), price, total)[0], { x: nameX, text: part }, ...numberCells("", price, total).slice(1)]
             : [{ x: nameX, text: part }];
-        lines.push(columnsLine("A", cells, { codePage }));
+        lines.push(columnsLine("A", cells, { codePage, bold: true }));
       });
     } else {
       // The name cannot be printed as text (e.g. Arabic): the WHOLE row is drawn as
@@ -392,13 +397,20 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
 
   lines.push({ kind: "text", text: RULE_A, font: "A" });
 
-  // Total: "TOTAL TTC" LEFT, the amount RIGHT (aligned with the Montant column), same line.
+  // Total: "TOTAL TTC" LEFT, the amount RIGHT (aligned with the Montant column),
+  // same line, bold, and the biggest line of the ticket: double width AND height
+  // when both fit on the half-width grid (24 columns), otherwise (a very large
+  // amount) double height only so no digit is ever lost.
+  const totalLabel = "TOTAL TTC";
+  const totalAmount = money(sale.totalTTC);
+  const bigTotalFits = totalLabel.length + 1 + totalAmount.length <= COLUMNS_FONT_A / 2;
   lines.push({
     kind: "text",
-    text: leftRight("TOTAL TTC", money(sale.totalTTC), COLUMNS_FONT_A),
+    text: leftRight(totalLabel, totalAmount, bigTotalFits ? COLUMNS_FONT_A / 2 : COLUMNS_FONT_A),
     font: "A",
     bold: true,
-    tall: true,
+    big: bigTotalFits,
+    tall: !bigTotalFits,
     codePage,
   });
   lines.push({ kind: "text", text: RULE_A, font: "A" });

@@ -793,6 +793,77 @@ body {
     font-size: 13px;
   }
 
+  /* DRIVER ticket only (ReceiptPrint without `ruled`, class
+     .receipt-print-driver): readability pass asked from a real ticket photo.
+     Every rule below hangs on that class, so the counter POS ticket (.receipt-
+     print-ruled) is untouched.
+     - Type x1.3 of the former sizes (titles / info / footer 10px -> 13px, the
+       product rows 13px -> 16.9px; 58mm: 9px -> 11.7px) and everything bold.
+     - The total is the biggest line (20px, 14px on 58mm), still amount on the
+       left and "TOTAL TTC" on the right; it wraps instead of overlapping.
+     - Because the rows are bigger, the price / amount columns are widened (they
+       must never lose a digit) and DESIGNATION may use 3 lines instead of 2, so
+       a long name is read rather than cut. */
+  .receipt-print-ticket.receipt-print-driver {
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-ticket.receipt-print-driver {
+    font-size: 11.7px;
+  }
+
+  .receipt-print-driver .receipt-print-brand {
+    font-size: 20.8px;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-driver .receipt-print-brand {
+    font-size: 17px;
+  }
+
+  .receipt-print-area[data-document="sale"]:not([data-paper="58"]) .receipt-print-driver .receipt-print-lines {
+    font-size: 16.9px;
+  }
+
+  .receipt-print-area[data-document="sale"] .receipt-print-driver .receipt-print-grid {
+    grid-template-columns: 8mm minmax(0, 1fr) 18mm 22mm;
+    gap: 1mm;
+  }
+
+  /* 58mm (55mm of content): the column titles stay at the former 9px (bold) so
+     DESIGNATION still fits its column, and the NUMBERS of the rows are 10.5px
+     (a 29.628,00 amount fits 16mm, a 1.234,50 price 13.5mm). */
+  .receipt-print-area[data-document="sale"][data-paper="58"] .receipt-print-driver .receipt-print-grid {
+    grid-template-columns: 5.5mm minmax(0, 1fr) 13.5mm 16mm;
+    gap: 0.7mm;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-driver .receipt-print-head {
+    font-size: 9px;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-driver .receipt-print-lines .receipt-print-number {
+    font-size: 10.5px;
+  }
+
+  .receipt-print-driver .receipt-print-number {
+    white-space: nowrap;
+  }
+
+  .receipt-print-driver .receipt-print-product {
+    max-height: 3.75em;
+  }
+
+  .receipt-print-driver .receipt-print-total {
+    flex-wrap: wrap;
+    font-size: 20px;
+    font-weight: 800;
+  }
+
+  .receipt-print-area[data-paper="58"] .receipt-print-driver .receipt-print-total {
+    font-size: 14px;
+  }
+
   /* Unpaid ("facture du jour" printed before collection) marker - a plain
      paid ticket must never be mistaken for this one. */
   .receipt-print-pending {

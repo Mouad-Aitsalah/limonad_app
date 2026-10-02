@@ -175,33 +175,55 @@ test("the printed rows and total equal the web ticket's (same data, nothing reco
   assert.equal(total.text.endsWith(webTotal), true);
 });
 
-test("titles keep the base size (font B), row values are ~1.3x (font A), widths and order fixed", () => {
+test("driver ticket readability: titles AND row values are font A (titles were font B, 1.33x smaller) and BOLD, widths and order fixed", () => {
   const lines = textLines(buildReceiptLines(saleOf([{ name: "Produit A", unitTTC: 40, quantity: 2 }])));
   const head = lines.find((t) => t.text.includes("DESIGNATION"))!;
-  assert.equal(head.font, "B");
+  assert.equal(head.font, "A");
   assert.equal(head.bold, true);
   assert.deepEqual(head.text.trim().split(/\s+/).filter(Boolean), ["QTE", "DESIGNATION", "Prix", "TTC", "Montant"]);
-  assert.equal(head.text.length, COLUMNS_FONT_B);
+  assert.equal(head.text.length, COLUMNS_FONT_A);
   const row = lines.find((t) => t.text.includes("Produit A"))!;
   assert.equal(row.font, "A");
+  assert.equal(row.bold, true);
   assert.equal(row.text.length, COLUMNS_FONT_A);
-  // font A glyphs are 12x24 dots against 9x17 for font B: 1.33x / 1.41x
+  // no font B anywhere on a sale ticket any more
+  assert.equal(lines.some((t) => t.font === "B"), false);
+  // font A glyphs are 12x24 dots against 9x17 for font B: 1.33x / 1.41x - the requested ~1.3x
   assert.ok(12 / 9 > 1.25 && 12 / 9 < 1.4);
   // the right edge of the numbers lines up under the titles (same dots)
-  const rightDots = (text: string, char: number) => text.length * char;
-  assert.equal(rightDots(head.text, 9), rightDots(row.text, 12));
+  assert.equal(head.text.length * 12, row.text.length * 12);
 });
 
-test("total: TOTAL TTC on the LEFT, the amount on the RIGHT edge (like the Montant column), one line, emphasised", () => {
+test("every text line of the ticket is bold (brand, info, titles, rows, total, footer)", () => {
+  const lines = buildReceiptLines(
+    saleOf([{ name: "Produit A", unitTTC: 40, quantity: 2 }, { name: "Produit B", unitTTC: 5, quantity: 1 }], {
+      customer: { id: "c", code: "34211", name: "Client Un" },
+    }),
+  );
+  const notBold = lines.filter((l) => (l.kind === "text" || l.kind === "raster") && !l.bold).map((l) => (l.kind === "text" || l.kind === "raster" ? l.text : ""));
+  // only the horizontal rules are not bold text
+  assert.deepEqual([...new Set(notBold)].filter((t) => !/^-+$/.test(t)), []);
+});
+
+test("total: TOTAL TTC on the LEFT, the amount on the RIGHT edge, one line, bold and the BIGGEST line (double width and height)", () => {
   const lines = textLines(buildReceiptLines(saleOf([{ name: "A", unitTTC: 928, quantity: 1 }])));
   const total = lines.find((t) => t.text.includes("TOTAL TTC"))!;
-  assert.equal(total.text.length, COLUMNS_FONT_A);
+  // double width halves the columns: the line is padded to the 24-column grid, i.e. the full paper width
+  assert.equal(total.text.length, COLUMNS_FONT_A / 2);
   assert.match(total.text, /^TOTAL TTC\s+928,00 DH$/);
   assert.equal(total.bold, true);
+  assert.equal(total.big, true);
+  assert.equal(total.tall, false);
+});
+
+test("total: an amount too long for double width falls back to double height - never a lost digit", () => {
+  const lines = textLines(buildReceiptLines(saleOf([{ name: "A", unitTTC: 1234567.5, quantity: 12 }])));
+  const total = lines.find((t) => t.text.includes("TOTAL TTC"))!;
+  assert.equal(total.big, false);
   assert.equal(total.tall, true);
-  // the amount ends on the last column, exactly where the Montant numbers end
-  const row = lines.find((t) => /^1\s+A\s/.test(t.text))!;
-  assert.equal(total.text.trimEnd().length, row.text.trimEnd().length);
+  assert.equal(total.bold, true);
+  assert.equal(total.text.length, COLUMNS_FONT_A);
+  assert.match(total.text, /^TOTAL TTC\s+[\d.]+,\d\d DH$/);
 });
 
 function cellsOf(line: TextLine): Array<{ x: number; text: string }> {
@@ -221,8 +243,8 @@ test("QTE -> DESIGNATION gap is doubled with REAL ESC $ column positions; QTE 2,
     const [qteTitle, designation, prixTitle, montantTitle] = cellsOf(head);
     const [qty, name, unit, amountCell] = cellsOf(row);
 
-    // sizes unchanged: titles font B, values font A
-    assert.equal(head.font, "B");
+    // titles and values are both font A now (bold)
+    assert.equal(head.font, "A");
     assert.equal(row.font, "A");
     // QTE and the quantity share the left edge
     assert.equal(qteTitle.x, 0);
@@ -231,24 +253,24 @@ test("QTE -> DESIGNATION gap is doubled with REAL ESC $ column positions; QTE 2,
     // DESIGNATION starts EXACTLY where the product name starts
     assert.equal(designation.x, name.x);
     // the gap between the end of "QTE" and DESIGNATION is about twice the old one
-    const gap = designation.x - "QTE".length * 9;
+    const gap = designation.x - "QTE".length * 12;
     assert.ok(gap >= 2 * OLD_GAP_DOTS, `gap ${gap} dots vs old ${OLD_GAP_DOTS}`);
     // the quantity never touches the name, even at 120
     assert.ok(name.x - quantity.toString().length * 12 >= 60, "at least 60 dots (5 characters) between quantity and name");
     // Prix TTC / Montant: right-aligned to fixed edges - identical for every quantity
-    const priceEdgeTitle = prixTitle.x + prixTitle.text.length * 9;
+    const priceEdgeTitle = prixTitle.x + prixTitle.text.length * 12;
     const priceEdgeValue = unit.x + unit.text.length * 12;
-    assert.ok(Math.abs(priceEdgeTitle - priceEdgeValue) <= 9);
-    assert.equal(montantTitle.x + montantTitle.text.length * 9, 576);
+    assert.equal(priceEdgeTitle, priceEdgeValue);
+    assert.equal(montantTitle.x + montantTitle.text.length * 12, 576);
     assert.equal(amountCell.x + amountCell.text.length * 12, 576);
     reference.priceX ??= priceEdgeValue;
     reference.montantX ??= amountCell.x + amountCell.text.length * 12;
     assert.equal(priceEdgeValue, reference.priceX);
     assert.equal(amountCell.x + amountCell.text.length * 12, reference.montantX);
-    // Total line untouched: TOTAL TTC left, amount right
+    // Total line: TOTAL TTC left, amount right (double width -> 24 columns)
     reference.totalText ??= total.text.replace(/\d[\d.,]*/, "N");
     assert.match(total.text, /^TOTAL TTC\s+[\d.,]+ DH$/);
-    assert.equal(total.text.length, COLUMNS_FONT_A);
+    assert.equal(total.text.length, COLUMNS_FONT_A / 2);
   }
 });
 
@@ -279,8 +301,8 @@ test("every value is at the SAME position as its title: qty 2 / 8 / 120, long na
         const [qty, name, price, amount] = cells;
         assert.equal(qty.x, qteTitle.x, `${label}: quantity x = QTE x`);
         assert.equal(name.x, designation.x, `${label}: name x = DESIGNATION x`);
-        assert.equal(price.x + price.text.length * 12, prixTitle.x + prixTitle.text.length * 9, `${label}: price column = Prix TTC column`);
-        assert.equal(amount.x + amount.text.length * 12, montantTitle.x + montantTitle.text.length * 9, `${label}: amount column = Montant column`);
+        assert.equal(price.x + price.text.length * 12, prixTitle.x + prixTitle.text.length * 12, `${label}: price column = Prix TTC column`);
+        assert.equal(amount.x + amount.text.length * 12, montantTitle.x + montantTitle.text.length * 12, `${label}: amount column = Montant column`);
         productRowsSeen += 1;
       } else {
         // a wrapped name (2nd line) sits under DESIGNATION only
@@ -298,11 +320,11 @@ test("every value is at the SAME position as its title: qty 2 / 8 / 120, long na
 test("the column positions reach the printer as ESC $ (absolute position), with the motion unit set to 1 dot", () => {
   const { bytes } = buildReceiptEscPos(saleOf([{ name: "Eau 1/2L", unitTTC: 72, quantity: 2 }]));
   assert.ok(hasSequence(bytes, [0x1d, 0x50, 203, 203]), "GS P 203 203");
-  assert.ok(hasSequence(bytes, [0x1b, 0x24, 117, 0]), "ESC $ 117 0 : DESIGNATION / name at x = 117 dots");
+  assert.ok(hasSequence(bytes, [0x1b, 0x24, 126, 0]), "ESC $ 126 0 : DESIGNATION / name at x = 126 dots");
   assert.ok(hasSequence(bytes, [0x1b, 0x24, 0, 0]), "ESC $ 0 0 : QTE / quantity at the left margin");
   // the row is 4 positioned cells, not padded with spaces
   const eau = Buffer.from(bytes).toString("latin1");
-  assert.ok(eau.includes("\x1b$u\x00Eau 1/2L"), "name printed right after its ESC $");
+  assert.ok(eau.includes("\x1b$~\x00Eau 1/2L"), "name printed right after its ESC $");
   assert.equal(/2 {3,}Eau/.test(eau), false, "no run of spaces between quantity and name");
 });
 
@@ -364,9 +386,10 @@ test("ESC/POS stream: initialise, code page, fonts, alignment, cut - and accents
   assert.deepEqual([bytes[0], bytes[1]], [0x1b, 0x40]);
   assert.deepEqual(Array.from(bytes.slice(-4)), [0x1d, 0x56, 0x42, 0x00]);
   assert.ok(hasSequence(bytes, [0x1b, 0x74, 19]), "PC858 selected");
-  assert.ok(hasSequence(bytes, [0x1b, 0x4d, 0x01]), "font B for the titles");
-  assert.ok(hasSequence(bytes, [0x1b, 0x4d, 0x00]), "font A for the values");
-  assert.ok(hasSequence(bytes, [0x1d, 0x21, 0x01]), "tall total");
+  assert.equal(hasSequence(bytes, [0x1b, 0x4d, 0x01]), false, "no font B on a sale ticket any more");
+  assert.ok(hasSequence(bytes, [0x1b, 0x4d, 0x00]), "font A for titles and values");
+  assert.ok(hasSequence(bytes, [0x1b, 0x45, 0x01]), "bold (ESC E 1)");
+  assert.ok(hasSequence(bytes, [0x1d, 0x21, 0x11]), "double width and height total");
   assert.ok(hasSequence(bytes, [0x43, 0x72, 0x8a, 0x6d, 0x65]), "Crème -> C r 0x8A m e");
   assert.ok(hasSequence(bytes, [0x90, 0x74, 0x69, 0x65, 0x6e, 0x6e, 0x65]), "Étienne -> 0x90 ...");
   assert.equal(rasterLines, 0, "a Latin ticket is never an image");
@@ -387,7 +410,7 @@ test("an Arabic product name: the WHOLE row is one image line (same line for qua
   const cells = (rows[0] as Extract<ReceiptLine, { kind: "rasterCells" }>).cells;
   assert.deepEqual(cells.map((c) => [c.text, c.at, c.align]), [
     ["3", 0, "left"],
-    ["مشروب غازي", 117, "left"],
+    ["مشروب غازي", 126, "left"],
     ["12,00", 444, "right"],
     ["36,00", 576, "right"],
   ]);
@@ -475,4 +498,19 @@ test("encodeReceipt never leaks emphasis or size from one line to the next", () 
   const { bytes } = encodeReceipt(lines);
   assert.ok(hasSequence(bytes, [0x1d, 0x21, 0x11]));
   assert.ok(hasSequence(bytes, [0x1b, 0x45, 0x00, 0x1d, 0x21, 0x00]), "reset after the big line");
+});
+
+test("a long product name now uses up to 3 lines (was 2) under DESIGNATION, every line inside the paper width", () => {
+  const name = "Eau minérale gazeuse naturelle Sidi Ali pack économique de six bouteilles 1,5L";
+  const lines = textLines(buildReceiptLines(saleOf([{ name, unitTTC: 36, quantity: 3 }])));
+  const head = lines.find((t) => t.text.includes("DESIGNATION"))!;
+  const designationX = cellsOf(head)[1].x;
+  const nameLines = lines.filter((t) => {
+    const cells = t.cells ?? [];
+    return cells.length >= 1 && cells.some((c) => c.x === designationX) && !t.text.includes("DESIGNATION");
+  });
+  assert.equal(nameLines.length, 3);
+  assert.ok(nameLines.every((t) => t.text.length <= COLUMNS_FONT_A));
+  // nothing but the very end of a very long name may be cut
+  assert.ok(nameLines.map((t) => (t.cells ?? []).find((c) => c.x === designationX)!.text).join(" ").startsWith("Eau minérale gazeuse naturelle"));
 });
