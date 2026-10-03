@@ -76,7 +76,10 @@ test("the reference under the name and the row values keep their classes", () =>
       .replace(/ max-lg:font-bold/g, "")
       .replace(/ max-lg:text-\[17\.296px\]/g, "")
       .replace(/ max-lg:w-8 max-lg:text-\[17\.6px\]!/g, "")
-      .replace(/max-lg:text-\[13\.2px\]/g, "max-lg:text-xs");
+      .replace(/ max-lg:w-\[(?:37|24)%\]/g, "")
+      .replace(/ max-lg:align-middle!/g, "")
+      .replace(/max-lg:block max-lg:text-\[17\.6px\] max-lg:leading-tight max-lg:whitespace-normal/g, "max-lg:text-xs")
+      .replace(/(\d) DH/g, "$1 DH");
   assert.equal(strip(on), off);
 });
 
@@ -108,9 +111,8 @@ test("only the driver POS turns the option on; the counter POS and the web caiss
   assert.equal(/driverMobileStyle/.test(read("./pos-layout.tsx")), false);
 });
 
-test("driver POS on phones: quantity x1.1 (16px -> 17.6px) and unit price TTC x1.1 (12px -> 13.2px)", () => {
+test("driver POS on phones: unit price TTC and quantity share the same 17.6px", () => {
   assert.ok(Math.abs(16 * 1.1 - 17.6) < 1e-9);
-  assert.ok(Math.abs(12 * 1.1 - 13.2) < 1e-9);
   const markup = render({ driverMobileStyle: true });
   const quantityInputs = [...markup.matchAll(/<input[^>]*aria-label="Quantite"[^>]*>/g)].map((m) => m[0]);
   assert.equal(quantityInputs.length, 3);
@@ -121,9 +123,29 @@ test("driver POS on phones: quantity x1.1 (16px -> 17.6px) and unit price TTC x1
   const prices = [...markup.matchAll(/<span class="([^"]*)">62,50/g)].map((m) => m[1]);
   assert.equal(prices.length, 3);
   for (const cls of prices) {
-    assert.match(cls, /max-lg:text-\[13\.2px\]/);
-    assert.equal(/max-lg:text-xs/.test(cls), false, "the 12px class is replaced, not stacked");
+    assert.match(cls, /max-lg:text-\[17\.6px\]/, "same size as the quantity");
+    assert.equal(/max-lg:text-xs|13\.2px/.test(cls), false, "the 12px class is replaced, not stacked");
+    // a 4-digit amount may drop its unit under it (centred) instead of overflowing
+    assert.match(cls, /max-lg:block/);
+    assert.match(cls, /max-lg:whitespace-normal/);
   }
+  // value and format untouched: "62,50 DH" (regular space only so the unit can wrap)
+  assert.equal((markup.match(/62,50[  ]DH/g) ?? []).length, 3);
+});
+
+test("driver POS on phones: Qte / Prix / Rem. cells are centred on the row and the columns re-balanced", () => {
+  const markup = render({ driverMobileStyle: true });
+  const cells = [...markup.matchAll(/<td[^>]*class="([^"]*)"/g)].map((m) => m[1]);
+  const middle = cells.filter((cls) => /max-lg:align-middle!/.test(cls));
+  assert.equal(middle.length, 9, "3 rows x (Qte, Prix, Rem.)");
+  // titles and cells of a column share one width: 37 + 24 + 24 + 15 = 100
+  for (const cls of cells.filter((c) => /w-\[26%\]/.test(c))) assert.match(cls, /max-lg:w-\[24%\]/);
+  for (const cls of cells.filter((c) => /w-\[19%\]/.test(c))) assert.match(cls, /max-lg:w-\[24%\]/);
+  for (const cls of cells.filter((c) => /w-\[40%\]/.test(c))) assert.match(cls, /max-lg:w-\[37%\]/);
+  for (const cls of cells.filter((c) => /w-\[15%\]/.test(c))) assert.equal(/max-lg:w-/.test(cls.replace(/w-\[15%\]/, "")), false, "Rem. keeps its width");
+  const off = render();
+  assert.equal(/align-middle!/.test(off), false);
+  assert.equal(/max-lg:w-\[(?:37|24)%\]/.test(off), false);
 });
 
 test("previous improvements are kept together with the new ones", () => {
@@ -138,6 +160,6 @@ test("the +/- buttons keep their size; nothing changes without the opt-in", () =
   const off = render();
   const buttonClasses = (markup: string) => [...markup.matchAll(/<button[^>]*aria-label="(?:Diminuer|Augmenter) la quantite"[^>]*class="([^"]*)"/g)].map((m) => m[1]);
   assert.deepEqual(buttonClasses(on), buttonClasses(off));
-  assert.equal(/17\.6px|13\.2px|max-lg:w-8/.test(off), false);
-  assert.equal(/17\.6px|13\.2px|max-lg:w-8/.test(render({ pcLayout: true })), false, "counter POS unchanged");
+  assert.equal(/17\.6px|13\.2px|max-lg:w-8|align-middle!/.test(off), false);
+  assert.equal(/17\.6px|13\.2px|max-lg:w-8|align-middle!/.test(render({ pcLayout: true })), false, "counter POS unchanged");
 });

@@ -58,9 +58,10 @@ type CartTableProps = {
    * Driver POS on a phone (< lg) only - opt-in, so the counter POS and every
    * other caller keep their current look: product names x1.15 (15.04px ->
    * 17.296px), the four column titles in bold (700 instead of 600), the
-   * quantity x1.1 (16px -> 17.6px) and the unit price TTC x1.1 (12px ->
-   * 13.2px). The reference line under the name, the +/- and delete buttons,
-   * the discount field and every size at >= lg are untouched.
+   * quantity x1.1 (16px -> 17.6px) and the unit price TTC at the same 17.6px
+   * (was 12px), with the Qte / Prix / Rem. cells centred on the vertical
+   * middle of the row. The reference line under the name, the +/- and delete
+   * buttons, the discount field and every size at >= lg are untouched.
    */
   driverMobileStyle?: boolean;
 };
@@ -95,6 +96,18 @@ const H_DESKTOP = "lg:text-[16.128px] lg:font-bold";
 // Opt-in (driverMobileStyle): column titles in bold on phones; same size,
 // colour, alignment and background as before.
 const H_MOBILE_BOLD = "max-lg:font-bold";
+// Opt-in (driverMobileStyle): phone column widths re-balanced for the 17.6px
+// unit price (Produit -3 and Qte -2 points for Prix +5; Rem. keeps its width).
+// Only the phone widths change - twMerge keeps the `lg:` ones.
+const COL_DRIVER_MOBILE = {
+  produit: "max-lg:w-[37%]",
+  qte: "max-lg:w-[24%]",
+  prix: "max-lg:w-[24%]",
+} as const;
+// Opt-in (driverMobileStyle): Qte / Prix / Rem. cells sit on the vertical
+// middle of the row (the default mobile alignment is top).
+// `!` because the row's own `[&>td]:align-top` rule is more specific.
+const CELL_DRIVER_MIDDLE = "max-lg:align-middle!";
 
 export function CartTable({
   lines,
@@ -116,6 +129,14 @@ export function CartTable({
   // frozen / pending lines and transfers.
   const belowCost = (line: CartLineComputed) =>
     pcLayout && !isTransfer && isSellingBelowCost(line.unitPriceTTC, line.purchasePriceTTC);
+
+  // Same amount and format everywhere. Driver phone only: the no-break space
+  // before "DH" becomes a regular one so the unit can drop under a 4-digit
+  // amount that is wider than the Prix column (nowrap on >= lg keeps one line).
+  const unitPriceLabel = (line: CartLineComputed) => {
+    const label = formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC);
+    return driverMobileStyle ? label.replace(/ /g, " ") : label;
+  };
 
   if (lines.length === 0) {
     return (
@@ -142,11 +163,11 @@ export function CartTable({
     <Table className="table-fixed min-w-0 lg:min-w-[48rem]">
       <TableHeader>
         <TableRow>
-          <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP, driverMobileStyle && H_MOBILE_BOLD)}>Produit</TableHead>
-          <TableHead className={cn(COL.qte, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && H_MOBILE_BOLD)}>
+          <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP, driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.produit])}>Produit</TableHead>
+          <TableHead className={cn(COL.qte, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.qte])}>
             Qte
           </TableHead>
-          <TableHead className={cn(COL.prix, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && H_MOBILE_BOLD)}>
+          <TableHead className={cn(COL.prix, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.prix])}>
             {isTransfer ? "Valeur unit." : "Prix TTC"}
           </TableHead>
           {!isTransfer && (
@@ -170,7 +191,7 @@ export function CartTable({
           // readable when the product name wraps to 2-3 lines. Desktop keeps
           // its previously-validated vertical-align (middle).
           <TableRow key={line.productId} data-product-id={line.productId} className={cn("max-lg:[&>td]:align-top", pcLayout && "lg:[&>td]:py-2")}>
-            <TableCell className={cn(COL.produit, "relative pr-1")}>
+            <TableCell className={cn(COL.produit, "relative pr-1", driverMobileStyle && COL_DRIVER_MOBILE.produit)}>
               {/* Mobile-only compact delete - pulled out of the text flow
                   (absolute, top-right) so the name can use the full column
                   width on every line; `pr-5` keeps the first line clear of it.
@@ -221,7 +242,7 @@ export function CartTable({
                 )}
               </div>
             </TableCell>
-            <TableCell className={COL.qte}>
+            <TableCell className={cn(COL.qte, driverMobileStyle && [COL_DRIVER_MOBILE.qte, CELL_DRIVER_MIDDLE])}>
               <div className="flex items-center justify-center gap-0 lg:gap-1">
                 <Button
                   type="button"
@@ -268,7 +289,13 @@ export function CartTable({
                 </Button>
               </div>
             </TableCell>
-            <TableCell className={cn(COL.prix, "text-center tabular-nums")}>
+            <TableCell
+              className={cn(
+                COL.prix,
+                "text-center tabular-nums",
+                driverMobileStyle && [COL_DRIVER_MOBILE.prix, CELL_DRIVER_MIDDLE],
+              )}
+            >
               {priceEditable ? (
                 <input
                   data-below-cost={belowCost(line) ? "true" : undefined}
@@ -302,17 +329,20 @@ export function CartTable({
                 <span
                   className={cn(
                     "max-lg:text-xs",
-                    // Driver POS phone: price x1.1 (12px -> 13.2px), value/format/weight untouched.
-                    driverMobileStyle && "max-lg:text-[13.2px]",
+                    // Driver POS phone: same size as the quantity (12px -> 17.6px),
+                    // value/format/weight untouched. The unit stays on the amount's
+                    // line, and only drops below it (centred) when a 4-digit amount
+                    // is wider than the column.
+                    driverMobileStyle && "max-lg:block max-lg:text-[17.6px] max-lg:leading-tight max-lg:whitespace-normal",
                     pcLayout && "lg:text-[21px] lg:font-medium",
                   )}
                 >
-                  {formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC)}
+                  {unitPriceLabel(line)}
                 </span>
               )}
             </TableCell>
             {!isTransfer && (
-              <TableCell className={cn(COL.rem, "text-center")}>
+              <TableCell className={cn(COL.rem, "text-center", driverMobileStyle && CELL_DRIVER_MIDDLE)}>
                 <input
                   type="number"
                   min={0}
