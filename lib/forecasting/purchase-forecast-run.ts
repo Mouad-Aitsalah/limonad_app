@@ -1,6 +1,6 @@
 import { getCurrentBusinessDayParam } from "@/lib/business-day";
 import { addDays } from "./daily-sales-series";
-import { buildSnapshotRows, type SnapshotRow } from "./purchase-forecast-snapshot";
+import { buildSnapshotRows, isMissingColumnError, type SnapshotRow } from "./purchase-forecast-snapshot";
 import type { ForecastDb } from "./product-daily-sales";
 import { buildSalesForecast } from "./sales-forecast";
 import type { Prisma } from "@/lib/generated/prisma/client";
@@ -43,29 +43,46 @@ export type SnapshotRunSummary = {
  * transaction client, which cannot itself open a nested transaction.
  */
 async function upsertSnapshotRows(db: CronDb, rows: SnapshotRow[]): Promise<void> {
+  // The two optional columns (computedAt, dailyForecast) are written when the
+  // database has them. Before the migration is applied the first write fails
+  // with a "column does not exist" error: the run then continues WITHOUT them
+  // (same behaviour as before they existed) instead of failing the whole cron.
+  let withExtras = true;
   for (const row of rows) {
-    await db.purchaseForecastSnapshot.upsert({
-      where: {
-        organizationId_businessDay_productId: {
-          organizationId: row.organizationId,
-          businessDay: row.businessDay,
-          productId: row.productId,
-        },
+    const { computedAt, dailyForecast, ...base } = row;
+    const where = {
+      organizationId_businessDay_productId: {
+        organizationId: row.organizationId,
+        businessDay: row.businessDay,
+        productId: row.productId,
       },
-      create: row,
-      update: {
-        productName: row.productName,
-        forecast1Day: row.forecast1Day,
-        forecast3Days: row.forecast3Days,
-        forecast7Days: row.forecast7Days,
-        predictedQuantityRaw: row.predictedQuantityRaw,
-        model: row.model,
-        mae: row.mae,
-        reliability: row.reliability,
-        historyDays: row.historyDays,
-        soldDays: row.soldDays,
-      },
-    });
+    };
+    const baseUpdate = {
+      productName: row.productName,
+      forecast1Day: row.forecast1Day,
+      forecast3Days: row.forecast3Days,
+      forecast7Days: row.forecast7Days,
+      predictedQuantityRaw: row.predictedQuantityRaw,
+      model: row.model,
+      mae: row.mae,
+      reliability: row.reliability,
+      historyDays: row.historyDays,
+      soldDays: row.soldDays,
+    };
+    if (withExtras) {
+      try {
+        await db.purchaseForecastSnapshot.upsert({
+          where,
+          create: { ...base, computedAt: computedAt ?? null, dailyForecast: dailyForecast ?? undefined },
+          update: { ...baseUpdate, computedAt: computedAt ?? null, dailyForecast: dailyForecast ?? undefined },
+        });
+        continue;
+      } catch (error) {
+        if (!isMissingColumnError(error)) throw error;
+        withExtras = false;
+      }
+    }
+    await db.purchaseForecastSnapshot.upsert({ where, create: base, update: baseUpdate });
   }
 }
 

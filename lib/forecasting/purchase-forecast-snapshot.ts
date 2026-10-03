@@ -15,6 +15,9 @@ import type { SalesForecastResult } from "./sales-forecast";
  * change is reflected immediately without ever redoing the forecast.
  */
 
+/** One predicted day of a product: unrounded quantity, rounded to 1/100 for storage. */
+export type DailyForecastPoint = { date: string; quantity: number };
+
 export type SnapshotRow = {
   organizationId: string;
   businessDay: string;
@@ -30,6 +33,10 @@ export type SnapshotRow = {
   reliability: string;
   historyDays: number;
   soldDays: number;
+  /** When the engine produced this row (dashboard "last update"). Optional: absent on rows read from a database without the column. */
+  computedAt?: Date | null;
+  /** The 7 daily predictions of this product (dashboard chart). null/absent: not stored. */
+  dailyForecast?: DailyForecastPoint[] | null;
 };
 
 /**
@@ -43,6 +50,7 @@ export function buildSnapshotRows(
   organizationId: string,
   businessDay: string,
   forecast: SalesForecastResult,
+  computedAt: Date = new Date(),
 ): SnapshotRow[] {
   const predictionsByProduct = new Map<string, SalesPrediction[]>();
   for (const prediction of forecast.predictions) {
@@ -74,9 +82,129 @@ export function buildSnapshotRows(
       reliability: assessSnapshotReliability(history.length, history.filter((value) => value > 0).length),
       historyDays: history.length,
       soldDays: history.filter((value) => value > 0).length,
+      computedAt,
+      dailyForecast: [...predictions]
+        .filter((p) => p.horizonDay <= 7)
+        .sort((a, b) => a.horizonDay - b.horizonDay)
+        .map((p) => ({ date: p.predictionDate, quantity: Math.round(p.predictedQuantityRaw * 100) / 100 })),
     });
   }
   return rows;
+}
+
+/**
+ * True for the error a database raises when a column the Prisma client knows
+ * does not exist yet (migration not applied): Prisma code P2022, or the raw
+ * Postgres message. The two new snapshot columns are optional, so every
+ * read / write that touches them falls back to the previous shape instead of
+ * breaking the AI Assistant, the cron or the dashboard during a deployment
+ * that precedes the migration.
+ */
+export function isMissingColumnError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  if (code === "P2022") return true;
+  const message = String((error as { message?: unknown }).message ?? "");
+  return /column .* does not exist|does not exist in the current database/i.test(message);
+}
+
+/** Validates the stored JSON: an array of { date, quantity }, otherwise null (never guessed). */
+export function parseDailyForecast(value: unknown): DailyForecastPoint[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const points: DailyForecastPoint[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const { date, quantity } = item as { date?: unknown; quantity?: unknown };
+    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    if (typeof quantity !== "number" || !Number.isFinite(quantity) || quantity < 0) return null;
+    points.push({ date, quantity });
+  }
+  return points;
+}
+
+type RawSnapshotRow = {
+  productId: string;
+  productName: string;
+  forecast1Day: number;
+  forecast3Days: number;
+  forecast7Days: number;
+  predictedQuantityRaw: number;
+  model: string;
+  mae: number | null;
+  reliability: string;
+  historyDays: number;
+  soldDays: number;
+  computedAt?: Date | null;
+  dailyForecast?: unknown;
+};
+
+const SNAPSHOT_BASE_SELECT = {
+  productId: true,
+  productName: true,
+  forecast1Day: true,
+  forecast3Days: true,
+  forecast7Days: true,
+  predictedQuantityRaw: true,
+  model: true,
+  mae: true,
+  reliability: true,
+  historyDays: true,
+  soldDays: true,
+} as const;
+
+/**
+ * Latest snapshot day (<= `today`) of an organisation with its rows, or null
+ * when the cache is empty. Used by the dashboard, which must NOT trigger the
+ * forecast engine on page load: yesterday's snapshot is still shown (flagged by
+ * the caller) when today's has not been computed yet. Reads the two optional
+ * columns when they exist; on a database without them it returns the rows
+ * without computedAt / dailyForecast.
+ */
+export async function readLatestSnapshot(
+  db: ForecastDb,
+  organizationId: string,
+  today: string,
+): Promise<{ businessDay: string; rows: SnapshotRow[] } | null> {
+  const latest = await db.purchaseForecastSnapshot.findFirst({
+    where: { organizationId, businessDay: { lte: today } },
+    orderBy: { businessDay: "desc" },
+    select: { businessDay: true },
+  });
+  if (!latest) return null;
+  const businessDay = latest.businessDay;
+  const where = { organizationId, businessDay };
+
+  let withExtras: RawSnapshotRow[];
+  try {
+    withExtras = await db.purchaseForecastSnapshot.findMany({
+      where,
+      select: { ...SNAPSHOT_BASE_SELECT, computedAt: true, dailyForecast: true },
+    });
+  } catch (error) {
+    if (!isMissingColumnError(error)) throw error;
+    withExtras = await db.purchaseForecastSnapshot.findMany({ where, select: SNAPSHOT_BASE_SELECT });
+  }
+
+  return {
+    businessDay,
+    rows: withExtras.map((row) => ({
+      organizationId,
+      businessDay,
+      productId: row.productId,
+      productName: row.productName,
+      forecast1Day: row.forecast1Day,
+      forecast3Days: row.forecast3Days,
+      forecast7Days: row.forecast7Days,
+      predictedQuantityRaw: row.predictedQuantityRaw,
+      model: row.model as ModelName,
+      mae: row.mae,
+      reliability: row.reliability,
+      historyDays: row.historyDays,
+      soldDays: row.soldDays,
+      computedAt: row.computedAt ?? null,
+      dailyForecast: parseDailyForecast(row.dailyForecast),
+    })),
+  };
 }
 
 /**

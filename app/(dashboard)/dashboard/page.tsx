@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
+import { DashboardForecastSection } from "@/components/dashboard/forecast/dashboard-forecast-section";
+import { ForecastSectionSkeleton } from "@/components/dashboard/forecast/forecast-section-view";
 import { DirectionCategoryChart } from "@/components/dashboard/direction-category-chart";
 import { DirectionEvolutionChart } from "@/components/dashboard/direction-evolution-chart";
 import { DirectionKpiCard } from "@/components/dashboard/direction-kpi-card";
@@ -9,6 +12,8 @@ import { DirectionTopCustomersCard } from "@/components/dashboard/direction-top-
 import { DirectionTopProductsCard } from "@/components/dashboard/direction-top-products";
 import { DirectionWatchlistCard } from "@/components/dashboard/direction-watchlist";
 import { AppPageHeader } from "@/components/ui/app-page-header";
+import { canViewForecast } from "@/lib/forecasting/forecast-access";
+import { getCurrentSessionUser } from "@/lib/server/auth";
 import { getDirectionDashboardData } from "@/lib/server/dashboard-direction";
 
 export const metadata: Metadata = {
@@ -25,6 +30,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const params = await searchParams;
   const data = await getDirectionDashboardData(params);
   const kpis = data.kpis;
+  // "Intelligence & Prévisions IA" (purchase recommendations, global analysis):
+  // admin and depot manager only - the cashier can open this page but never
+  // sees the section (getDashboardForecast refuses the cashier as well).
+  const sessionUser = await getCurrentSessionUser();
+  const showForecast = canViewForecast(sessionUser?.role);
 
   return (
     <div className="space-y-6">
@@ -56,6 +66,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <DirectionKpiCard kpi={kpis.chargesHT} />
         <DirectionKpiCard kpi={kpis.activeCustomers} />
       </div>
+
+      {showForecast ? (
+        <Suspense fallback={<ForecastSectionSkeleton />}>
+          <DashboardForecastSection />
+        </Suspense>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
         <DirectionEvolutionChart granularity={data.salesEvolution.granularity} points={data.salesEvolution.points} />

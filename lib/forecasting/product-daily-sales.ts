@@ -106,6 +106,38 @@ export async function queryProductDailySalesRows(
   }));
 }
 
+/**
+ * Last business day with a real sale, per product ("YYYY-MM-DD"), up to and
+ * including `to`. One aggregated, read-only query (same sale perimeter, same
+ * date rule and same business day as queryProductDailySalesRows). Products
+ * that never sold are absent from the map.
+ */
+export async function queryLastSaleDayByProduct(
+  db: ForecastDb,
+  organizationId: string,
+  to: string,
+): Promise<Map<string, string>> {
+  assertDay(to, "to");
+  const saleInstant = Prisma.sql`COALESCE(s."soldAt", s."validatedAt")`;
+  const rows = await db.$queryRaw<Array<{ productId: string; day: string }>>(Prisma.sql`
+    SELECT sl."productId" AS "productId",
+           to_char(
+             (((MAX(${saleInstant})) AT TIME ZONE 'UTC') AT TIME ZONE ${BUSINESS_DAY_TIME_ZONE} - interval '2 hours')::date,
+             'YYYY-MM-DD'
+           ) AS day
+    FROM "SaleLine" sl
+    JOIN "Sale" s ON s.id = sl."saleId"
+    JOIN "Product" p ON p.id = sl."productId"
+    WHERE s."organizationId" = ${organizationId}
+      AND p."organizationId" = ${organizationId}
+      AND s.status::text = ANY(${REAL_SALE_STATUSES})
+      AND s."validatedAt" IS NOT NULL
+      AND ${saleInstant} < ${businessDayRangeUtc(to).end}
+    GROUP BY sl."productId"
+  `);
+  return new Map(rows.map((row) => [row.productId, row.day]));
+}
+
 /** Dataset for one organisation: sparse or complete Produit x Jour series. */
 export async function buildProductDailySalesDataset(
   db: ForecastDb,

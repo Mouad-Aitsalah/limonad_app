@@ -1953,6 +1953,14 @@ model PurchaseForecastSnapshot {
   historyDays          Int
   soldDays             Int
   createdAt            DateTime     @default(now())
+  // Dashboard "Intelligence & Prévisions IA" - both optional/additive, NULL on
+  // every row written before they existed. computedAt: when the engine ran
+  // (createdAt only records the first insert; an idempotent re-run upserts the
+  // same row). dailyForecast: the 7 unrounded daily predictions of this
+  // product, [{ "date": "YYYY-MM-DD", "quantity": 1.23 }, ...], oldest first -
+  // what the per-day chart sums. Never a stock or purchase figure.
+  computedAt           DateTime?
+  dailyForecast        Json?
 
   @@unique([organizationId, businessDay, productId])
   @@index([organizationId, businessDay])

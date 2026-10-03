@@ -7,6 +7,9 @@ import {
   assessReliability,
   computeRecommendation,
   computeSafetyStock,
+  hasNoRecentSales,
+  isForecastEvaluable,
+  lowerReliability,
   type RecommendationInput,
 } from "./purchase-recommendation";
 
@@ -207,4 +210,77 @@ test("never a negative or fractional quantity, whatever the inputs; and the resu
     assert.equal(result.stockRegularizationRequired, result.currentStock < 0);
     assert.deepEqual(computeRecommendation(args), result);
   }
+});
+
+// ---- recency of sales and evaluability ---------------------------------------------------------
+
+const SOLD_LONG_AGO = new Array(28).fill(0);
+const SOLD_RECENTLY = [...new Array(27).fill(0), 2];
+
+test("recency: no sale for 28 days lowers the reliability by one level (sufficient -> limited)", () => {
+  const stale = computeRecommendation(
+    input({ historyDays: 252, soldDays: 22, recentValues: SOLD_LONG_AGO, mae: 0.4, forecast7Days: 0, forecast3Days: 0, forecast1Day: 0, currentStock: 5 }),
+  );
+  assert.equal(stale.noRecentSales, true);
+  assert.equal(stale.reliability, "limited");
+  assert.match(stale.reason, /Aucune vente sur les 28 derniers jours : fiabilité réduite/);
+  const fresh = computeRecommendation(
+    input({ historyDays: 252, soldDays: 22, recentValues: SOLD_RECENTLY, mae: 0.4, currentStock: 5 }),
+  );
+  assert.equal(fresh.noRecentSales, false);
+  assert.equal(fresh.reliability, "sufficient");
+});
+
+test("recency: limited -> very_limited, very_limited and none stay where they are", () => {
+  assert.equal(lowerReliability("sufficient"), "limited");
+  assert.equal(lowerReliability("limited"), "very_limited");
+  assert.equal(lowerReliability("very_limited"), "very_limited");
+  assert.equal(lowerReliability("none"), "none");
+  const limited = computeRecommendation(input({ historyDays: 40, soldDays: 10, recentValues: SOLD_LONG_AGO, mae: 0.3 }));
+  assert.equal(limited.reliability, "very_limited");
+  const never = computeRecommendation(input({ historyDays: 0, soldDays: 0, recentValues: [], mae: null }));
+  assert.equal(never.reliability, "none");
+  assert.equal(never.noRecentSales, false);
+});
+
+test("recency only changes the label: forecast figures and recommended quantity are untouched", () => {
+  const base = { historyDays: 252, soldDays: 22, mae: 0.4, forecast1Day: 2, forecast3Days: 6, forecast7Days: 14, currentStock: 3 };
+  const stale = computeRecommendation(input({ ...base, recentValues: SOLD_LONG_AGO }));
+  const fresh = computeRecommendation(input({ ...base, recentValues: SOLD_LONG_AGO.map((_, i) => (i === 27 ? 0 : 0)) }));
+  assert.equal(stale.forecast7Days, 14);
+  assert.equal(stale.targetStock, fresh.targetStock);
+  assert.equal(stale.recommendedPurchaseQuantity, fresh.recommendedPurchaseQuantity);
+  assert.equal(stale.model, fresh.model);
+});
+
+test("hasNoRecentSales: needs a past sale AND a known recent window with no sale", () => {
+  assert.equal(hasNoRecentSales(5, SOLD_LONG_AGO), true);
+  assert.equal(hasNoRecentSales(5, SOLD_RECENTLY), false);
+  assert.equal(hasNoRecentSales(0, SOLD_LONG_AGO), false, "never sold is 'none', not 'stale'");
+  assert.equal(hasNoRecentSales(5, []), true, "cached path: no entry in the 28-day window = no recent sale");
+});
+
+test("evaluation: no real sale in the 14-day test window -> mae null / evaluable false (not a perfect 0)", () => {
+  const result = computeRecommendation(
+    input({ historyDays: 252, soldDays: 22, recentValues: [...[3, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0], ...new Array(14).fill(0)], mae: 0 }),
+  );
+  assert.equal(result.evaluable, false);
+  assert.equal(result.mae, null);
+});
+
+test("evaluation: a real sale in the last 14 days keeps the MAE (zero included when it is earned)", () => {
+  const window = [...new Array(20).fill(0), 0, 0, 0, 0, 0, 4, 0, 0];
+  const result = computeRecommendation(input({ historyDays: 252, soldDays: 22, recentValues: window, mae: 0 }));
+  assert.equal(result.evaluable, true);
+  assert.equal(result.mae, 0);
+  const typical = computeRecommendation(input({ historyDays: 252, soldDays: 22, recentValues: window, mae: 1.3 }));
+  assert.equal(typical.mae, 1.3);
+});
+
+test("evaluation: never tested (mae null) is not evaluable; a window shorter than 14 days is not judged", () => {
+  assert.equal(isForecastEvaluable(null, SOLD_RECENTLY), false);
+  assert.equal(isForecastEvaluable(0.5, [0, 0, 0]), true);
+  assert.equal(isForecastEvaluable(0.5, []), false, "no sale at all in the window");
+  assert.equal(isForecastEvaluable(0.5, new Array(14).fill(0)), false);
+  assert.equal(isForecastEvaluable(0.5, [...new Array(13).fill(0), 1]), true);
 });

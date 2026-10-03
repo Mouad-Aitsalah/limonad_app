@@ -4,7 +4,7 @@ import type { ProductStatus } from "@/lib/generated/prisma/client";
 
 import { addDays } from "./daily-sales-series";
 import { stdDev } from "./features";
-import { sumForecastDays, type DailySeries, type ModelName, type SalesPrediction } from "./forecast-engine";
+import { DEFAULT_TEST_DAYS, sumForecastDays, type DailySeries, type ModelName, type SalesPrediction } from "./forecast-engine";
 import type { ForecastDb } from "./product-daily-sales";
 import { buildProductDailySalesDataset } from "./product-daily-sales";
 import { readSnapshotRows, type SnapshotRow } from "./purchase-forecast-snapshot";
@@ -59,6 +59,19 @@ import { buildSalesForecast, type SalesForecastOptions } from "./sales-forecast"
  *   very_limited  fewer than 21 days of history or fewer than 5 days with sales
  *   limited       fewer than 60 days of history or fewer than 15 days with sales
  *   sufficient    otherwise
+ *
+ * RECENCY: a product that HAS sold but not during the last 28 days
+ * (SAFETY_WINDOW_DAYS, the same window the safety stock uses) drops one level
+ * (sufficient -> limited, limited -> very_limited; never below very_limited,
+ * "none" stays "none") and `noRecentSales` is true: an old history says little
+ * about next week once sales have stopped. Only the label changes - the forecast
+ * figures, the models and the recommended quantity are untouched.
+ *
+ * EVALUATION: the test MAE of the model is only meaningful when the test window
+ * (the last DEFAULT_TEST_DAYS = 14 days of the series) holds at least one real
+ * sale; with an all-zero window, predicting 0 scores a "perfect" MAE of 0. The
+ * recommendation then reports `mae: null` / `evaluable: false` ("Non
+ * évaluable"). The model choice inside the engine is not affected.
  */
 
 export const SAFETY_Z = 1.28;
@@ -92,6 +105,13 @@ export type PurchaseRecommendation = {
   /** Test MAE of that model (mean absolute error per day); null when it could not be evaluated. */
   mae: number | null;
   reliability: Reliability;
+  /** true: the product has sold in the past but not during the last 28 days (reliability lowered by one level). */
+  noRecentSales: boolean;
+  /**
+   * false: the forecast error (`mae`, null then) cannot be assessed - the model was
+   * never tested, or the test window (last 14 days) had no real sale.
+   */
+  evaluable: boolean;
   historyDays: number;
   soldDays: number;
   reason: string;
@@ -130,6 +150,42 @@ export function assessReliability(historyDays: number, soldDays: number): Reliab
   return "sufficient";
 }
 
+/** One level lower; "very_limited" and "none" are already the floor of a product that has / never had sales. */
+export function lowerReliability(level: Reliability): Reliability {
+  if (level === "sufficient") return "limited";
+  if (level === "limited") return "very_limited";
+  return level;
+}
+
+/**
+ * True when the product has sold before but nothing in the last 28 days.
+ * `recentValues` are the daily quantities of the last 28 days (oldest first).
+ * An EMPTY window counts as "no recent sale": on the cached path the window
+ * query (queryRecentDailyValues) only returns the products that sold during it,
+ * so a product that has a snapshot (it did sell at some point) but no entry is
+ * exactly a product without a sale in the last 28 days.
+ */
+export function hasNoRecentSales(soldDays: number, recentValues: number[]): boolean {
+  return soldDays > 0 && !recentValues.some((value) => value > 0);
+}
+
+/**
+ * The model's test MAE is only an accuracy figure when the test window (the
+ * last 14 days) held a real sale. When it did not - an all-zero window, or an
+ * empty one (no sale at all in the last 28 days, see hasNoRecentSales) - or
+ * when the model was never evaluated (mae null), the forecast is "not
+ * evaluable". A recent window of fewer than 14 days (a very young product) is
+ * not judged here: there is nothing to compare it with.
+ */
+export function isForecastEvaluable(mae: number | null, recentValues: number[]): boolean {
+  if (mae === null) return false;
+  if (recentValues.length === 0) return false;
+  if (recentValues.length >= DEFAULT_TEST_DAYS && !recentValues.slice(-DEFAULT_TEST_DAYS).some((value) => value > 0)) {
+    return false;
+  }
+  return true;
+}
+
 export function computeSafetyStock(input: {
   historyDays: number;
   soldDays: number;
@@ -163,7 +219,10 @@ export function computeRecommendation(input: RecommendationInput): PurchaseRecom
   const stockKnown = input.currentStock !== null;
   const currentStock = input.currentStock ?? 0;
   const { historyDays, soldDays, forecast1Day, forecast3Days, forecast7Days } = input;
-  const reliability = assessReliability(historyDays, soldDays);
+  const noRecentSales = hasNoRecentSales(soldDays, input.recentValues);
+  const baseReliability = assessReliability(historyDays, soldDays);
+  const reliability = noRecentSales ? lowerReliability(baseReliability) : baseReliability;
+  const evaluable = isForecastEvaluable(input.mae, input.recentValues);
 
   const { safetyStock, rule } = computeSafetyStock({
     historyDays,
@@ -201,6 +260,7 @@ export function computeRecommendation(input: RecommendationInput): PurchaseRecom
   reason += stockNote;
   if (active && reliability !== "none") {
     reason += ` Fiabilité : ${RELIABILITY_LABEL[reliability]} (${historyDays} jours, ${soldDays} avec ventes).`;
+    if (noRecentSales) reason += " Aucune vente sur les 28 derniers jours : fiabilité réduite.";
   }
 
   return {
@@ -218,8 +278,10 @@ export function computeRecommendation(input: RecommendationInput): PurchaseRecom
     targetStock,
     recommendedPurchaseQuantity,
     model: input.model,
-    mae: input.mae,
+    mae: evaluable ? input.mae : null,
     reliability,
+    noRecentSales,
+    evaluable,
     historyDays,
     soldDays,
     reason,

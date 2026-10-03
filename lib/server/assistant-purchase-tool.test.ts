@@ -44,6 +44,8 @@ function item(overrides: Partial<PurchaseRecommendation> = {}): PurchaseRecommen
     model: "moving_average",
     mae: 0.4,
     reliability: "sufficient",
+    noRecentSales: false,
+    evaluable: true,
     historyDays: 120,
     soldDays: 60,
     reason: "Le stock actuel (12) est inférieur au stock cible (62).",
