@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { FileText, Wallet } from "lucide-react";
 
+import { DailyKpiCards } from "@/components/ventes/daily-kpi-cards";
 import { DailyInvoicesUserFilter } from "@/components/ventes/daily-invoices-user-filter";
 import { InvoicesTable } from "@/components/ventes/invoices-table";
 import { paymentMethodOptions } from "@/components/ventes/orders-toolbar";
@@ -44,7 +44,7 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
   const { kpis } = data;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Filters */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div className="space-y-1.5">
@@ -92,13 +92,7 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
       </div>
 
       {/* KPIs */}
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
-        <KpiCard icon={FileText} label="Factures" value={kpis.invoiceCount.toLocaleString("fr-FR")} />
-        <KpiCard icon={Wallet} label="CA total" value={formatCurrency(kpis.revenueTotal)} accent />
-        {kpis.byMethod.map((bucket) => (
-          <KpiCard key={bucket.method} label={bucket.label} value={formatCurrency(bucket.amount)} />
-        ))}
-      </div>
+      <DailyKpiCards kpis={kpis} />
 
       {!kpis.reconciled ? (
         <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -142,35 +136,5 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-function KpiCard({
-  icon: Icon,
-  label,
-  value,
-  accent = false,
-}: {
-  icon?: typeof Wallet;
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
-      <CardContent className="space-y-1 p-4">
-        <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          {Icon ? <Icon aria-hidden="true" className="h-3.5 w-3.5" /> : null}
-          {label}
-        </p>
-        <p
-          className={`font-heading text-lg font-semibold tabular-nums ${
-            accent ? "text-emerald-700" : "text-foreground"
-          }`}
-        >
-          {value}
-        </p>
-      </CardContent>
-    </Card>
   );
 }
