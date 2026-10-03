@@ -124,3 +124,20 @@ test("the driver POS does not use the new shared style module (its own markup is
   assert.equal(/phone-pos-style|PHONE_PRODUCT_TILE_NAME_CLASS/.test(driver), false);
   assert.match(driver, /lg:\[&_button_p\.line-clamp-2\]:text-\[31\.5px\]/, "driver tile rule intact");
 });
+
+test("desktop only: the cart card extends 20px to the right; phones and tablets get no margin change", () => {
+  const layout = read("./pos-layout.tsx");
+  const cartClass = layout.match(/id="mobile-pos-cart"[\s\S]*?className=\{`([^`]*)`\}/)?.[1] ?? "";
+  assert.ok(cartClass.length > 0, "cart section class found");
+  const marginTokens = cartClass.split(/\s+/).filter((token) => /(^|:)-?m[rxlt]?-/.test(token));
+  assert.deepEqual(marginTokens, ["lg:-mr-5"], "the only margin utility is the desktop one");
+  // the rest of the card (colours, borders, radius, shadow, padding) is unchanged
+  for (const kept of ["rounded-3xl", "border-border", "bg-card", "shadow-[0_10px_30px_rgba(15,23,42,0.06)]", "lg:p-4", "lg:order-2", "lg:overflow-y-auto"]) {
+    assert.ok(cartClass.includes(kept), kept);
+  }
+  // the three fields keep their own grid and classes
+  assert.match(layout, /sm:grid-cols-\[4fr_3fr_3fr\] lg:grid-cols-3/);
+  assert.ok(layout.includes("lg:h-11 lg:text-[19.6px] lg:font-bold"));
+  // the driver POS is not touched
+  assert.equal(/lg:-mr-5/.test(read("../driver-pos/driver-pos-view.tsx")), false);
+});
