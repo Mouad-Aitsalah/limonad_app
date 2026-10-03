@@ -28,7 +28,7 @@ const line = (productId: string, designation: string): CartLineComputed => ({
 
 const lines = [line("1", "1L بومس"), line("2", "1/2L هواي"), line("3", "Coca-Cola 1L pack de 6 bouteilles très long nom")];
 
-function render(extra: { driverMobileStyle?: boolean; pcLayout?: boolean } = {}) {
+function render(extra: { phoneStyle?: boolean; pcLayout?: boolean } = {}) {
   return renderToStaticMarkup(
     <CartTable
       lines={lines}
@@ -48,13 +48,13 @@ const heads = (markup: string) => [...markup.matchAll(/<th [^>]*class="([^"]*)"[
 
 test("driver POS on phones: product names are x1.15 (15.04px -> 17.296px)", () => {
   assert.ok(Math.abs(15.04 * 1.15 - 17.296) < 1e-9);
-  const rendered = names(render({ driverMobileStyle: true }));
+  const rendered = names(render({ phoneStyle: true }));
   assert.equal(rendered.length, 3);
   for (const cls of rendered) assert.match(cls, /max-lg:text-\[17\.296px\]/);
 });
 
 test("the column titles are bold on phones, same size / colour; Total TTC joins them", () => {
-  const withStyle = heads(render({ driverMobileStyle: true }));
+  const withStyle = heads(render({ phoneStyle: true }));
   const without = heads(render());
   assert.equal(withStyle.length, 6, "Produit, Qte, Prix, Rem., Total, (action)");
   const visibleOnPhone = withStyle.filter((cls) => !/max-lg:hidden/.test(cls));
@@ -68,7 +68,7 @@ test("the column titles are bold on phones, same size / colour; Total TTC joins 
 });
 
 test("the reference under the name stays; apart from classes, the markup only differs by the Total TTC title and the unit's space", () => {
-  const on = render({ driverMobileStyle: true });
+  const on = render({ phoneStyle: true });
   const off = render();
   assert.match(on, /<p class="truncate text-xs text-muted-foreground">REF-1<\/p>/);
   const content = (markup: string) =>
@@ -88,7 +88,7 @@ test("without the opt-in (counter POS, web) nothing changes", () => {
 });
 
 test("Arabic, French, short and long names are all rendered, wrapping instead of overflowing", () => {
-  const markup = render({ driverMobileStyle: true });
+  const markup = render({ phoneStyle: true });
   for (const name of ["1L بومس", "1/2L هواي", "Coca-Cola 1L pack de 6 bouteilles très long nom"]) {
     assert.ok(markup.includes(name), name);
   }
@@ -96,21 +96,25 @@ test("Arabic, French, short and long names are all rendered, wrapping instead of
 });
 
 test("quantity and delete controls are still there", () => {
-  const markup = render({ driverMobileStyle: true });
+  const markup = render({ phoneStyle: true });
   assert.equal((markup.match(/aria-label="Diminuer la quantite"/g) ?? []).length, 3);
   assert.equal((markup.match(/aria-label="Augmenter la quantite"/g) ?? []).length, 3);
   assert.ok((markup.match(/aria-label="Retirer [^"]*? du panier"/g) ?? []).length >= 3);
 });
 
-test("only the driver POS turns the option on; the counter POS and the web caisse do not", () => {
+test("the driver POS and the admin / cashier counter POS opt in; no other caller does", () => {
   const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
-  assert.match(read("../driver-pos/driver-pos-view.tsx"), /onRemove=\{removeProduct\}\s*driverMobileStyle\s*\/>/);
-  assert.equal(/driverMobileStyle/.test(read("./pos-layout.tsx")), false);
+  assert.match(read("../driver-pos/driver-pos-view.tsx"), /onRemove=\{removeProduct\}\s*phoneStyle\s*\/>/);
+  assert.match(read("./pos-layout.tsx"), /pcLayout\s*phoneStyle\s*\/>/);
+  // the offline shell reuses PosLayout: no other direct CartTable user exists
+  for (const file of ["./offline-pos-shell.tsx", "./pending-sales-dialog.tsx", "./collect-dialog.tsx"]) {
+    assert.equal(/phoneStyle/.test(read(file)), false, file);
+  }
 });
 
 test("driver POS on phones: unit price TTC and quantity share the same 17.6px", () => {
   assert.ok(Math.abs(16 * 1.1 - 17.6) < 1e-9);
-  const markup = render({ driverMobileStyle: true });
+  const markup = render({ phoneStyle: true });
   const quantityInputs = [...markup.matchAll(/<input[^>]*aria-label="Quantite"[^>]*>/g)].map((m) => m[0]);
   assert.equal(quantityInputs.length, 3);
   for (const input of quantityInputs) {
@@ -131,7 +135,7 @@ test("driver POS on phones: unit price TTC and quantity share the same 17.6px", 
 });
 
 test("driver POS on phones: Qte / Prix / Rem. / Total cells are centred on the row; fixed narrow columns, Produit takes the rest", () => {
-  const markup = render({ driverMobileStyle: true });
+  const markup = render({ phoneStyle: true });
   const cells = [...markup.matchAll(/<td[^>]*class="([^"]*)"/g)].map((m) => m[1]);
   const middle = cells.filter((cls) => /max-lg:align-middle!/.test(cls));
   assert.equal(middle.length, 12, "3 rows x (Qte, Prix, Rem., Total)");
@@ -152,7 +156,7 @@ test("driver POS on phones: Qte / Prix / Rem. / Total cells are centred on the r
 });
 
 test("driver POS on phones: Total TTC is visible, centred, wraps its unit instead of overflowing; desktop keeps its Total", () => {
-  const on = render({ driverMobileStyle: true });
+  const on = render({ phoneStyle: true });
   const off = render();
   const totalCells = (markup: string) =>
     [...markup.matchAll(/<td[^>]*class="([^"]*lg:w-\[6\.25rem\][^"]*)"/g)].map((m) => m[1]);
@@ -175,14 +179,14 @@ test("driver POS on phones: Total TTC is visible, centred, wraps its unit instea
 });
 
 test("previous improvements are kept together with the new ones", () => {
-  const markup = render({ driverMobileStyle: true });
+  const markup = render({ phoneStyle: true });
   assert.match(markup, /max-lg:text-\[17\.296px\]/, "names x1.15");
   assert.match(markup, /max-lg:font-bold/, "bold titles");
   assert.match(markup, /<p class="truncate text-xs text-muted-foreground">REF-1<\/p>/, "reference unchanged");
 });
 
 test("the +/- buttons keep their size; nothing changes without the opt-in", () => {
-  const on = render({ driverMobileStyle: true });
+  const on = render({ phoneStyle: true });
   const off = render();
   const buttonClasses = (markup: string) => [...markup.matchAll(/<button[^>]*aria-label="(?:Diminuer|Augmenter) la quantite"[^>]*class="([^"]*)"/g)].map((m) => m[1]);
   assert.deepEqual(buttonClasses(on), buttonClasses(off));
@@ -190,8 +194,8 @@ test("the +/- buttons keep their size; nothing changes without the opt-in", () =
   assert.equal(/17\.6px|13\.2px|max-lg:w-8|align-middle!/.test(render({ pcLayout: true })), false, "counter POS unchanged");
 });
 
-test("driver POS: the cart table reclaims the card padding on phones only (no horizontal scroll)", () => {
-  const view = readFileSync(new URL("../driver-pos/driver-pos-view.tsx", import.meta.url), "utf8");
-  assert.match(view, /className="rounded-2xl border border-border max-lg:-mx-3">\s*<CartTable/);
-  assert.equal(/max-lg:-mx-3/.test(readFileSync(new URL("./pos-layout.tsx", import.meta.url), "utf8")), false);
+test("both POS reclaim the card padding on phones only (no horizontal scroll)", () => {
+  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+  assert.match(read("../driver-pos/driver-pos-view.tsx"), /className="rounded-2xl border border-border max-lg:-mx-3">\s*<CartTable/);
+  assert.match(read("./pos-layout.tsx"), /className="rounded-2xl border border-border max-lg:-mx-3 lg:min-h-32 lg:flex-1 lg:overflow-y-auto"/);
 });

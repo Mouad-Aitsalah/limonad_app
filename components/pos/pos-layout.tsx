@@ -22,6 +22,7 @@ import { type SupplierOption } from "@/components/pos/supplier-filter";
 import { MobileCustomerPicker } from "@/components/pos/mobile-customer-picker";
 import { MobileSupplierPicker } from "@/components/pos/mobile-supplier-picker";
 import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product";
+import { PHONE_PRODUCT_TILE_NAME_CLASS } from "@/components/pos/phone-pos-style";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
 import { InvoiceHeader } from "@/components/pos/invoice-header";
@@ -1455,7 +1456,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   const cartItemCount = cart.reduce((count, line) => count + line.quantity, 0);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 max-lg:pb-6">
       <div
         ref={cartButtonRef}
         className="fixed top-[calc(env(safe-area-inset-top)+0.75rem)] z-40 lg:hidden"
@@ -1579,8 +1580,11 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
       </div>
       )}
 
+      {/* Phones: sticky under the shell's mobile header, as in the driver POS,
+          so the tabs never scroll away. Inert from lg (the row is hidden). */}
+      <div className="sticky top-16 z-20 bg-background lg:hidden">
       <div
-        className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1 lg:hidden"
+        className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1"
         role="tablist"
         aria-label="Vues du point de vente"
       >
@@ -1605,22 +1609,35 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
           Panier ({cartItemCount})
         </Button>
       </div>
+      </div>
 
-      {mobileView === "products" && (
-        <MobileSelectedProduct product={mobileSelectedProduct} className="lg:hidden" />
-      )}
       <div className="grid gap-4 lg:h-[calc(100vh-8.9rem)] lg:grid-cols-2 lg:gap-6">
       <div
         className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4 lg:overflow-hidden`}
       >
-        <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
-        <MobileSupplierPicker
-          className="lg:hidden"
-          suppliers={supplierOptions}
-          value={supplierFilter}
-          onChange={setSupplierFilter}
-        />
-        <div className="lg:flex-1 lg:overflow-y-auto lg:pr-1">
+        {/* Phones: second sticky tier (search, then supplier filter + last added
+            product side by side, 30% / 70%) exactly like the driver POS. From lg
+            this wrapper is a plain block around the search field: unchanged. */}
+        <div className="max-lg:sticky max-lg:top-28 max-lg:z-20 max-lg:space-y-3 max-lg:bg-background">
+          <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
+          <div className="flex items-stretch gap-2 lg:hidden">
+            <MobileSupplierPicker
+              className="min-w-0 flex-[3] lg:hidden [&>button]:h-[54px]"
+              suppliers={supplierOptions}
+              value={supplierFilter}
+              onChange={setSupplierFilter}
+              itemPaddingClassName="py-10"
+            />
+            <div className="min-w-0 flex-[7]">
+              <MobileSelectedProduct
+                product={mobileSelectedProduct}
+                variant="inline"
+                className="h-[54px]"
+              />
+            </div>
+          </div>
+        </div>
+        <div className={`lg:flex-1 lg:overflow-y-auto lg:pr-1 ${PHONE_PRODUCT_TILE_NAME_CLASS}`}>
         <ProductGrid
           products={filteredProducts}
           onAdd={
@@ -1639,7 +1656,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
       <div
         id="mobile-pos-cart"
         ref={cartSectionRef}
-        className={`${mobileView === "cart" ? "flex" : "hidden"} order-1 min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:order-2 lg:flex lg:h-full lg:min-h-0 lg:gap-4 lg:overflow-y-auto lg:p-4`}
+        className={`${mobileView === "cart" ? "flex" : "hidden"} order-1 min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] max-lg:gap-4 max-lg:rounded-[24px] max-lg:border-0 max-lg:p-4 max-lg:shadow-[0_16px_40px_rgba(15,23,42,0.08)] lg:order-2 lg:flex lg:h-full lg:min-h-0 lg:gap-4 lg:overflow-y-auto lg:p-4`}
       >
         <div className="contents lg:flex lg:shrink-0 lg:flex-col lg:gap-4">
         <div className="grid gap-3 max-lg:grid-cols-[7fr_3fr] max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr] lg:grid-cols-3">
@@ -1696,7 +1713,9 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
 
         {/* Desktop: only the product list scrolls; the header above and the
             total / actions below stay put. Mobile: unchanged flow. */}
-        <div ref={cartScrollRef} className="rounded-2xl border border-border lg:min-h-32 lg:flex-1 lg:overflow-y-auto">
+        {/* Phones: the table reclaims the card's side padding (-mx-3), as in the
+            driver POS, so the five columns fit without horizontal scroll. */}
+        <div ref={cartScrollRef} className="rounded-2xl border border-border max-lg:-mx-3 lg:min-h-32 lg:flex-1 lg:overflow-y-auto">
           <CartTable
             lines={cartLines}
             operationType={operationType}
@@ -1709,6 +1728,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
             onPriceChange={updatePrice}
             onRemove={removeFromCart}
             pcLayout
+            phoneStyle
           />
         </div>
 

@@ -55,16 +55,17 @@ type CartTableProps = {
    */
   pcLayout?: boolean;
   /**
-   * Driver POS on a phone (< lg) only - opt-in, so the counter POS and every
-   * other caller keep their current look: product names x1.15 (15.04px ->
-   * 17.296px), the four column titles in bold (700 instead of 600), the
+   * Phone (< lg) look shared by the driver POS and the admin / cashier POS -
+   * opt-in, so every other caller keeps its current look: product names x1.15
+   * (15.04px -> 17.296px), the column titles in bold (700 instead of 600), the
    * quantity x1.1 (16px -> 17.6px) and the unit price TTC at the same 17.6px
    * (was 12px), the Qte / Prix / Rem. / Total cells centred on the vertical
    * middle of the row and the Total TTC column shown on phones (fixed narrow
-   * columns, Produit takes the remaining width). The reference line under the name, the +/- and delete
-   * buttons, the discount field and every size at >= lg are untouched.
+   * columns, Produit takes the remaining width). The reference line under the
+   * name, the +/- and delete buttons, the discount field and every size at
+   * >= lg are untouched; so are prices, discounts, totals and permissions.
    */
-  driverMobileStyle?: boolean;
+  phoneStyle?: boolean;
 };
 
 // Column widths are the single source of truth (`table-fixed` makes every
@@ -94,10 +95,10 @@ const COL = {
 const H_MOBILE = "max-lg:text-[10px] max-lg:tracking-normal";
 // Desktop only: header type x1.4 (0.72rem = 11.52px -> 16.128px), bold.
 const H_DESKTOP = "lg:text-[16.128px] lg:font-bold";
-// Opt-in (driverMobileStyle): column titles in bold on phones; same size,
+// Opt-in (phoneStyle): column titles in bold on phones; same size,
 // colour, alignment and background as before.
 const H_MOBILE_BOLD = "max-lg:font-bold";
-// Opt-in (driverMobileStyle): the Total TTC column is shown on phones and the
+// Opt-in (phoneStyle): the Total TTC column is shown on phones and the
 // four narrow columns get FIXED widths sized to their content, so Produit
 // (width auto) takes all the remaining room and grows with the screen:
 //  - Qte  80px = 24px "-" + 32px field (3 digits at 17.6px) + 24px "+", no padding
@@ -113,7 +114,7 @@ const COL_DRIVER_MOBILE = {
   // `table-cell` replaces COL.total's `max-lg:hidden` (same display group).
   total: "max-lg:table-cell max-lg:w-[58px] max-lg:px-0.5 max-lg:text-center max-lg:whitespace-normal max-lg:leading-tight max-lg:[overflow-wrap:anywhere]",
 } as const;
-// Opt-in (driverMobileStyle): Qte / Prix / Rem. cells sit on the vertical
+// Opt-in (phoneStyle): Qte / Prix / Rem. cells sit on the vertical
 // middle of the row (the default mobile alignment is top).
 // `!` because the row's own `[&>td]:align-top` rule is more specific.
 const CELL_DRIVER_MIDDLE = "max-lg:align-middle!";
@@ -130,7 +131,7 @@ export function CartTable({
   onPriceChange,
   onRemove,
   pcLayout = false,
-  driverMobileStyle = false,
+  phoneStyle = false,
 }: CartTableProps) {
   const isTransfer = operationType === "transfer";
   const priceEditable = canEditPrice && !isTransfer && !readOnly && !!onPriceChange;
@@ -144,7 +145,7 @@ export function CartTable({
   // amount that is wider than the Prix column (nowrap on >= lg keeps one line).
   const money = (value: number) => {
     const label = formatCurrency(value);
-    return driverMobileStyle ? label.replace(/ /g, " ") : label;
+    return phoneStyle ? label.replace(/ /g, " ") : label;
   };
 
   if (lines.length === 0) {
@@ -172,15 +173,15 @@ export function CartTable({
     <Table className="table-fixed min-w-0 lg:min-w-[48rem]">
       <TableHeader>
         <TableRow>
-          <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP, driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.produit])}>Produit</TableHead>
-          <TableHead className={cn(COL.qte, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.qte])}>
+          <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP, phoneStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.produit])}>Produit</TableHead>
+          <TableHead className={cn(COL.qte, "text-center", H_MOBILE, H_DESKTOP, phoneStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.qte])}>
             Qte
           </TableHead>
-          <TableHead className={cn(COL.prix, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.prix])}>
+          <TableHead className={cn(COL.prix, "text-center", H_MOBILE, H_DESKTOP, phoneStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.prix])}>
             {isTransfer ? "Valeur unit." : "Prix TTC"}
           </TableHead>
           {!isTransfer && (
-            <TableHead className={cn(COL.rem, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.rem])}>
+            <TableHead className={cn(COL.rem, "text-center", H_MOBILE, H_DESKTOP, phoneStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.rem])}>
               {/* Compact "Rem." on mobile (column too narrow for more);
                   "Rem. DH" on desktop so the unit is explicit - this field
                   is a DH amount per unit, never a percentage. */}
@@ -194,12 +195,12 @@ export function CartTable({
               "text-right",
               H_MOBILE,
               H_DESKTOP,
-              driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.total],
+              phoneStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.total],
             )}
           >
             {isTransfer ? (
               "Valeur"
-            ) : driverMobileStyle ? (
+            ) : phoneStyle ? (
               <>
                 <span className="lg:hidden">Total TTC</span>
                 <span className="hidden lg:inline">Total</span>
@@ -217,7 +218,7 @@ export function CartTable({
           // readable when the product name wraps to 2-3 lines. Desktop keeps
           // its previously-validated vertical-align (middle).
           <TableRow key={line.productId} data-product-id={line.productId} className={cn("max-lg:[&>td]:align-top", pcLayout && "lg:[&>td]:py-2")}>
-            <TableCell className={cn(COL.produit, "relative pr-1", driverMobileStyle && COL_DRIVER_MOBILE.produit)}>
+            <TableCell className={cn(COL.produit, "relative pr-1", phoneStyle && COL_DRIVER_MOBILE.produit)}>
               {/* Mobile-only compact delete - pulled out of the text flow
                   (absolute, top-right) so the name can use the full column
                   width on every line; `pr-5` keeps the first line clear of it.
@@ -244,7 +245,7 @@ export function CartTable({
                     // PC counter POS: name type x0.9 (22.56px -> 20.304px).
                     pcLayout && "lg:text-[20.304px]",
                     // Driver POS phone: x1.15 of the inherited 15.04px.
-                    driverMobileStyle && "max-lg:text-[17.296px]",
+                    phoneStyle && "max-lg:text-[17.296px]",
                   )}
                 >
                   {line.designation}
@@ -268,7 +269,7 @@ export function CartTable({
                 )}
               </div>
             </TableCell>
-            <TableCell className={cn(COL.qte, driverMobileStyle && [COL_DRIVER_MOBILE.qte, CELL_DRIVER_MIDDLE])}>
+            <TableCell className={cn(COL.qte, phoneStyle && [COL_DRIVER_MOBILE.qte, CELL_DRIVER_MIDDLE])}>
               <div className="flex items-center justify-center gap-0 lg:gap-1">
                 <Button
                   type="button"
@@ -299,7 +300,7 @@ export function CartTable({
                     // Driver POS phone: quantity x1.1 (16px -> 17.6px; `!` because the
                     // global phone rule forces 1rem on every input) and the box 4px
                     // wider so a 3-digit quantity still fits. The +/- buttons keep size.
-                    driverMobileStyle && "max-lg:w-8 max-lg:text-[17.6px]!",
+                    phoneStyle && "max-lg:w-8 max-lg:text-[17.6px]!",
                   )}
                 />
                 <Button
@@ -319,7 +320,7 @@ export function CartTable({
               className={cn(
                 COL.prix,
                 "text-center tabular-nums",
-                driverMobileStyle && [COL_DRIVER_MOBILE.prix, CELL_DRIVER_MIDDLE],
+                phoneStyle && [COL_DRIVER_MOBILE.prix, CELL_DRIVER_MIDDLE],
               )}
             >
               {priceEditable ? (
@@ -340,6 +341,9 @@ export function CartTable({
                   aria-label={`Prix TTC de ${line.designation}`}
                   className={cn(
                     "h-7 w-9 rounded-md border bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-20",
+                    // Admin phone: the editable price fits the 66px Prix column at the
+                    // same 17.6px as the quantity (`!`: the global phone rule forces 1rem).
+                    phoneStyle && "max-lg:w-[62px] max-lg:text-[17.6px]!",
                     pcLayout && "lg:h-[2.625rem] lg:w-[6.5rem] lg:text-[21px]",
                     // Below-cost warning (PC counter POS only, display only).
                     // The focus variants are repeated because the base focus
@@ -359,7 +363,7 @@ export function CartTable({
                     // value/format/weight untouched. The unit stays on the amount's
                     // line, and only drops below it (centred) when a 4-digit amount
                     // is wider than the column.
-                    driverMobileStyle && "max-lg:block max-lg:text-[17.6px] max-lg:leading-tight max-lg:whitespace-normal max-lg:[overflow-wrap:anywhere]",
+                    phoneStyle && "max-lg:block max-lg:text-[17.6px] max-lg:leading-tight max-lg:whitespace-normal max-lg:[overflow-wrap:anywhere]",
                     pcLayout && "lg:text-[21px] lg:font-medium",
                   )}
                 >
@@ -372,7 +376,7 @@ export function CartTable({
                 className={cn(
                   COL.rem,
                   "text-center",
-                  driverMobileStyle && [COL_DRIVER_MOBILE.rem, CELL_DRIVER_MIDDLE],
+                  phoneStyle && [COL_DRIVER_MOBILE.rem, CELL_DRIVER_MIDDLE],
                 )}
               >
                 <input
@@ -396,7 +400,7 @@ export function CartTable({
                 COL.total,
                 "text-right font-medium tabular-nums max-lg:overflow-hidden max-lg:text-xs",
                 pcLayout && "lg:text-[21px]",
-                driverMobileStyle && [COL_DRIVER_MOBILE.total, CELL_DRIVER_MIDDLE],
+                phoneStyle && [COL_DRIVER_MOBILE.total, CELL_DRIVER_MIDDLE],
               )}
             >
               {money(isTransfer ? line.transferValue : line.totalTTC)}
