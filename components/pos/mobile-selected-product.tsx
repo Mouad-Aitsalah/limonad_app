@@ -48,8 +48,12 @@ export function MobileSelectedProduct({ product, className, variant = "overlay" 
           <span className="font-semibold">{product.designation}</span>{" "}
           <span className="font-medium text-emerald-700">{formatCurrency(product.priceTTC)}</span>
         </span>
+        {/* Quantity "×N": 15.6px = 1.3 x the former text-xs (12px). Only the
+            inline (driver POS) variant - the overlay variant below, used by
+            the counter POS, keeps its own size. shrink-0 + tabular-nums keep
+            a multi-digit quantity ("×1250") on one line next to the name. */}
         <span
-          className="shrink-0 text-xs font-bold tabular-nums text-emerald-700"
+          className="shrink-0 text-[15.6px] leading-none font-bold tabular-nums text-emerald-700"
           aria-label={`Quantité : ${product.quantity}`}
         >
           ×{product.quantity}

@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { businessDayRangeUtc, getCurrentBusinessDayParam } from "@/lib/business-day";
+import { driverOwnCustomersWhere } from "@/lib/driver-customer-scope";
 import { computeDriverLineTotals } from "@/lib/driver-line-totals";
 import { addMoney, MONEY_RANGE_MAX_NUMBER, subtractMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -182,17 +183,19 @@ export async function getDriverPosContext(
       orderBy: { name: "asc" },
       take: POS_PRODUCT_LIST_LIMIT + 1,
     }),
-    // Phase 3: bounded preload (recent customers this driver is allowed to
-    // see, plus initialCustomerId - e.g. a tour-visit deep link's
-    // ?customerId=... - guaranteed present even if it falls outside that
-    // recency window) instead of every customer this driver can see. See
+    // Phase 3: bounded preload instead of every customer. The browsable list
+    // is ONLY the customers this driver created (driverOwnCustomersWhere);
+    // initialCustomerId - e.g. a tour-visit deep link's ?customerId=... - is
+    // still guaranteed present (even an admin-created customer of the
+    // driver's own tour) through the wider guaranteeWhere. See
     // getPosCustomerPreload's doc comment and the Phase 3 report. Anything
     // beyond this small set is reached through the customer combobox's
     // GET /api/customers/search fallback, transparently scoped the same
     // way for a driver session.
     getPosCustomerPreload({
       organizationId: user.organizationId,
-      extraWhere: {
+      extraWhere: driverOwnCustomersWhere(driver.id),
+      guaranteeWhere: {
         OR: [{ creationOrigin: "ADMIN" }, { createdByDriverId: driver.id }],
       },
       guaranteeCustomerId: initialCustomerId,

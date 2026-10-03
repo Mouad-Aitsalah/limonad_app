@@ -26,7 +26,12 @@ export async function OPTIONS(request: Request) {
 
 export async function GET(request: Request) {
   try {
-    return withMobileCors(request, NextResponse.json({ customers: await getCustomersForCurrentDriver() }));
+    // ?scope=own -> only the customers this driver created (driver POS offline cache).
+    const ownOnly = new URL(request.url).searchParams.get("scope") === "own";
+    return withMobileCors(
+      request,
+      NextResponse.json({ customers: await getCustomersForCurrentDriver({ ownOnly }) }),
+    );
   } catch (error) {
     if (error instanceof AuthServiceError || error instanceof OperationsServiceError) {
       return withMobileCors(request, NextResponse.json({ message: error.message }, { status: error.status }));

@@ -91,9 +91,8 @@ export async function loadShellDriverPosContext(params: {
  * getPosCustomerPreload in lib/server/customers.ts), kept deliberately small
  * for a fast POS boot - not meant to be the offline SEARCH source. This
  * calls the separate, already-existing, already-unbounded
- * GET /api/driver/customers (getCustomersForCurrentDriver - identical
- * organizationId + "ADMIN-origin OR created by this driver" access rule,
- * just no LIMIT) and overwrites cached_customers with the complete result,
+ * GET /api/driver/customers?scope=own (getCustomersForCurrentDriver with
+ * ownOnly - the customers this driver created, just no LIMIT) and overwrites cached_customers with the complete result,
  * so an offline restart's loadCachedDriverPosContext later reconstructs
  * `context.customers` from that same complete set.
  *
@@ -110,7 +109,9 @@ export async function refreshFullDriverCustomerCache(params: {
 }): Promise<CustomerDto[] | null> {
   const scope = { organizationId: params.organizationId, driverId: params.driverId };
   if (!params.token) return null;
-  const outcome = await mobileFetch<{ customers: CustomerDto[] }>("/api/driver/customers", params.token);
+  // scope=own: the offline picker offers the same customers as the online POS
+  // (only the ones this driver created - see lib/driver-customer-scope.ts).
+  const outcome = await mobileFetch<{ customers: CustomerDto[] }>("/api/driver/customers?scope=own", params.token);
   if (outcome.kind !== "ok" || !outcome.data?.customers) return null;
 
   const customers = outcome.data.customers;

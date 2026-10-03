@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { CUSTOMER_ACCOUNT_PREFIX, formatCustomerCode, resolveCustomerCodeFromInput } from "@/lib/customer-code";
 import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
+import { driverOwnCustomersWhere } from "@/lib/driver-customer-scope";
 import { prisma } from "@/lib/prisma";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
@@ -126,11 +127,11 @@ const CUSTOMER_SEARCH_MAX_LIMIT = 50;
  * search a fully-preloaded list again the way the old POS customer
  * <select> did.
  *
- * A driver session is transparently scoped to the same "ADMIN-origin OR
- * created by this driver" restriction getCustomersForCurrentDriver()
- * already enforces (lib/server/driver-customers.ts) - one endpoint for
- * both POS contexts, never a way for a driver to search another driver's
- * privately-created customers. An exact code match is checked first (a
+ * A driver session is transparently scoped, in the query itself, to the
+ * customers THIS driver created (driverOwnCustomersWhere,
+ * lib/driver-customer-scope.ts) - one endpoint for both POS contexts, never a
+ * way for a driver to search another driver's (or an admin's) customers. An
+ * exact code match is checked first (a
  * scanned/typed customer code should never be shadowed by a partial name
  * match), then name/code/phone/email substring search.
  */
@@ -151,9 +152,7 @@ export async function searchCustomers(params: {
       : CUSTOMER_SEARCH_DEFAULT_LIMIT;
   const activeFilter = params.activeOnly !== false ? { status: "ACTIVE" as const } : {};
   const driverScope =
-    currentUser.role === "driver"
-      ? { OR: [{ creationOrigin: "ADMIN" as const }, { createdByDriverId: currentUser.driverId ?? "__never__" }] }
-      : {};
+    currentUser.role === "driver" ? driverOwnCustomersWhere(currentUser.driverId) : {};
 
   const exactCodeMatch = await prisma.customer.findFirst({
     where: { organizationId, code: query, ...activeFilter, ...driverScope },
@@ -167,10 +166,9 @@ export async function searchCustomers(params: {
     where: {
       organizationId,
       ...activeFilter,
-      // AND (not a second top-level `OR`, which would silently overwrite
-      // driverScope's own OR below it in the same object) - a driver must
-      // never search outside their allowed customers just because the text
-      // search also needs an OR across name/code/phone/email.
+      // AND (not a second top-level `OR`) - a driver must never search
+      // outside their own customers just because the text search also needs
+      // an OR across name/code/phone/email.
       AND: [
         driverScope,
         {
@@ -194,9 +192,8 @@ export async function searchCustomers(params: {
 /**
  * POS "N° client" box: turns a short number (1, 15, 125), a full "3421/15"
  * or a raw "342115" into the one customer it can only be, scoped to the
- * caller's organisation (and, for a driver session, to the same
- * "ADMIN-origin OR created by this driver" restriction searchCustomers
- * already enforces). Returns null when the input can't be a customer number
+ * caller's organisation (and, for a driver session, to the customers this
+ * driver created, like searchCustomers). Returns null when the input can't be a customer number
  * or no such customer exists in this organisation - the caller turns that
  * into a clean "Client introuvable", never a 500. The same number in
  * another organisation is unreachable: the lookup is always
@@ -214,14 +211,7 @@ export async function resolveCustomerByNumber(rawInput: string): Promise<Custome
   if (!input && !legacyCode) return null;
 
   const driverScope =
-    currentUser.role === "driver"
-      ? {
-          OR: [
-            { creationOrigin: "ADMIN" as const },
-            { createdByDriverId: currentUser.driverId ?? "__never__" },
-          ],
-        }
-      : {};
+    currentUser.role === "driver" ? driverOwnCustomersWhere(currentUser.driverId) : {};
 
   const customer = await prisma.customer.findFirst({
     where: {
@@ -260,8 +250,16 @@ export async function getPosCustomerPreload(params: {
   extraWhere?: Prisma.CustomerWhereInput;
   guaranteeType?: "COUNTER";
   guaranteeCustomerId?: string | null;
+  /**
+   * Access rule for the single `guaranteeCustomerId` lookup only; defaults to
+   * `extraWhere`. The driver POS passes its wider rule here so a customer
+   * targeted by id from the driver's own tour visit still resolves, while the
+   * browsable list (`extraWhere`) stays "customers I created" only.
+   */
+  guaranteeWhere?: Prisma.CustomerWhereInput;
 }): Promise<CustomerDto[]> {
   const { organizationId, extraWhere = {}, guaranteeType, guaranteeCustomerId } = params;
+  const guaranteeWhere = params.guaranteeWhere ?? extraWhere;
 
   const recentPromise = prisma.customer.findMany({
     where: { organizationId, status: "ACTIVE", ...extraWhere },
@@ -279,7 +277,7 @@ export async function getPosCustomerPreload(params: {
     : Promise.resolve([]);
   const guaranteeIdPromise = guaranteeCustomerId
     ? prisma.customer.findMany({
-        where: { organizationId, id: guaranteeCustomerId, ...extraWhere },
+        where: { organizationId, id: guaranteeCustomerId, ...guaranteeWhere },
         include: customerInclude,
         take: 1,
       })

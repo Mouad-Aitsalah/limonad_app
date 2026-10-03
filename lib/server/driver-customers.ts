@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { driverOwnCustomersWhere } from "@/lib/driver-customer-scope";
 import { boundingBoxAround } from "@/lib/gps/gps-utils";
 import { prisma } from "@/lib/prisma";
 import {
@@ -32,15 +33,24 @@ const customerInclude = {
  * case something external still calls it directly, but no longer used
  * anywhere in the app. /driver/clients (the only real caller) now uses
  * getDriverCustomersPage() below instead.
+ *
+ * `ownOnly` (GET /api/driver/customers?scope=own): only the customers this
+ * driver created - what the driver POS offline cache uses so the offline
+ * picker offers the same customers as the online one. Without it the list is
+ * unchanged (it also resolves names/phones in the driver's sales history).
  */
-export async function getCustomersForCurrentDriver(): Promise<CustomerDto[]> {
+export async function getCustomersForCurrentDriver(
+  options: { ownOnly?: boolean } = {},
+): Promise<CustomerDto[]> {
   const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId) throw new OperationsServiceError("Profil chauffeur introuvable.", 403);
 
   const customers = await prisma.customer.findMany({
     where: {
       organizationId: user.organizationId,
-      OR: [{ creationOrigin: "ADMIN" }, { createdByDriverId: user.driverId }],
+      ...(options.ownOnly
+        ? driverOwnCustomersWhere(user.driverId)
+        : { OR: [{ creationOrigin: "ADMIN" as const }, { createdByDriverId: user.driverId }] }),
     },
     include: customerInclude,
     orderBy: { name: "asc" },
