@@ -15,8 +15,10 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
   const { primary, secondary, extras } = layoutDailyKpis(kpis);
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="space-y-3 lg:space-y-4">
+      {/* Phones: CA total full width, Espèces + Crédit side by side; tablets: the
+          three on one row; from lg the original three-column grid (gap-4). */}
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:gap-4">
         <PrimaryKpi
           featured
           icon={TrendingUp}
@@ -24,7 +26,7 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
           value={formatCurrency(primary.revenueTotal)}
           iconClassName="bg-emerald-100 text-emerald-700"
           valueClassName="text-emerald-700"
-          className="sm:col-span-2 lg:col-span-1"
+          className="col-span-2 sm:col-span-1"
         />
         <PrimaryKpi
           icon={Coins}
@@ -42,12 +44,13 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3">
         <SecondaryKpi
           icon={FileText}
           label="Factures"
           value={secondary.invoiceCount.toLocaleString("fr-FR")}
           className="col-span-2 sm:col-span-1"
+          inlineOnPhone
         />
         <SecondaryKpi icon={Landmark} label="Virement" value={formatCurrency(secondary.transfer)} />
         <SecondaryKpi icon={Receipt} label="Chèque" value={formatCurrency(secondary.check)} />
@@ -71,6 +74,10 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
   );
 }
 
+function breakableUnit(value: string) {
+  return value.replace(/ /g, " ");
+}
+
 function PrimaryKpi({
   icon: Icon,
   label,
@@ -92,25 +99,28 @@ function PrimaryKpi({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-col justify-between gap-5 rounded-2xl p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] sm:p-6",
+        // Phones / tablets: compact (p-3, gap-2); from lg the original p-6 / gap-5.
+        "flex min-w-0 flex-col justify-between gap-2 rounded-2xl p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:gap-5 lg:p-6",
         featured ? "bg-gradient-to-br from-emerald-50 via-white to-white" : "bg-white",
         className,
       )}
     >
-      <div className="flex items-center gap-3">
-        <span className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-xl", iconClassName)}>
-          <Icon aria-hidden="true" className="h-5 w-5" />
+      <div className="flex items-center gap-2 lg:gap-3">
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg lg:h-11 lg:w-11 lg:rounded-xl", iconClassName)}>
+          <Icon aria-hidden="true" className="h-4 w-4 lg:h-5 lg:w-5" />
         </span>
-        <p className="text-sm font-semibold text-muted-foreground">{label}</p>
+        <p className="text-[13px] font-semibold text-muted-foreground lg:text-sm">{label}</p>
       </div>
       <p
         className={cn(
           "font-heading leading-none font-semibold tracking-tight tabular-nums break-words",
-          featured ? "text-3xl sm:text-4xl xl:text-[2.6rem]" : "text-3xl xl:text-4xl",
+          featured ? "text-2xl lg:text-4xl xl:text-[2.6rem]" : "text-lg sm:text-xl lg:text-3xl xl:text-4xl",
           valueClassName,
         )}
       >
-        {value}
+        {/* Same figure; a regular space before the unit lets "DH" drop under a
+            long amount instead of being split in the middle ("D / H"). */}
+        {breakableUnit(value)}
       </p>
     </div>
   );
@@ -121,26 +131,34 @@ function SecondaryKpi({
   label,
   value,
   className,
+  inlineOnPhone = false,
 }: {
   icon: LucideIcon;
   label: string;
   value: string;
   className?: string;
+  /** Phones only: label on the left, figure on the right of a full-width strip. */
+  inlineOnPhone?: boolean;
 }) {
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center gap-3 rounded-2xl bg-white/80 px-4 py-3 shadow-[0_6px_18px_rgba(15,23,42,0.04)]",
+        "flex min-w-0 items-center gap-3 rounded-2xl bg-white/80 px-3 py-2.5 shadow-[0_6px_18px_rgba(15,23,42,0.04)] lg:px-4 lg:py-3",
         className,
       )}
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 max-sm:hidden">
         <Icon aria-hidden="true" className="h-4 w-4" />
       </span>
-      <div className="min-w-0">
+      <div
+        className={cn(
+          "min-w-0",
+          inlineOnPhone && "max-sm:flex max-sm:w-full max-sm:items-center max-sm:justify-between max-sm:gap-3",
+        )}
+      >
         <p className="text-xs font-medium text-muted-foreground">{label}</p>
         <p className="font-heading text-base leading-tight font-semibold tabular-nums break-words text-foreground sm:text-lg">
-          {value}
+          {breakableUnit(value)}
         </p>
       </div>
     </div>

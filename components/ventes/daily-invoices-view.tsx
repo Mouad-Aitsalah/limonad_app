@@ -44,19 +44,21 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
   const { kpis } = data;
 
   return (
-    <div className="space-y-6">
-      {/* Filters */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="space-y-1.5">
+    <div className="space-y-4 lg:space-y-6">
+      {/* Filters. Phones: full-width fields, tighter gaps, 40px touch height;
+          from lg the original spacing and heights. */}
+      <div className="grid gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3">
+        <div className="space-y-1 lg:space-y-1.5">
           <Label className="text-xs text-muted-foreground">Journée</Label>
           <Input
+            className="max-lg:h-10"
             type="date"
             value={day}
             max={initialData.day}
             onChange={(event) => setDay(event.target.value || initialData.day)}
           />
         </div>
-        <div className="space-y-1.5">
+        <div className="space-y-1 lg:space-y-1.5">
           <Label className="text-xs text-muted-foreground">Utilisateur</Label>
           <DailyInvoicesUserFilter
             options={data.userOptions}
@@ -64,13 +66,13 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
             onChange={setUserIds}
           />
         </div>
-        <div className="space-y-1.5">
+        <div className="space-y-1 lg:space-y-1.5">
           <Label className="text-xs text-muted-foreground">Mode de règlement</Label>
           <Select
             value={paymentMethod}
             onValueChange={(value) => setPaymentMethod(value ?? "all")}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="w-full max-lg:data-[size=default]:h-10">
               <SelectValue placeholder="Tous">
                 {(value: string | null) =>
                   value && value !== "all"

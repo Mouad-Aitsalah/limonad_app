@@ -50,7 +50,7 @@ export function DailyInvoicesUserFilter({ options, value, onChange }: DailyInvoi
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button type="button" variant="outline" className="w-full justify-between font-normal" />
+          <Button type="button" variant="outline" className="w-full justify-between font-normal max-lg:h-10" />
         }
       >
         <span className="flex min-w-0 items-center gap-2">
