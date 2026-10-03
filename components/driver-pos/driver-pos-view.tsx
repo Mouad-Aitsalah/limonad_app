@@ -82,6 +82,7 @@ import {
   type SyncBatchResult,
 } from "@/lib/offline/driver-pos";
 import { OfflineSalesDialog, type OfflineSaleRowData } from "@/components/driver-pos/offline-sales-dialog";
+import { computeDriverLineTotals } from "@/lib/driver-line-totals";
 import { roundMoney } from "@/lib/money";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { ThermalPrinterPanel } from "@/components/driver-pos/thermal-printer-panel";
@@ -1286,7 +1287,7 @@ export function DriverPosView({
         offlineSales.find((sale) => sale.localId === result.localId)?.localReference ??
         result.localId;
 
-      const ticket = buildPreviewSale({
+      const ticketBase = buildPreviewSale({
         displayNumber: localReference,
         createdByUserName: context.driver.name,
         customer: selectedCustomer
@@ -1314,6 +1315,7 @@ export function DriverPosView({
           taxRate: row.product.taxRate,
         })),
       });
+      const ticket = withDriverLineTotals(ticketBase, cartRows);
       setLastSale({
         ...ticket,
         // Paid in cash on the spot, unlike buildPreviewSale's own DRAFT/
@@ -1510,7 +1512,7 @@ export function DriverPosView({
         ? context.bankAccounts.find((account) => account.id === bankAccountId) ?? null
         : null;
     setOfflineTicketReference(null);
-    const previewSale = buildPreviewSale({
+    const previewSaleBase = buildPreviewSale({
       displayNumber: lastSale?.displayNumber ?? "—",
       createdByUserName: context.driver.name,
       customer: selectedCustomer
@@ -1551,6 +1553,7 @@ export function DriverPosView({
         taxRate: row.product.taxRate,
       })),
     });
+    const previewSale = withDriverLineTotals(previewSaleBase, cartRows);
     setLastSale(previewSale);
     // FIX ANDROID PRINT BUTTON - printSale needs the sale value itself, not
     // the React state setter above (which would still read the previous
@@ -2270,12 +2273,53 @@ function findOfflineSalePayloadIssue(input: {
   return null;
 }
 
+// Same shared formula as the server (lib/driver-line-totals.ts): priced from
+// the TTC unit price the driver sees, so the cart total equals what the API
+// records (62.50 x 2 = 125.00).
 function computeLine(product: DriverPosProductDto, line: CartLine) {
-  const grossHT = product.salePriceHT * line.quantity;
-  const discountAmount = round(grossHT * (line.discountRate / 100));
-  const totalHT = round(grossHT - discountAmount);
-  const taxAmount = round(totalHT * (product.taxRate / 100));
-  return { totalHT, taxAmount, totalTTC: round(totalHT + taxAmount) };
+  const { discountAmount, totalHT, taxAmount, totalTTC } = computeDriverLineTotals({
+    unitPriceHT: product.salePriceHT,
+    unitPriceTTC: product.salePriceTTC,
+    taxRate: product.taxRate,
+    quantity: line.quantity,
+    discountRate: line.discountRate,
+  });
+  return { discountAmount, totalHT, taxAmount, totalTTC };
+}
+
+/**
+ * buildPreviewSale (shared with the counter POS, left untouched) prices a
+ * discount as DH per unit, while the driver cart and the server price it as a
+ * percentage of the TTC gross - the two can differ by a few cents on a
+ * discounted line. The ticket built from the cart must show exactly the cart's
+ * (and therefore the stored) amounts, so the line totals are overwritten with
+ * the driver's own and the sale totals re-added.
+ */
+function withDriverLineTotals(
+  sale: SaleDto,
+  rows: Array<{ discountRate: number; totals: ReturnType<typeof computeLine> }>,
+): SaleDto {
+  const lines = sale.lines.map((line, index) => {
+    const row = rows[index];
+    if (!row) return line;
+    return {
+      ...line,
+      discountRate: row.discountRate,
+      discountAmount: row.totals.discountAmount,
+      totalHT: row.totals.totalHT,
+      taxAmount: row.totals.taxAmount,
+      totalTTC: row.totals.totalTTC,
+    };
+  });
+  const totalTTC = round(lines.reduce((sum, line) => sum + line.totalTTC, 0));
+  return {
+    ...sale,
+    lines,
+    discountAmount: round(lines.reduce((sum, line) => sum + line.discountAmount, 0)),
+    taxAmount: round(lines.reduce((sum, line) => sum + line.taxAmount, 0)),
+    totalTTC,
+    creditAmount: sale.creditAmount > 0 ? totalTTC : sale.creditAmount,
+  };
 }
 
 // FIX DRIVER POS "REM." FIELD - the shared CartTable's "Rem." input is a DH

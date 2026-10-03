@@ -1,3 +1,4 @@
+import { computeDriverLineTotals } from "@/lib/driver-line-totals";
 import { roundMoney } from "@/lib/money";
 
 import type { OfflineSaleLineInput, OfflineSaleWithLines } from "./types";
@@ -43,11 +44,14 @@ type DiscountResolution = { ok: true; discountRate: number } | { ok: false; mess
 
 function serverLineTotals(unitPriceTTC: number, taxRate: number, quantity: number, discountRate: number) {
   const unitPriceHT = roundMoney(unitPriceTTC / (1 + taxRate / 100));
-  const grossHT = unitPriceHT * quantity;
-  const discountAmount = roundMoney(grossHT * (discountRate / 100));
-  const totalHT = roundMoney(grossHT - discountAmount);
-  const taxAmount = roundMoney(totalHT * (taxRate / 100));
-  return { grossHT, totalHT, totalTTC: roundMoney(totalHT + taxAmount) };
+  const { grossHT, totalHT, totalTTC } = computeDriverLineTotals({
+    unitPriceHT,
+    unitPriceTTC,
+    taxRate,
+    quantity,
+    discountRate,
+  });
+  return { grossHT, totalHT, totalTTC };
 }
 
 export function resolveLineDiscountRate(line: OfflineSaleLineInput): DiscountResolution {

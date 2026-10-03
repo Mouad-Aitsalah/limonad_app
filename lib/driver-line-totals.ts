@@ -1,0 +1,68 @@
+import { roundMoney } from "@/lib/money";
+
+/**
+ * Line totals of a DRIVER POS sale - the single formula shared by the driver
+ * cart (components/driver-pos/driver-pos-view.tsx), the server that records
+ * the sale (lib/server/driver-sales.ts createDriverSale) and the offline-sync
+ * verification (lib/offline/driver-pos/sync-payload.ts), so the amount shown,
+ * the amount sent/expected and the amount stored can never drift apart.
+ *
+ * WHY TTC FIRST. Catalogue prices are stored HT with 2 decimals and the price
+ * the driver (and the customer) sees is the TTC one, i.e. roundMoney(HT x
+ * (1 + VAT)). The old driver formula multiplied the already-rounded HT by the
+ * quantity and only then derived the VAT:
+ *     62.50 TTC -> HT 52.08 ; 52.08 x 2 = 104.16 ; VAT 20.83 ; TTC 124.99 (!)
+ * because 52.08 is 62.496 TTC, not 62.50, and the half-cent was multiplied by
+ * the quantity. Here the line is priced from the displayed TTC unit price:
+ *     62.50 x 2 = 125.00 ; HT = 125.00 / 1.2 = 104.17 ; VAT = 125.00 - 104.17
+ * (same TTC-first order as the counter POS, lib/pos-discount.ts).
+ *
+ * DISCOUNT. The driver rule is unchanged: `discountRate` is a percentage
+ * (0-100) of the line price; it is just applied to the TTC gross (the same
+ * percentage as on the HT gross) and rounded to the cent.
+ *
+ * All steps use roundMoney (decimal arithmetic, half-up) - never raw float
+ * multiplication results.
+ */
+export type DriverLineInput = {
+  /** Unit price HT as stored (Product.salePrice) or derived from a verified TTC. */
+  unitPriceHT: number;
+  /** Unit price TTC exactly as shown to the driver: roundMoney(HT x (1 + VAT)). */
+  unitPriceTTC: number;
+  /** VAT percentage, e.g. 20. */
+  taxRate: number;
+  quantity: number;
+  /** Line discount, percentage 0-100 (CartLine.discountRate). */
+  discountRate: number;
+};
+
+export type DriverLineTotals = {
+  /** unitPriceHT x quantity, before discount (HT, as persisted-gross reference). */
+  grossHT: number;
+  /** HT amount of the discount for the whole line (SaleLine.discountAmount), never negative. */
+  discountAmount: number;
+  totalHT: number;
+  taxAmount: number;
+  totalTTC: number;
+};
+
+export function computeDriverLineTotals({
+  unitPriceHT,
+  unitPriceTTC,
+  taxRate,
+  quantity,
+  discountRate,
+}: DriverLineInput): DriverLineTotals {
+  const rate = Number.isFinite(discountRate) ? Math.min(100, Math.max(0, discountRate)) : 0;
+  const grossHT = unitPriceHT * quantity;
+  const grossTTC = roundMoney(unitPriceTTC * quantity);
+  const discountTTC = roundMoney(grossTTC * (rate / 100));
+  const totalTTC = roundMoney(grossTTC - discountTTC);
+  const totalHT = roundMoney(totalTTC / (1 + taxRate / 100));
+  const taxAmount = roundMoney(totalTTC - totalHT);
+  // HT discount of the line. With no discount it is exactly 0: HT x quantity
+  // can differ from totalHT by a cent only because of HT rounding, which is
+  // not a discount.
+  const discountAmount = rate > 0 ? Math.max(0, roundMoney(grossHT - totalHT)) : 0;
+  return { grossHT, discountAmount, totalHT, taxAmount, totalTTC };
+}

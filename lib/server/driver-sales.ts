@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { businessDayRangeUtc, getCurrentBusinessDayParam } from "@/lib/business-day";
+import { computeDriverLineTotals } from "@/lib/driver-line-totals";
 import { addMoney, MONEY_RANGE_MAX_NUMBER, subtractMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
@@ -459,13 +460,21 @@ export async function createDriverSale(
         // checked before rounding/further use - a large-but-otherwise-valid
         // quantity times a large unit price is exactly the case a bound on
         // quantity alone would miss (see lib/money.ts#isWithinMoneyRange).
-        const grossHT = unitPriceHT * line.quantity;
         assertMoneyRange(unitPriceHT, "line.unitPriceHT");
-        assertMoneyRange(grossHT, "line.grossHT");
-        const discountAmount = roundMoney(grossHT * (discountRate / 100));
-        const totalHT = roundMoney(grossHT - discountAmount);
-        const taxAmount = roundMoney(totalHT * (taxRate / 100));
-        const totalTTC = roundMoney(totalHT + taxAmount);
+        assertMoneyRange(unitPriceHT * line.quantity, "line.grossHT");
+        // Priced from the TTC unit price the driver sees (verified offline
+        // price, else roundMoney(HT x (1 + VAT)) like DriverPosProductDto's
+        // salePriceTTC) - the same shared formula as the driver cart, so the
+        // stored amount equals the displayed one (62.50 x 2 = 125.00, not
+        // 124.99). See lib/driver-line-totals.ts.
+        const unitPriceTTC = verifiedUnitPriceTTC ?? computePriceTTC(unitPriceHT, taxRate);
+        const { discountAmount, totalHT, taxAmount, totalTTC } = computeDriverLineTotals({
+          unitPriceHT,
+          unitPriceTTC,
+          taxRate,
+          quantity: line.quantity,
+          discountRate,
+        });
         assertMoneyRange(discountAmount, "line.discountAmount");
         assertMoneyRange(totalHT, "line.totalHT");
         assertMoneyRange(taxAmount, "line.taxAmount");
