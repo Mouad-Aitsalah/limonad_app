@@ -1896,7 +1896,9 @@ export function DriverPosView({
                 )}
               </div>
 
-              <div className="rounded-2xl border border-border">
+              {/* Phones: the table reclaims the card's side padding (-mx-3) so the
+                  five columns, Total TTC included, fit without horizontal scroll. */}
+              <div className="rounded-2xl border border-border max-lg:-mx-3">
                 <CartTable
                   lines={cartLinesForTable}
                   operationType="sale"

@@ -53,34 +53,31 @@ test("driver POS on phones: product names are x1.15 (15.04px -> 17.296px)", () =
   for (const cls of rendered) assert.match(cls, /max-lg:text-\[17\.296px\]/);
 });
 
-test("the four column titles are bold on phones, same size / colour / alignment", () => {
+test("the column titles are bold on phones, same size / colour; Total TTC joins them", () => {
   const withStyle = heads(render({ driverMobileStyle: true }));
   const without = heads(render());
   assert.equal(withStyle.length, 6, "Produit, Qte, Prix, Rem., Total, (action)");
   const visibleOnPhone = withStyle.filter((cls) => !/max-lg:hidden/.test(cls));
-  assert.equal(visibleOnPhone.length, 4, "PRODUIT, QTE, PRIX TTC, REM.");
+  assert.equal(visibleOnPhone.length, 5, "PRODUIT, QTE, PRIX TTC, REM., TOTAL TTC");
   for (const cls of visibleOnPhone) {
     assert.match(cls, /max-lg:font-bold/);
     assert.match(cls, /max-lg:text-\[10px\]/, "size unchanged");
   }
   assert.equal(without.some((cls) => /max-lg:font-bold/.test(cls)), false, "opt-in only");
+  assert.equal(without.filter((cls) => !/max-lg:hidden/.test(cls)).length, 4, "no Total column on phones without the opt-in");
 });
 
-test("the reference under the name and the row values keep their classes", () => {
+test("the reference under the name stays; apart from classes, the markup only differs by the Total TTC title and the unit's space", () => {
   const on = render({ driverMobileStyle: true });
   const off = render();
   assert.match(on, /<p class="truncate text-xs text-muted-foreground">REF-1<\/p>/);
-  // everything except the opt-in classes is identical
-  const strip = (markup: string) =>
+  const content = (markup: string) =>
     markup
-      .replace(/ max-lg:font-bold/g, "")
-      .replace(/ max-lg:text-\[17\.296px\]/g, "")
-      .replace(/ max-lg:w-8 max-lg:text-\[17\.6px\]!/g, "")
-      .replace(/ max-lg:w-\[(?:37|24)%\]/g, "")
-      .replace(/ max-lg:align-middle!/g, "")
-      .replace(/max-lg:block max-lg:text-\[17\.6px\] max-lg:leading-tight max-lg:whitespace-normal/g, "max-lg:text-xs")
-      .replace(/(\d) DH/g, "$1 DH");
-  assert.equal(strip(on), off);
+      .replace(/ class="[^"]*"/g, "")
+      .replace(/<span><\/span>/g, "")
+      .replace(/<span>Total TTC<\/span><span>Total<\/span>/g, "Total")
+      .replace(/ /g, " ");
+  assert.equal(content(on), content(off));
 });
 
 test("without the opt-in (counter POS, web) nothing changes", () => {
@@ -133,19 +130,48 @@ test("driver POS on phones: unit price TTC and quantity share the same 17.6px", 
   assert.equal((markup.match(/62,50[  ]DH/g) ?? []).length, 3);
 });
 
-test("driver POS on phones: Qte / Prix / Rem. cells are centred on the row and the columns re-balanced", () => {
+test("driver POS on phones: Qte / Prix / Rem. / Total cells are centred on the row; fixed narrow columns, Produit takes the rest", () => {
   const markup = render({ driverMobileStyle: true });
   const cells = [...markup.matchAll(/<td[^>]*class="([^"]*)"/g)].map((m) => m[1]);
   const middle = cells.filter((cls) => /max-lg:align-middle!/.test(cls));
-  assert.equal(middle.length, 9, "3 rows x (Qte, Prix, Rem.)");
-  // titles and cells of a column share one width: 37 + 24 + 24 + 15 = 100
-  for (const cls of cells.filter((c) => /w-\[26%\]/.test(c))) assert.match(cls, /max-lg:w-\[24%\]/);
-  for (const cls of cells.filter((c) => /w-\[19%\]/.test(c))) assert.match(cls, /max-lg:w-\[24%\]/);
-  for (const cls of cells.filter((c) => /w-\[40%\]/.test(c))) assert.match(cls, /max-lg:w-\[37%\]/);
-  for (const cls of cells.filter((c) => /w-\[15%\]/.test(c))) assert.equal(/max-lg:w-/.test(cls.replace(/w-\[15%\]/, "")), false, "Rem. keeps its width");
+  assert.equal(middle.length, 12, "3 rows x (Qte, Prix, Rem., Total)");
+  // titles and cells of a column share one phone width
+  const widths = (markup: string, tag: "th" | "td") =>
+    [...markup.matchAll(new RegExp(`<${tag}[^>]*class="([^"]*)"`, "g"))].map((m) => m[1]);
+  for (const tag of ["th", "td"] as const) {
+    const all = widths(markup, tag);
+    for (const cls of all.filter((c) => /w-\[40%\]/.test(c))) assert.match(cls, /max-lg:w-auto/);
+    for (const cls of all.filter((c) => /w-\[26%\]/.test(c))) assert.match(cls, /max-lg:w-20 max-lg:px-0/);
+    for (const cls of all.filter((c) => /w-\[19%\]/.test(c))) assert.match(cls, /max-lg:w-\[66px\]/);
+    for (const cls of all.filter((c) => /w-\[15%\]/.test(c))) assert.match(cls, /max-lg:w-8/);
+    for (const cls of all.filter((c) => /lg:w-\[6\.25rem\]/.test(c))) assert.match(cls, /max-lg:w-\[58px\]/);
+  }
   const off = render();
   assert.equal(/align-middle!/.test(off), false);
-  assert.equal(/max-lg:w-\[(?:37|24)%\]/.test(off), false);
+  assert.equal(/max-lg:w-(?:auto|20|\[66px\]|\[58px\])/.test(off), false);
+});
+
+test("driver POS on phones: Total TTC is visible, centred, wraps its unit instead of overflowing; desktop keeps its Total", () => {
+  const on = render({ driverMobileStyle: true });
+  const off = render();
+  const totalCells = (markup: string) =>
+    [...markup.matchAll(/<td[^>]*class="([^"]*lg:w-\[6\.25rem\][^"]*)"/g)].map((m) => m[1]);
+  assert.equal(totalCells(on).length, 3);
+  for (const cls of totalCells(on)) {
+    assert.match(cls, /max-lg:table-cell/);
+    assert.equal(/max-lg:hidden/.test(cls), false, "no longer hidden on phones");
+    assert.match(cls, /max-lg:text-center/);
+    assert.match(cls, /max-lg:whitespace-normal/);
+    assert.match(cls, /max-lg:\[overflow-wrap:anywhere\]/);
+    assert.match(cls, /text-right/, "desktop alignment kept");
+    assert.match(cls, /lg:px-2 lg:pr-3/, "desktop padding kept");
+  }
+  for (const cls of totalCells(off)) assert.match(cls, /max-lg:hidden/);
+  // same amount, same format (regular space so the unit can drop below the amount)
+  assert.equal((on.match(/125,00[  ]DH/g) ?? []).length, 3, "line total 62,50 x 2");
+  // title: "Total TTC" on phones, "Total" from lg
+  assert.match(on, /<span class="lg:hidden">Total TTC<\/span><span class="hidden lg:inline">Total<\/span>/);
+  assert.equal(/Total TTC/.test(off), false);
 });
 
 test("previous improvements are kept together with the new ones", () => {
@@ -162,4 +188,10 @@ test("the +/- buttons keep their size; nothing changes without the opt-in", () =
   assert.deepEqual(buttonClasses(on), buttonClasses(off));
   assert.equal(/17\.6px|13\.2px|max-lg:w-8|align-middle!/.test(off), false);
   assert.equal(/17\.6px|13\.2px|max-lg:w-8|align-middle!/.test(render({ pcLayout: true })), false, "counter POS unchanged");
+});
+
+test("driver POS: the cart table reclaims the card padding on phones only (no horizontal scroll)", () => {
+  const view = readFileSync(new URL("../driver-pos/driver-pos-view.tsx", import.meta.url), "utf8");
+  assert.match(view, /className="rounded-2xl border border-border max-lg:-mx-3">\s*<CartTable/);
+  assert.equal(/max-lg:-mx-3/.test(readFileSync(new URL("./pos-layout.tsx", import.meta.url), "utf8")), false);
 });

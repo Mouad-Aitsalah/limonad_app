@@ -59,8 +59,9 @@ type CartTableProps = {
    * other caller keep their current look: product names x1.15 (15.04px ->
    * 17.296px), the four column titles in bold (700 instead of 600), the
    * quantity x1.1 (16px -> 17.6px) and the unit price TTC at the same 17.6px
-   * (was 12px), with the Qte / Prix / Rem. cells centred on the vertical
-   * middle of the row. The reference line under the name, the +/- and delete
+   * (was 12px), the Qte / Prix / Rem. / Total cells centred on the vertical
+   * middle of the row and the Total TTC column shown on phones (fixed narrow
+   * columns, Produit takes the remaining width). The reference line under the name, the +/- and delete
    * buttons, the discount field and every size at >= lg are untouched.
    */
   driverMobileStyle?: boolean;
@@ -96,13 +97,21 @@ const H_DESKTOP = "lg:text-[16.128px] lg:font-bold";
 // Opt-in (driverMobileStyle): column titles in bold on phones; same size,
 // colour, alignment and background as before.
 const H_MOBILE_BOLD = "max-lg:font-bold";
-// Opt-in (driverMobileStyle): phone column widths re-balanced for the 17.6px
-// unit price (Produit -3 and Qte -2 points for Prix +5; Rem. keeps its width).
+// Opt-in (driverMobileStyle): the Total TTC column is shown on phones and the
+// four narrow columns get FIXED widths sized to their content, so Produit
+// (width auto) takes all the remaining room and grows with the screen:
+//  - Qte  80px = 24px "-" + 32px field (3 digits at 17.6px) + 24px "+", no padding
+//  - Prix 66px = "1.250,50" at 17.6px, "DH" drops under the amount
+//  - Rem. 32px = the 28px field
+//  - Total 58px = "150.060,00" at 12px, "DH" drops under the amount
 // Only the phone widths change - twMerge keeps the `lg:` ones.
 const COL_DRIVER_MOBILE = {
-  produit: "max-lg:w-[37%]",
-  qte: "max-lg:w-[24%]",
-  prix: "max-lg:w-[24%]",
+  produit: "max-lg:w-auto",
+  qte: "max-lg:w-20 max-lg:px-0",
+  prix: "max-lg:w-[66px]",
+  rem: "max-lg:w-8",
+  // `table-cell` replaces COL.total's `max-lg:hidden` (same display group).
+  total: "max-lg:table-cell max-lg:w-[58px] max-lg:px-0.5 max-lg:text-center max-lg:whitespace-normal max-lg:leading-tight max-lg:[overflow-wrap:anywhere]",
 } as const;
 // Opt-in (driverMobileStyle): Qte / Prix / Rem. cells sit on the vertical
 // middle of the row (the default mobile alignment is top).
@@ -133,8 +142,8 @@ export function CartTable({
   // Same amount and format everywhere. Driver phone only: the no-break space
   // before "DH" becomes a regular one so the unit can drop under a 4-digit
   // amount that is wider than the Prix column (nowrap on >= lg keeps one line).
-  const unitPriceLabel = (line: CartLineComputed) => {
-    const label = formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC);
+  const money = (value: number) => {
+    const label = formatCurrency(value);
     return driverMobileStyle ? label.replace(/ /g, " ") : label;
   };
 
@@ -171,7 +180,7 @@ export function CartTable({
             {isTransfer ? "Valeur unit." : "Prix TTC"}
           </TableHead>
           {!isTransfer && (
-            <TableHead className={cn(COL.rem, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && H_MOBILE_BOLD)}>
+            <TableHead className={cn(COL.rem, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.rem])}>
               {/* Compact "Rem." on mobile (column too narrow for more);
                   "Rem. DH" on desktop so the unit is explicit - this field
                   is a DH amount per unit, never a percentage. */}
@@ -179,8 +188,25 @@ export function CartTable({
               <span className="hidden lg:inline">Rem. DH</span>
             </TableHead>
           )}
-          <TableHead className={cn(COL.total, "text-right", H_MOBILE, H_DESKTOP)}>
-            {isTransfer ? "Valeur" : "Total"}
+          <TableHead
+            className={cn(
+              COL.total,
+              "text-right",
+              H_MOBILE,
+              H_DESKTOP,
+              driverMobileStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.total],
+            )}
+          >
+            {isTransfer ? (
+              "Valeur"
+            ) : driverMobileStyle ? (
+              <>
+                <span className="lg:hidden">Total TTC</span>
+                <span className="hidden lg:inline">Total</span>
+              </>
+            ) : (
+              "Total"
+            )}
           </TableHead>
           {!pcLayout && <TableHead className={COL.action} />}
         </TableRow>
@@ -333,16 +359,22 @@ export function CartTable({
                     // value/format/weight untouched. The unit stays on the amount's
                     // line, and only drops below it (centred) when a 4-digit amount
                     // is wider than the column.
-                    driverMobileStyle && "max-lg:block max-lg:text-[17.6px] max-lg:leading-tight max-lg:whitespace-normal",
+                    driverMobileStyle && "max-lg:block max-lg:text-[17.6px] max-lg:leading-tight max-lg:whitespace-normal max-lg:[overflow-wrap:anywhere]",
                     pcLayout && "lg:text-[21px] lg:font-medium",
                   )}
                 >
-                  {unitPriceLabel(line)}
+                  {money(isTransfer ? line.unitPriceHT : line.unitPriceTTC)}
                 </span>
               )}
             </TableCell>
             {!isTransfer && (
-              <TableCell className={cn(COL.rem, "text-center", driverMobileStyle && CELL_DRIVER_MIDDLE)}>
+              <TableCell
+                className={cn(
+                  COL.rem,
+                  "text-center",
+                  driverMobileStyle && [COL_DRIVER_MOBILE.rem, CELL_DRIVER_MIDDLE],
+                )}
+              >
                 <input
                   type="number"
                   min={0}
@@ -364,9 +396,10 @@ export function CartTable({
                 COL.total,
                 "text-right font-medium tabular-nums max-lg:overflow-hidden max-lg:text-xs",
                 pcLayout && "lg:text-[21px]",
+                driverMobileStyle && [COL_DRIVER_MOBILE.total, CELL_DRIVER_MIDDLE],
               )}
             >
-              {formatCurrency(isTransfer ? line.transferValue : line.totalTTC)}
+              {money(isTransfer ? line.transferValue : line.totalTTC)}
             </TableCell>
             {!pcLayout && (
               <TableCell className={COL.action}>
