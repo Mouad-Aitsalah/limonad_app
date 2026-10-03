@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
   buildOrganizationConnections,
   countActiveDevicesByUser,
+  isMissingDeviceIdColumnError,
   isSessionActive,
   isValidDeviceId,
+  loadSessionsWithDeviceFallback,
   ONLINE_WINDOW_MS,
   type ActivitySession,
 } from "@/lib/session-activity";
@@ -139,4 +142,86 @@ test("device id validation only accepts the random ids the app generates", () =>
   assert.equal(isValidDeviceId("has space and <script>"), false);
   assert.equal(isValidDeviceId("a".repeat(65)), false);
   assert.equal(isValidDeviceId(undefined), false);
+});
+
+// ---------------------------------------------------------------------------
+// Regression: the code was deployed to production before migration
+// 20261003100000_add_session_device_id (Vercel runs `next build` only), so
+// reading Session.deviceId raised a database error -> HTTP 500 on
+// /api/organizations/[id]/connections. The count must degrade, not fail.
+// ---------------------------------------------------------------------------
+
+test("missing deviceId column is recognised (Prisma P2022, Postgres 42703, message)", () => {
+  assert.equal(isMissingDeviceIdColumnError(Object.assign(new Error("The column `Session.deviceId` does not exist in the current database."), { code: "P2022" })), true);
+  assert.equal(isMissingDeviceIdColumnError(Object.assign(new Error("query failed"), { code: "P2022", meta: { column: "Session.deviceId" } })), true);
+  assert.equal(isMissingDeviceIdColumnError({ cause: { originalCode: "42703" }, message: "x" }), true);
+  assert.equal(isMissingDeviceIdColumnError(new Error('column "deviceId" does not exist')), true);
+});
+
+test("other failures are never mistaken for the missing column", () => {
+  assert.equal(isMissingDeviceIdColumnError(new Error("connect ECONNREFUSED 127.0.0.1:5432")), false);
+  assert.equal(isMissingDeviceIdColumnError(Object.assign(new Error("Can't reach database server"), { code: "P1001" })), false);
+  assert.equal(isMissingDeviceIdColumnError(Object.assign(new Error("table does not exist"), { code: "P2021" })), false);
+  assert.equal(isMissingDeviceIdColumnError(new Error('column "other" does not exist')), false);
+  assert.equal(isMissingDeviceIdColumnError(null), false);
+  assert.equal(isMissingDeviceIdColumnError("P2022"), false);
+});
+
+test("fallback: with the column available, device tracking is used as is", async () => {
+  const rows = [session({ userId: "u1", deviceId: "device-AAAAAAAAAAAA" })];
+  const result = await loadSessionsWithDeviceFallback(
+    async () => rows,
+    async () => {
+      throw new Error("must not be called");
+    },
+  );
+  assert.equal(result.deviceTracking, "device");
+  assert.equal(result.sessions, rows);
+});
+
+test("fallback: column missing in production -> counts per active session instead of failing", async () => {
+  const withoutDevice = [
+    { id: "a", userId: "u1", createdAt: ago(3600000), lastUsedAt: ago(10000), expiresAt: later(3600000), revokedAt: null },
+    { id: "b", userId: "u1", createdAt: ago(3600000), lastUsedAt: ago(20000), expiresAt: later(3600000), revokedAt: null },
+  ];
+  const result = await loadSessionsWithDeviceFallback(
+    async () => {
+      throw Object.assign(new Error("The column `Session.deviceId` does not exist in the current database."), { code: "P2022" });
+    },
+    async () => withoutDevice,
+  );
+  assert.equal(result.deviceTracking, "session");
+  assert.ok(result.sessions.every((row) => row.deviceId === null));
+  const snapshot = buildOrganizationConnections(["u1", "u2"], result.sessions, NOW, result.deviceTracking);
+  assert.equal(snapshot.deviceTracking, "session");
+  assert.equal(snapshot.totalDevices, 2);
+  assert.deepEqual(snapshot.users, [
+    { userId: "u1", devices: 2, online: true },
+    { userId: "u2", devices: 0, online: false },
+  ]);
+});
+
+test("fallback: a real failure (database unreachable) is rethrown, never hidden as zero devices", async () => {
+  await assert.rejects(
+    loadSessionsWithDeviceFallback(
+      async () => {
+        throw new Error("connect ECONNREFUSED");
+      },
+      async () => [],
+    ),
+    /ECONNREFUSED/,
+  );
+});
+
+test("snapshot defaults to device tracking", () => {
+  assert.equal(buildOrganizationConnections([], [], NOW).deviceTracking, "device");
+});
+
+test("wiring guard: the connections query goes through the fallback, and auth never SELECTs deviceId", () => {
+  const connections = readFileSync(new URL("./server/organization-connections.ts", import.meta.url), "utf8");
+  assert.match(connections, /loadSessionsWithDeviceFallback\(/);
+  // deviceId may only appear in the "with device" select, never in the shared base select / where
+  assert.equal((connections.match(/deviceId: true/g) ?? []).length, 1);
+  const auth = readFileSync(new URL("./server/auth.ts", import.meta.url), "utf8");
+  assert.equal(/deviceId: true/.test(auth), false, "login / session checks must not depend on the optional column");
 });

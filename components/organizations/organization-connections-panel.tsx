@@ -125,6 +125,13 @@ export function OrganizationConnectionsPanel({
         </p>
       </div>
 
+      {snapshot?.deviceTracking === "session" ? (
+        <p className="px-1 text-xs text-muted-foreground">
+          Regroupement par appareil indisponible (mise à jour de la base en attente) : chaque
+          session active est comptée comme un appareil.
+        </p>
+      ) : null}
+
       {users.length === 0 ? (
         <p className="px-1 text-sm text-muted-foreground">Aucun utilisateur.</p>
       ) : (

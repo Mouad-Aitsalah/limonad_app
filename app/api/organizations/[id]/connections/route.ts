@@ -30,6 +30,12 @@ export async function GET(
       );
     }
 
+    // Log the error class/code only (never the message, which could embed SQL
+    // or connection details).
+    console.error("[connections] unexpected failure", {
+      name: error instanceof Error ? error.name : typeof error,
+      code: (error as { code?: unknown } | null)?.code,
+    });
     return NextResponse.json(
       { message: "Impossible de charger les connexions." },
       { status: 500, headers: NO_STORE },

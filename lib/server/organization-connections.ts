@@ -5,6 +5,7 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { requireSuperAdmin } from "@/lib/server/organization-context";
 import {
   buildOrganizationConnections,
+  loadSessionsWithDeviceFallback,
   ONLINE_WINDOW_MS,
   type OrganizationConnectionsSnapshot,
 } from "@/lib/session-activity";
@@ -41,29 +42,38 @@ export async function getOrganizationConnections(
 
   const now = new Date();
   const since = new Date(now.getTime() - ONLINE_WINDOW_MS);
-  const sessions =
-    userIds.length === 0
-      ? []
-      : await prisma.session.findMany({
-          where: {
-            userId: { in: userIds },
-            revokedAt: null,
-            expiresAt: { gt: now },
-            OR: [
-              { lastUsedAt: { gte: since } },
-              { lastUsedAt: null, createdAt: { gte: since } },
-            ],
-          },
-          select: {
-            id: true,
-            userId: true,
-            deviceId: true,
-            createdAt: true,
-            lastUsedAt: true,
-            expiresAt: true,
-            revokedAt: true,
-          },
-        });
+  if (userIds.length === 0) {
+    return buildOrganizationConnections(userIds, [], now);
+  }
 
-  return buildOrganizationConnections(userIds, sessions, now);
+  const where = {
+    userId: { in: userIds },
+    revokedAt: null,
+    expiresAt: { gt: now },
+    OR: [{ lastUsedAt: { gte: since } }, { lastUsedAt: null, createdAt: { gte: since } }],
+  };
+  const baseSelect = {
+    id: true,
+    userId: true,
+    createdAt: true,
+    lastUsedAt: true,
+    expiresAt: true,
+    revokedAt: true,
+  } as const;
+
+  // Session.deviceId is added by migration 20261003100000_add_session_device_id.
+  // The build on Vercel does not run migrations, so the code can be live before
+  // the column exists: in that case (and only that case) fall back to counting
+  // one device per active session instead of answering 500.
+  const { sessions, deviceTracking } = await loadSessionsWithDeviceFallback(
+    () => prisma.session.findMany({ where, select: { ...baseSelect, deviceId: true } }),
+    () => prisma.session.findMany({ where, select: baseSelect }),
+  );
+  if (deviceTracking === "session") {
+    console.warn(
+      "[connections] Session.deviceId column missing - apply migration 20261003100000_add_session_device_id (counting per session meanwhile)",
+    );
+  }
+
+  return buildOrganizationConnections(userIds, sessions, now, deviceTracking);
 }
