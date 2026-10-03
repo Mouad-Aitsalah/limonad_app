@@ -54,6 +54,14 @@ type CartTableProps = {
    * reuses this table, keeps its current look.
    */
   pcLayout?: boolean;
+  /**
+   * Driver POS on a phone (< lg) only - opt-in, so the counter POS and every
+   * other caller keep their current look: product names x1.15 (15.04px ->
+   * 17.296px) and the four column titles in bold (700 instead of 600). The
+   * reference line under the name, the values, the controls and every size at
+   * >= lg are untouched.
+   */
+  driverMobileStyle?: boolean;
 };
 
 // Column widths are the single source of truth (`table-fixed` makes every
@@ -83,6 +91,9 @@ const COL = {
 const H_MOBILE = "max-lg:text-[10px] max-lg:tracking-normal";
 // Desktop only: header type x1.4 (0.72rem = 11.52px -> 16.128px), bold.
 const H_DESKTOP = "lg:text-[16.128px] lg:font-bold";
+// Opt-in (driverMobileStyle): column titles in bold on phones; same size,
+// colour, alignment and background as before.
+const H_MOBILE_BOLD = "max-lg:font-bold";
 
 export function CartTable({
   lines,
@@ -96,6 +107,7 @@ export function CartTable({
   onPriceChange,
   onRemove,
   pcLayout = false,
+  driverMobileStyle = false,
 }: CartTableProps) {
   const isTransfer = operationType === "transfer";
   const priceEditable = canEditPrice && !isTransfer && !readOnly && !!onPriceChange;
@@ -129,15 +141,15 @@ export function CartTable({
     <Table className="table-fixed min-w-0 lg:min-w-[48rem]">
       <TableHeader>
         <TableRow>
-          <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP)}>Produit</TableHead>
-          <TableHead className={cn(COL.qte, "text-center", H_MOBILE, H_DESKTOP)}>
+          <TableHead className={cn(COL.produit, H_MOBILE, H_DESKTOP, driverMobileStyle && H_MOBILE_BOLD)}>Produit</TableHead>
+          <TableHead className={cn(COL.qte, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && H_MOBILE_BOLD)}>
             Qte
           </TableHead>
-          <TableHead className={cn(COL.prix, "text-center", H_MOBILE, H_DESKTOP)}>
+          <TableHead className={cn(COL.prix, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && H_MOBILE_BOLD)}>
             {isTransfer ? "Valeur unit." : "Prix TTC"}
           </TableHead>
           {!isTransfer && (
-            <TableHead className={cn(COL.rem, "text-center", H_MOBILE, H_DESKTOP)}>
+            <TableHead className={cn(COL.rem, "text-center", H_MOBILE, H_DESKTOP, driverMobileStyle && H_MOBILE_BOLD)}>
               {/* Compact "Rem." on mobile (column too narrow for more);
                   "Rem. DH" on desktop so the unit is explicit - this field
                   is a DH amount per unit, never a percentage. */}
@@ -183,6 +195,8 @@ export function CartTable({
                     "pr-5 font-medium whitespace-normal break-words text-foreground lg:pr-0 lg:text-[22.56px] lg:font-bold",
                     // PC counter POS: name type x0.9 (22.56px -> 20.304px).
                     pcLayout && "lg:text-[20.304px]",
+                    // Driver POS phone: x1.15 of the inherited 15.04px.
+                    driverMobileStyle && "max-lg:text-[17.296px]",
                   )}
                 >
                   {line.designation}

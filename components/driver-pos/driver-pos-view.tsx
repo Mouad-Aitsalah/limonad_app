@@ -1905,6 +1905,7 @@ export function DriverPosView({
                   onQuantityChange={updateQuantity}
                   onDiscountChange={updateDiscount}
                   onRemove={removeProduct}
+                  driverMobileStyle
                 />
               </div>
 
