@@ -27,7 +27,10 @@ import {
 
 type AccountingEntriesViewProps = {
   accounts: AccountingAccountOptionDto[];
+  /** May enter an entry and validate it from the form (admin, cashier). */
   canManage: boolean;
+  /** May archive (DRAFT) and edit / delete / validate drafts (admin only). */
+  canManageDrafts: boolean;
   initialDrafts: AccountingEntryDto[];
   reviseEntry: AccountingEntryDto | null;
 };
@@ -108,6 +111,7 @@ function isLineMeaningful(line: ManualLineForm) {
 export function AccountingEntriesView({
   accounts,
   canManage,
+  canManageDrafts,
   initialDrafts,
   reviseEntry,
 }: AccountingEntriesViewProps) {
@@ -364,7 +368,7 @@ export function AccountingEntriesView({
    * has been typed so no line is lost. An unchanged form, or one that cannot
    * be saved cleanly yet, is left untouched. */
   async function persistCurrentIfDirty(): Promise<AccountingEntryDto[]> {
-    if (!canManage || saving || reviseMode) return drafts;
+    if (!canManageDrafts || saving || reviseMode) return drafts;
     if (!dirty || !canPersistCleanly()) return drafts;
     setSaving(true);
     try {
@@ -413,7 +417,7 @@ export function AccountingEntriesView({
   }
 
   async function saveDraft() {
-    if (!canManage || saving || !checkDraftMinimum()) return;
+    if (!canManageDrafts || saving || !checkDraftMinimum()) return;
     setSaving(true);
     try {
       const response = activeDraftId
@@ -500,7 +504,7 @@ export function AccountingEntriesView({
   }
 
   async function submitRevision() {
-    if (!canManage || saving || !reviseEntry || !checkBalanced()) return;
+    if (!canManageDrafts || saving || !reviseEntry || !checkBalanced()) return;
     setSaving(true);
     try {
       const response = await fetch(`/api/accounting/entries/${reviseEntry.id}`, {
@@ -550,8 +554,8 @@ export function AccountingEntriesView({
     return (
       <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
         <p className="text-sm text-muted-foreground">
-          La saisie d&apos;écritures manuelles est réservée aux administrateurs. Les
-          mouvements comptables restent consultables dans Comptabilité → Journal.
+          La saisie d&apos;écritures manuelles est réservée aux administrateurs et
+          aux caissiers. Les mouvements comptables restent consultables dans Comptabilité → Journal.
         </p>
       </div>
     );
@@ -832,7 +836,7 @@ export function AccountingEntriesView({
             </>
           ) : (
             <>
-              {activeDraftId ? (
+              {canManageDrafts && activeDraftId ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -844,15 +848,17 @@ export function AccountingEntriesView({
                   Supprimer cette écriture
                 </Button>
               ) : null}
-              <Button
-                type="button"
-                variant="outline"
-                size="lg"
-                disabled={saving}
-                onClick={saveDraft}
-              >
-                Archiver
-              </Button>
+              {canManageDrafts ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="lg"
+                  disabled={saving}
+                  onClick={saveDraft}
+                >
+                  Archiver
+                </Button>
+              ) : null}
               <Button type="button" size="lg" disabled={saving} onClick={validateFromForm}>
                 {saving ? "Enregistrement..." : "Valider l'écriture"}
               </Button>
@@ -875,9 +881,9 @@ export function AccountingEntriesView({
             Journal, marquée REVERSED) et cette version corrigée sera comptabilisée.
           </p>
         </div>
-      ) : (
+      ) : canManageDrafts ? (
         draftNav
-      )}
+      ) : null}
 
       <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:p-7">
         {linesEditor}

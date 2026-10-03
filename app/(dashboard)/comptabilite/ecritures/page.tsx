@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { AccountingEntriesView } from "@/components/accounting/accounting-entries-view";
+import { getManualEntryAccess } from "@/lib/accounting-entry-access";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import {
   getManualAccountingEntry,
@@ -20,12 +21,15 @@ export default async function AccountingEntriesPage({ searchParams }: PageProps)
   const params = await searchParams;
   const reviseId = typeof params.revise === "string" ? params.revise : null;
   const user = await getCurrentSessionUser();
-  const isAdmin = user?.role === "admin";
+  // Same policy the server enforces (lib/accounting-entry-access.ts): admins
+  // do everything, a cashier only enters + validates an entry (no drafts, no
+  // correction), every other role sees the "reserved" notice.
+  const access = getManualEntryAccess(user?.role);
 
   const [accounts, drafts, reviseEntry] = await Promise.all([
     listAccountingAccountOptions(),
-    isAdmin ? listAccountingDraftEntries() : Promise.resolve([]),
-    isAdmin && reviseId ? getManualAccountingEntry(reviseId) : Promise.resolve(null),
+    access.canManageDrafts ? listAccountingDraftEntries() : Promise.resolve([]),
+    access.canRevise && reviseId ? getManualAccountingEntry(reviseId) : Promise.resolve(null),
   ]);
 
   return (
@@ -39,7 +43,8 @@ export default async function AccountingEntriesPage({ searchParams }: PageProps)
 
       <AccountingEntriesView
         accounts={accounts}
-        canManage={isAdmin}
+        canManage={access.canEnter}
+        canManageDrafts={access.canManageDrafts}
         initialDrafts={drafts}
         reviseEntry={reviseEntry ?? null}
       />

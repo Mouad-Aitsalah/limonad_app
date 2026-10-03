@@ -10,7 +10,12 @@ import {
   defaultAccountingSettingsByCode,
 } from "@/lib/accounting";
 import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
-import { getCurrentSessionUser, requireSessionUser } from "@/lib/server/auth";
+import {
+  canCreateManualEntryWithStatus,
+  MANUAL_ENTRY_ADMIN_ROLES,
+  MANUAL_ENTRY_CREATE_ROLES,
+} from "@/lib/accounting-entry-access";
+import { AuthServiceError, getCurrentSessionUser, requireSessionUser } from "@/lib/server/auth";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -639,7 +644,12 @@ async function nextDraftEntryNumber(db: DbClient, organizationId: string, date: 
 export async function createManualAccountingEntry(
   input: ManualAccountingEntryInput,
 ): Promise<AccountingEntryDto> {
-  const user = await requireOrganizationUser(["admin"]);
+  const user = await requireOrganizationUser(MANUAL_ENTRY_CREATE_ROLES);
+  // A cashier validates an entry straight from the form (POSTED) but cannot
+  // archive one (DRAFT): enforced here, not only by hiding the button.
+  if (!canCreateManualEntryWithStatus(user.role, input.status)) {
+    throw new AuthServiceError("Acces non autorise.", 403);
+  }
   await ensureAccountingBootstrap(prisma, user.organizationId);
 
   const parsed = parseManualEntryInput(input);
@@ -696,7 +706,7 @@ export async function createManualAccountingEntry(
 export async function getManualAccountingEntry(
   id: string,
 ): Promise<AccountingEntryDto | null> {
-  const user = await requireOrganizationUser(["admin"]);
+  const user = await requireOrganizationUser(MANUAL_ENTRY_ADMIN_ROLES);
   const entry = await prisma.accountingEntry.findFirst({
     where: { id, organizationId: user.organizationId, sourceType: "MANUAL_ENTRY" },
     include: entryInclude,
@@ -708,7 +718,7 @@ export async function getManualAccountingEntry(
  * entries, kept in creation order so a draft's position number stays stable
  * as it is edited. */
 export async function listAccountingDraftEntries(): Promise<AccountingEntryDto[]> {
-  const user = await requireOrganizationUser(["admin"]);
+  const user = await requireOrganizationUser(MANUAL_ENTRY_ADMIN_ROLES);
   const entries = await prisma.accountingEntry.findMany({
     where: {
       organizationId: user.organizationId,
@@ -748,7 +758,7 @@ export async function updateManualDraftEntry(
   id: string,
   input: ManualAccountingEntryInput,
 ): Promise<AccountingEntryDto> {
-  const user = await requireOrganizationUser(["admin"]);
+  const user = await requireOrganizationUser(MANUAL_ENTRY_ADMIN_ROLES);
   await requireOwnedManualEntry(user.organizationId, id, {
     status: "DRAFT",
     message: "Seule une ecriture archivee peut etre modifiee ici.",
@@ -782,7 +792,7 @@ export async function updateManualDraftEntry(
  * EC- number and comptabilises. The entry then leaves the archived list
  * and appears in the Journal. */
 export async function validateDraftAccountingEntry(id: string): Promise<AccountingEntryDto> {
-  const user = await requireOrganizationUser(["admin"]);
+  const user = await requireOrganizationUser(MANUAL_ENTRY_ADMIN_ROLES);
   const existing = await requireOwnedManualEntry(user.organizationId, id, {
     status: "DRAFT",
     message: "Cette ecriture n'est pas archivee.",
@@ -831,7 +841,7 @@ export async function validateDraftAccountingEntry(id: string): Promise<Accounti
 /** Hard-delete a draft. Only ever a DRAFT manual entry - a POSTED/REVERSED
  * entry is never deletable from anywhere. */
 export async function deleteDraftAccountingEntry(id: string): Promise<void> {
-  const user = await requireOrganizationUser(["admin"]);
+  const user = await requireOrganizationUser(MANUAL_ENTRY_ADMIN_ROLES);
   await requireOwnedManualEntry(user.organizationId, id, {
     status: "DRAFT",
     message: "Seule une ecriture archivee peut etre supprimee.",
@@ -846,7 +856,7 @@ export async function reviseManualAccountingEntry(
   id: string,
   input: ManualAccountingEntryInput,
 ): Promise<AccountingEntryDto> {
-  const user = await requireOrganizationUser(["admin"]);
+  const user = await requireOrganizationUser(MANUAL_ENTRY_ADMIN_ROLES);
   await ensureAccountingBootstrap(prisma, user.organizationId);
   const existing = await requireOwnedManualEntry(user.organizationId, id, {
     status: "POSTED",
