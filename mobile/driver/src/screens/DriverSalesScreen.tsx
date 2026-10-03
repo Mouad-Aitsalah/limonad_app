@@ -63,7 +63,6 @@ export function DriverSalesScreen({ token, offlineContext, deviceOnline, onBack 
   }, [token, offlineContext]);
 
   React.useEffect(() => {
-    setState({ kind: "loading" });
     load();
   }, [load]);
 

@@ -54,7 +54,6 @@ export function DriverTruckScreen({
   // open re-runs the online fetch, which also refreshes cached_truck.
   React.useEffect(() => {
     let active = true;
-    setState((previous) => (previous.kind === "ready" ? previous : { kind: "loading" }));
     loadShellDriverTruck({ token, offlineContext }).then((result) => {
       if (!active) return;
       setState(

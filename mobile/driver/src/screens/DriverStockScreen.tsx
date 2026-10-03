@@ -40,7 +40,6 @@ export function DriverStockScreen({ token, offlineContext, deviceOnline, onBack 
 
   React.useEffect(() => {
     let active = true;
-    setState({ kind: "loading" });
     loadShellDriverStock({ token, offlineContext }).then((result) => {
       if (!active) return;
       setState(

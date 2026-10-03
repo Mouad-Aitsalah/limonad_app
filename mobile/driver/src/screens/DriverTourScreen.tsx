@@ -51,7 +51,6 @@ export function DriverTourScreen({ token, offlineContext, deviceOnline, onBack }
   // flash back to "loading") until the fresh answer replaces it.
   React.useEffect(() => {
     let active = true;
-    setState((previous) => (previous.kind === "ready" ? previous : { kind: "loading" }));
     loadShellDriverTour({ token, offlineContext, deviceOnline }).then((result) => {
       if (!active) return;
       if (result.ok) {
