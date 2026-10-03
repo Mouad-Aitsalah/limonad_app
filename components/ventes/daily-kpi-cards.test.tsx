@@ -100,9 +100,9 @@ test("other buckets reported by the server (Carte, Mixte...) stay visible instea
 
 test("the three main cards are visually promoted and responsive", () => {
   const markup = renderToStaticMarkup(<DailyKpiCards kpis={kpis()} />);
-  assert.match(markup, /grid grid-cols-2 gap-2\.5 sm:grid-cols-3 sm:gap-3 lg:gap-4/, "2 columns on phone, 3 on tablet and desktop");
-  assert.match(markup, /col-span-2 sm:col-span-1/, "CA total spans the phone row only");
-  assert.match(markup, /text-2xl[^"]*lg:text-4xl[^"]*text-emerald-700/, "green CA amount");
+  assert.match(markup, /grid grid-cols-2 gap-2\.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-2 lg:gap-4/, "2 columns on phone, 3 on tablet, 2 on desktop");
+  assert.match(markup, /col-span-2 sm:col-span-1 lg:col-span-2 lg:w-1\/2 lg:justify-self-center/, "CA total: phone row, tablet cell, desktop first row centred");
+  assert.match(markup, /text-2xl[^"]*lg:text-3xl[^"]*text-emerald-700/, "green CA amount");
   assert.match(markup, /text-sky-700/, "blue cash");
   assert.match(markup, /text-violet-700/, "violet credit");
   assert.match(markup, /grid grid-cols-2 gap-2\.5 sm:grid-cols-3 sm:gap-3/, "secondary row");
@@ -112,12 +112,14 @@ test("the three main cards are visually promoted and responsive", () => {
 
 test("phones / tablets get compact cards; the desktop sizes are kept from lg", () => {
   const markup = renderToStaticMarkup(<DailyKpiCards kpis={kpis()} />);
-  // main cards: p-3 / gap-2 below lg, the original p-6 / gap-5 from lg
-  assert.match(markup, /gap-2 [^"]*p-3 [^"]*lg:gap-5 lg:p-6/);
-  // icon 32px -> 44px, amounts 18-24px -> the original 3xl / 4xl / 2.6rem
-  assert.match(markup, /h-8 w-8[^"]*lg:h-11 lg:w-11/);
-  assert.match(markup, /text-lg sm:text-xl lg:text-3xl xl:text-4xl/);
-  assert.match(markup, /text-2xl lg:text-4xl xl:text-\[2\.6rem\]/);
+  // main cards: p-3 / gap-2 below lg, a compact px-5 py-4 / gap-2.5 on desktop (was p-6 / gap-5)
+  assert.match(markup, /gap-2 [^"]*p-3 [^"]*lg:gap-2\.5 lg:px-5 lg:py-4/);
+  assert.equal(/lg:p-6|lg:gap-5/.test(markup), false);
+  // icon 32px on phones, 36px on desktop (was 44px); amounts smaller on desktop (was 3xl-4xl / 4xl-2.6rem)
+  assert.match(markup, /h-8 w-8[^"]*lg:h-9 lg:w-9/);
+  assert.match(markup, /text-lg sm:text-xl lg:text-2xl xl:text-3xl/);
+  assert.match(markup, /text-2xl lg:text-3xl xl:text-4xl/);
+  assert.equal(/lg:h-11|xl:text-\[2\.6rem\]/.test(markup), false);
   // secondary cards
   assert.match(markup, /px-3 py-2\.5[^"]*lg:px-4 lg:py-3/);
   // "Factures" is a full-width strip on phones: label left, figure right
@@ -155,4 +157,27 @@ test("the page keeps its filters, table and data flow; the server and other scre
   for (const file of ["../pos/pos-layout.tsx", "../driver-pos/driver-pos-view.tsx"]) {
     assert.equal(/DailyKpiCards/.test(readFileSync(new URL(file, import.meta.url), "utf8")), false, file);
   }
+});
+
+test("desktop: CA total alone and centred on the first row, Espèces + Crédit equal on the second; phones / tablets keep their classes", () => {
+  const markup = renderToStaticMarkup(<DailyKpiCards kpis={kpis()} />);
+  // only the `lg:` utilities of the main grid and cards were touched: the phone / tablet ones are the previous ones
+  for (const kept of ["grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3", "col-span-2 sm:col-span-1", "gap-2 rounded-2xl p-3", "h-8 w-8", "text-[13px]", "text-lg sm:text-xl", "text-2xl"]) {
+    assert.ok(markup.includes(kept), kept);
+  }
+  // Espèces and Crédit take one column each (no col-span), so they have identical widths
+  const cards = markup
+    .split('<div class="flex min-w-0 flex-col justify-between')
+    .slice(1)
+    .map((chunk) => chunk.slice(0, chunk.indexOf('"')));
+  assert.equal(cards.length, 3);
+  assert.match(cards[0], /lg:col-span-2/);
+  assert.equal(/col-span/.test(cards[1]) || /col-span/.test(cards[2]), false);
+  // secondary row: still three columns, unchanged
+  assert.ok(markup.includes("grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3\"") || markup.includes('grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3"'));
+  assert.equal(/lg:grid-cols-3/.test(markup), false);
+  // colours kept
+  assert.match(markup, /text-emerald-700/);
+  assert.match(markup, /text-sky-700/);
+  assert.match(markup, /text-violet-700/);
 });

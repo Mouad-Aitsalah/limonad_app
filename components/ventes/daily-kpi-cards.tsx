@@ -17,8 +17,9 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
   return (
     <div className="space-y-3 lg:space-y-4">
       {/* Phones: CA total full width, Espèces + Crédit side by side; tablets: the
-          three on one row; from lg the original three-column grid (gap-4). */}
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:gap-4">
+          three on one row; desktop (lg): CA total alone and centred on the first
+          row, Espèces + Crédit side by side (equal widths) on the second. */}
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-2 lg:gap-4">
         <PrimaryKpi
           featured
           icon={TrendingUp}
@@ -26,7 +27,7 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
           value={formatCurrency(primary.revenueTotal)}
           iconClassName="bg-emerald-100 text-emerald-700"
           valueClassName="text-emerald-700"
-          className="col-span-2 sm:col-span-1"
+          className="col-span-2 sm:col-span-1 lg:col-span-2 lg:w-1/2 lg:justify-self-center"
         />
         <PrimaryKpi
           icon={Coins}
@@ -99,22 +100,22 @@ function PrimaryKpi({
   return (
     <div
       className={cn(
-        // Phones / tablets: compact (p-3, gap-2); from lg the original p-6 / gap-5.
-        "flex min-w-0 flex-col justify-between gap-2 rounded-2xl p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:gap-5 lg:p-6",
+        // Phones / tablets: compact (p-3, gap-2). Desktop: compact too (px-5 py-4, gap-2.5).
+        "flex min-w-0 flex-col justify-between gap-2 rounded-2xl p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:gap-2.5 lg:px-5 lg:py-4",
         featured ? "bg-gradient-to-br from-emerald-50 via-white to-white" : "bg-white",
         className,
       )}
     >
       <div className="flex items-center gap-2 lg:gap-3">
-        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg lg:h-11 lg:w-11 lg:rounded-xl", iconClassName)}>
-          <Icon aria-hidden="true" className="h-4 w-4 lg:h-5 lg:w-5" />
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg lg:h-9 lg:w-9", iconClassName)}>
+          <Icon aria-hidden="true" className="h-4 w-4" />
         </span>
         <p className="text-[13px] font-semibold text-muted-foreground lg:text-sm">{label}</p>
       </div>
       <p
         className={cn(
           "font-heading leading-none font-semibold tracking-tight tabular-nums break-words",
-          featured ? "text-2xl lg:text-4xl xl:text-[2.6rem]" : "text-lg sm:text-xl lg:text-3xl xl:text-4xl",
+          featured ? "text-2xl lg:text-3xl xl:text-4xl" : "text-lg sm:text-xl lg:text-2xl xl:text-3xl",
           valueClassName,
         )}
       >
