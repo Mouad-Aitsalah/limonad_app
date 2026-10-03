@@ -1613,7 +1613,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
 
       <div className="grid gap-4 lg:h-[calc(100vh-8.9rem)] lg:grid-cols-2 lg:gap-6">
       <div
-        className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:flex lg:h-full lg:gap-4 lg:overflow-hidden`}
+        className={`${mobileView === "products" ? "flex" : "hidden"} order-2 min-w-0 flex-col gap-3 lg:order-1 lg:mr-5 lg:flex lg:h-full lg:gap-4 lg:overflow-hidden`}
       >
         {/* Phones: second sticky tier (search, then supplier filter + last added
             product side by side, 30% / 70%) exactly like the driver POS. From lg
@@ -1653,13 +1653,16 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         </div>
       </div>
 
-      {/* Desktop (>= lg) only: the cart card extends 20px into the page's right padding
-          (lg:-mr-5; 32px -> 12px margin) so it - and the table, total and Encaisser
-          inside it - gets 20px more width. Phones / tablets: unchanged. */}
+      {/* Desktop (>= lg) only: the cart card extends 20px into the page's right
+          padding (32px -> 12px margin) and 20px to the left over the column gap
+          (lg:-mx-5), so it - and the table, total and Encaisser inside it - gets
+          40px more width. The products column gives back 20px on its right
+          (lg:mr-5 above) so the 24px gap between the two columns is kept: no
+          overlap, no tighter spacing. Phones / tablets: unchanged. */}
       <div
         id="mobile-pos-cart"
         ref={cartSectionRef}
-        className={`${mobileView === "cart" ? "flex" : "hidden"} order-1 min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] max-lg:gap-4 max-lg:rounded-[24px] max-lg:border-0 max-lg:p-4 max-lg:shadow-[0_16px_40px_rgba(15,23,42,0.08)] lg:order-2 lg:-mr-5 lg:flex lg:h-full lg:min-h-0 lg:gap-4 lg:overflow-y-auto lg:p-4`}
+        className={`${mobileView === "cart" ? "flex" : "hidden"} order-1 min-w-0 scroll-mt-16 flex-col gap-3 rounded-3xl border border-border bg-card p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] max-lg:gap-4 max-lg:rounded-[24px] max-lg:border-0 max-lg:p-4 max-lg:shadow-[0_16px_40px_rgba(15,23,42,0.08)] lg:order-2 lg:-mx-5 lg:flex lg:h-full lg:min-h-0 lg:gap-4 lg:overflow-y-auto lg:p-4`}
       >
         <div className="contents lg:flex lg:shrink-0 lg:flex-col lg:gap-4">
         <div className="grid gap-3 max-lg:grid-cols-[7fr_3fr] max-lg:[&>div]:min-w-0 max-lg:[&>div:last-child]:col-span-2 sm:grid-cols-[4fr_3fr_3fr] lg:grid-cols-3">

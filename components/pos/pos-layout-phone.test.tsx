@@ -125,19 +125,32 @@ test("the driver POS does not use the new shared style module (its own markup is
   assert.match(driver, /lg:\[&_button_p\.line-clamp-2\]:text-\[31\.5px\]/, "driver tile rule intact");
 });
 
-test("desktop only: the cart card extends 20px to the right; phones and tablets get no margin change", () => {
+test("desktop only: the cart card extends 20px on each side; phones and tablets get no margin change", () => {
   const layout = read("./pos-layout.tsx");
-  const cartClass = layout.match(/id="mobile-pos-cart"[\s\S]*?className=\{`([^`]*)`\}/)?.[1] ?? "";
-  assert.ok(cartClass.length > 0, "cart section class found");
-  const marginTokens = cartClass.split(/\s+/).filter((token) => /(^|:)-?m[rxlt]?-/.test(token));
-  assert.deepEqual(marginTokens, ["lg:-mr-5"], "the only margin utility is the desktop one");
+  // class string of the element that carries the given anchor
+  const classAfter = (anchor: string) => {
+    const from = layout.indexOf(anchor);
+    assert.notEqual(from, -1, anchor);
+    const open = layout.indexOf("className={`", from) + "className={`".length;
+    return layout.slice(open, layout.indexOf("`}", open));
+  };
+  const margins = (cls: string) => cls.split(/\s+/).filter((token) => /(^|:)-?m[rxlt]?-/.test(token));
+
+  const cartClass = classAfter('id="mobile-pos-cart"');
+  assert.deepEqual(margins(cartClass), ["lg:-mx-5"], "only the desktop margin: 20px left + 20px right");
+  // the products column gives 20px back on its right so the 24px column gap is kept
+  const productsStart = layout.indexOf("order-2 min-w-0 flex-col gap-3 lg:order-1");
+  assert.notEqual(productsStart, -1);
+  const productsTokens = layout.slice(productsStart, layout.indexOf("`}", productsStart));
+  assert.deepEqual(margins(productsTokens), ["lg:mr-5"]);
+  assert.ok(layout.includes("lg:grid-cols-2 lg:gap-6"), "grid and 24px gap unchanged");
   // the rest of the card (colours, borders, radius, shadow, padding) is unchanged
   for (const kept of ["rounded-3xl", "border-border", "bg-card", "shadow-[0_10px_30px_rgba(15,23,42,0.06)]", "lg:p-4", "lg:order-2", "lg:overflow-y-auto"]) {
     assert.ok(cartClass.includes(kept), kept);
   }
   // the three fields keep their own grid and classes
-  assert.match(layout, /sm:grid-cols-\[4fr_3fr_3fr\] lg:grid-cols-3/);
+  assert.ok(layout.includes("sm:grid-cols-[4fr_3fr_3fr] lg:grid-cols-3"));
   assert.ok(layout.includes("lg:h-11 lg:text-[19.6px] lg:font-bold"));
   // the driver POS is not touched
-  assert.equal(/lg:-mr-5/.test(read("../driver-pos/driver-pos-view.tsx")), false);
+  assert.equal(/lg:-m[xrl]-5|lg:mr-5/.test(read("../driver-pos/driver-pos-view.tsx")), false);
 });
