@@ -57,9 +57,10 @@ type CartTableProps = {
   /**
    * Driver POS on a phone (< lg) only - opt-in, so the counter POS and every
    * other caller keep their current look: product names x1.15 (15.04px ->
-   * 17.296px) and the four column titles in bold (700 instead of 600). The
-   * reference line under the name, the values, the controls and every size at
-   * >= lg are untouched.
+   * 17.296px), the four column titles in bold (700 instead of 600), the
+   * quantity x1.1 (16px -> 17.6px) and the unit price TTC x1.1 (12px ->
+   * 13.2px). The reference line under the name, the +/- and delete buttons,
+   * the discount field and every size at >= lg are untouched.
    */
   driverMobileStyle?: boolean;
 };
@@ -246,7 +247,13 @@ export function CartTable({
                     )
                   }
                   aria-label="Quantite"
-                  className="h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:h-[2.625rem] lg:w-[4.125rem] lg:text-[21px]"
+                  className={cn(
+                    "h-7 w-7 rounded-md border border-input bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:h-[2.625rem] lg:w-[4.125rem] lg:text-[21px]",
+                    // Driver POS phone: quantity x1.1 (16px -> 17.6px; `!` because the
+                    // global phone rule forces 1rem on every input) and the box 4px
+                    // wider so a 3-digit quantity still fits. The +/- buttons keep size.
+                    driverMobileStyle && "max-lg:w-8 max-lg:text-[17.6px]!",
+                  )}
                 />
                 <Button
                   type="button"
@@ -292,7 +299,14 @@ export function CartTable({
                   )}
                 />
               ) : (
-                <span className={cn("max-lg:text-xs", pcLayout && "lg:text-[21px] lg:font-medium")}>
+                <span
+                  className={cn(
+                    "max-lg:text-xs",
+                    // Driver POS phone: price x1.1 (12px -> 13.2px), value/format/weight untouched.
+                    driverMobileStyle && "max-lg:text-[13.2px]",
+                    pcLayout && "lg:text-[21px] lg:font-medium",
+                  )}
+                >
                   {formatCurrency(isTransfer ? line.unitPriceHT : line.unitPriceTTC)}
                 </span>
               )}

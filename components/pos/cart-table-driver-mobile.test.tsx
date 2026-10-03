@@ -71,7 +71,12 @@ test("the reference under the name and the row values keep their classes", () =>
   const off = render();
   assert.match(on, /<p class="truncate text-xs text-muted-foreground">REF-1<\/p>/);
   // everything except the opt-in classes is identical
-  const strip = (markup: string) => markup.replace(/ max-lg:font-bold/g, "").replace(/ max-lg:text-\[17\.296px\]/g, "");
+  const strip = (markup: string) =>
+    markup
+      .replace(/ max-lg:font-bold/g, "")
+      .replace(/ max-lg:text-\[17\.296px\]/g, "")
+      .replace(/ max-lg:w-8 max-lg:text-\[17\.6px\]!/g, "")
+      .replace(/max-lg:text-\[13\.2px\]/g, "max-lg:text-xs");
   assert.equal(strip(on), off);
 });
 
@@ -101,4 +106,38 @@ test("only the driver POS turns the option on; the counter POS and the web caiss
   const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
   assert.match(read("../driver-pos/driver-pos-view.tsx"), /onRemove=\{removeProduct\}\s*driverMobileStyle\s*\/>/);
   assert.equal(/driverMobileStyle/.test(read("./pos-layout.tsx")), false);
+});
+
+test("driver POS on phones: quantity x1.1 (16px -> 17.6px) and unit price TTC x1.1 (12px -> 13.2px)", () => {
+  assert.ok(Math.abs(16 * 1.1 - 17.6) < 1e-9);
+  assert.ok(Math.abs(12 * 1.1 - 13.2) < 1e-9);
+  const markup = render({ driverMobileStyle: true });
+  const quantityInputs = [...markup.matchAll(/<input[^>]*aria-label="Quantite"[^>]*>/g)].map((m) => m[0]);
+  assert.equal(quantityInputs.length, 3);
+  for (const input of quantityInputs) {
+    assert.match(input, /max-lg:text-\[17\.6px\]!/, "important: the global phone rule forces 1rem on every input");
+    assert.match(input, /max-lg:w-8/, "box 4px wider for 3-digit quantities");
+  }
+  const prices = [...markup.matchAll(/<span class="([^"]*)">62,50/g)].map((m) => m[1]);
+  assert.equal(prices.length, 3);
+  for (const cls of prices) {
+    assert.match(cls, /max-lg:text-\[13\.2px\]/);
+    assert.equal(/max-lg:text-xs/.test(cls), false, "the 12px class is replaced, not stacked");
+  }
+});
+
+test("previous improvements are kept together with the new ones", () => {
+  const markup = render({ driverMobileStyle: true });
+  assert.match(markup, /max-lg:text-\[17\.296px\]/, "names x1.15");
+  assert.match(markup, /max-lg:font-bold/, "bold titles");
+  assert.match(markup, /<p class="truncate text-xs text-muted-foreground">REF-1<\/p>/, "reference unchanged");
+});
+
+test("the +/- buttons keep their size; nothing changes without the opt-in", () => {
+  const on = render({ driverMobileStyle: true });
+  const off = render();
+  const buttonClasses = (markup: string) => [...markup.matchAll(/<button[^>]*aria-label="(?:Diminuer|Augmenter) la quantite"[^>]*class="([^"]*)"/g)].map((m) => m[1]);
+  assert.deepEqual(buttonClasses(on), buttonClasses(off));
+  assert.equal(/17\.6px|13\.2px|max-lg:w-8/.test(off), false);
+  assert.equal(/17\.6px|13\.2px|max-lg:w-8/.test(render({ pcLayout: true })), false, "counter POS unchanged");
 });
