@@ -44,7 +44,7 @@ export function ProductsToolbar({
   };
 
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
       <div className="relative flex-1 sm:max-w-sm">
         <Search
           aria-hidden="true"
@@ -64,7 +64,7 @@ export function ProductsToolbar({
         value={categorie}
         onValueChange={(value) => onCategorieChange(value ?? "all")}
       >
-        <SelectTrigger className="w-full sm:w-48">
+        <SelectTrigger className="w-full max-lg:data-[size=default]:h-10 sm:w-48">
           <SelectValue placeholder="Catégorie">
             {(value: string | null) => (value ? categorieLabels[value] : "Catégorie")}
           </SelectValue>
@@ -83,7 +83,7 @@ export function ProductsToolbar({
         value={disponibilite}
         onValueChange={(value) => onDisponibiliteChange(value ?? "all")}
       >
-        <SelectTrigger className="w-full sm:w-44">
+        <SelectTrigger className="w-full max-lg:data-[size=default]:h-10 sm:w-44">
           <SelectValue placeholder="Disponibilité">
             {(value: string | null) =>
               value ? disponibiliteLabels[value] : "Disponibilité"

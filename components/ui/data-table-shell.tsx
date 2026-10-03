@@ -9,6 +9,9 @@ type DataTableShellProps = {
   action?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  /** Opt-in: below lg the content drops its bordered white frame (it is a list of
+   *  cards there). Other callers keep the frame at every size. */
+  frameless?: "below-lg";
 };
 
 export function DataTableShell({
@@ -19,6 +22,7 @@ export function DataTableShell({
   action,
   children,
   className,
+  frameless,
 }: DataTableShellProps) {
   return (
     <SectionCard
@@ -30,7 +34,13 @@ export function DataTableShell({
     >
       {toolbar}
       {countLabel ? <p className="text-sm text-[var(--text-secondary)]">{countLabel}</p> : null}
-      <div className={cn("overflow-hidden rounded-[22px] border border-border/70 bg-white/82")}>
+      <div
+        className={cn(
+          "overflow-hidden rounded-[22px] border border-border/70 bg-white/82",
+          frameless === "below-lg" &&
+            "max-lg:overflow-visible max-lg:rounded-none max-lg:border-0 max-lg:bg-transparent",
+        )}
+      >
         {children}
       </div>
     </SectionCard>

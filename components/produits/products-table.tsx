@@ -1,6 +1,7 @@
 import Image from "next/image";
 import { CircleCheck, CircleX, Eye, PackageSearch, Pencil, Power } from "lucide-react";
 
+import { ProductsMobileList } from "@/components/produits/products-mobile-list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -62,6 +63,17 @@ export function ProductsTable({
   }
 
   return (
+    <>
+    {/* Phones / tablets: one card per product. From lg the table below is untouched. */}
+    <div className="lg:hidden">
+      <ProductsMobileList
+        products={products}
+        onView={onView}
+        onEdit={onEdit}
+        onToggleStatus={onToggleStatus}
+      />
+    </div>
+    <div className="max-lg:hidden">
     <Table>
       <TableHeader>
         <TableRow>
@@ -164,6 +176,8 @@ export function ProductsTable({
         })}
       </TableBody>
     </Table>
+    </div>
+    </>
   );
 }
 

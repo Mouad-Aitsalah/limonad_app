@@ -159,11 +159,12 @@ export function ProductsView({
       />
 
       <DataTableShell
+        frameless="below-lg"
         title="Catalogue produits"
         description="Recherche, filtres et actions rapides sur l'ensemble des references."
         countLabel={`Page ${pageIndex + 1} · ${products.length} sur cette page · ${totalCount} au total`}
         toolbar={
-          <div className="space-y-3">
+          <div className="space-y-2 lg:space-y-3">
             <ProductsToolbar
               search={search}
               onSearchChange={setSearch}
@@ -176,7 +177,8 @@ export function ProductsView({
               disponibilite={disponibilite}
               onDisponibiliteChange={setDisponibilite}
             />
-            <div className="flex items-center justify-end gap-2">
+            {/* Phones: two full-width buttons; from sm the original right-aligned pair. */}
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:justify-end">
               <Button
                 type="button"
                 variant="outline"
