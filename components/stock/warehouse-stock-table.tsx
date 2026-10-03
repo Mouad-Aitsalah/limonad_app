@@ -1,5 +1,6 @@
 import { PackageSearch } from "lucide-react";
 
+import { StockMobileList } from "@/components/stock/stock-mobile-list";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -12,7 +13,14 @@ import {
 import { cn, formatCurrency } from "@/lib/utils";
 import type { StockLevelDto } from "@/types/operations-dto";
 
-export function WarehouseStockTable({ rows }: { rows: StockLevelDto[] }) {
+export function WarehouseStockTable({
+  rows,
+  showLocation = false,
+}: {
+  rows: StockLevelDto[];
+  /** Phones only: add the location code under the reference (all-locations tab). */
+  showLocation?: boolean;
+}) {
   if (rows.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -28,6 +36,22 @@ export function WarehouseStockTable({ rows }: { rows: StockLevelDto[] }) {
   }
 
   return (
+    <>
+    {/* Phones / tablets: stock cards. From lg the table below is untouched. */}
+    <div className="lg:hidden">
+      <StockMobileList
+        items={rows.map((row) => ({
+          id: row.id,
+          name: row.productName,
+          reference: row.productReference,
+          location: showLocation ? row.locationCode : undefined,
+          quantity: row.quantity,
+          value: row.stockValue,
+          tone: getStockStatus(row.status).tone,
+        }))}
+      />
+    </div>
+    <div className="max-lg:hidden">
     <Table>
       <TableHeader>
         <TableRow>
@@ -93,6 +117,8 @@ export function WarehouseStockTable({ rows }: { rows: StockLevelDto[] }) {
         })}
       </TableBody>
     </Table>
+    </div>
+    </>
   );
 }
 

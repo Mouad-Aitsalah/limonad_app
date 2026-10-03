@@ -53,7 +53,10 @@ export function StockToolbar({
         />
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      {/* Phones: the three filters stacked with a tighter gap (full-width, so
+          "Toutes les marques" is never cut); from sm the original single row
+          is unchanged. */}
+      <div className="grid gap-2 sm:flex sm:flex-row sm:items-center sm:gap-3">
         <Select
           value={filters.categoryId}
           onValueChange={(value) => onChange("categoryId", value ?? "all")}

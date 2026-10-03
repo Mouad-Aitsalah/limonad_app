@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { ProductCombobox } from "@/components/commerce/product-combobox";
+import { StockMobileList } from "@/components/stock/stock-mobile-list";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -309,6 +310,46 @@ export function TruckStockPanel({
             </div>
           </div>
 
+          {/* Phones / tablets: stock cards (product, stock, value + the same
+              "Ajuster" action). From lg the table below is untouched. */}
+          <div className="lg:hidden">
+            {selectedRows.length === 0 ? (
+              <p className="py-10 text-center text-muted-foreground">
+                Aucun produit n&apos;est encore enregistre dans ce camion.
+              </p>
+            ) : (
+              <StockMobileList
+                items={selectedRows.map((row) => ({
+                  id: row.id,
+                  name: row.productName,
+                  reference: row.productReference,
+                  quantity: row.quantity,
+                  value: row.stockValue,
+                  action: (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() =>
+                        openAdjustmentDialog({
+                          productId: row.productId,
+                          productName: row.productName,
+                          productReference: row.productReference,
+                          currentQuantity: row.quantity,
+                        })
+                      }
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Ajuster
+                    </Button>
+                  ),
+                }))}
+              />
+            )}
+          </div>
+
+          <div className="max-lg:hidden">
           <Table>
             <TableHeader>
               <TableRow>
@@ -369,6 +410,7 @@ export function TruckStockPanel({
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
 

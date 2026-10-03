@@ -25,6 +25,13 @@ import type { ProductDto } from "@/types/product-dto";
 
 const MOVEMENTS_SEARCH_DEBOUNCE_MS = 400;
 
+// Phones / tablets show stock cards, so the table's own frame (border, white
+// panel, clipping) is dropped there; from lg it is the original frame.
+const STOCK_TABLE_FRAME_CLASS =
+  "overflow-hidden rounded-[22px] border border-border/70 bg-white/82 max-lg:overflow-visible max-lg:rounded-none max-lg:border-0 max-lg:bg-transparent";
+const PHONE_TAB_CLASS =
+  "max-lg:px-1 max-lg:text-center max-lg:text-xs max-lg:leading-tight max-lg:whitespace-normal";
+
 type StockFilters = {
   search: string;
   categoryId: string;
@@ -133,10 +140,12 @@ export function StockView({
         contentClassName="space-y-5"
       >
         <Tabs defaultValue="warehouse">
-          <TabsList>
-            <TabsTrigger value="warehouse">Stock principal</TabsTrigger>
-            <TabsTrigger value="trucks">Stock camions</TabsTrigger>
-            <TabsTrigger value="all">Tous les emplacements</TabsTrigger>
+          {/* Phones / tablets: the three tabs share the width (labels may wrap)
+              instead of overflowing; from lg the original inline list is kept. */}
+          <TabsList className="max-lg:grid max-lg:w-full max-lg:grid-cols-3">
+            <TabsTrigger value="warehouse" className={PHONE_TAB_CLASS}>Stock principal</TabsTrigger>
+            <TabsTrigger value="trucks" className={PHONE_TAB_CLASS}>Stock camions</TabsTrigger>
+            <TabsTrigger value="all" className={PHONE_TAB_CLASS}>Tous les emplacements</TabsTrigger>
           </TabsList>
 
           <TabsContent value="warehouse" className="mt-5 space-y-5">
@@ -150,7 +159,7 @@ export function StockView({
             <p className="text-sm text-muted-foreground">
               {warehouseRows.length} ligne(s) en stock principal
             </p>
-            <div className="overflow-hidden rounded-[22px] border border-border/70 bg-white/82">
+            <div className={STOCK_TABLE_FRAME_CLASS}>
               <WarehouseStockTable rows={warehouseRows} />
             </div>
           </TabsContent>
@@ -174,8 +183,8 @@ export function StockView({
               suppliers={suppliers}
               onChange={handleFilterChange}
             />
-            <div className="overflow-hidden rounded-[22px] border border-border/70 bg-white/82">
-              <WarehouseStockTable rows={filteredLevels} />
+            <div className={STOCK_TABLE_FRAME_CLASS}>
+              <WarehouseStockTable rows={filteredLevels} showLocation />
             </div>
           </TabsContent>
         </Tabs>
