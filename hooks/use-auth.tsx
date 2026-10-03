@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { resetCompanyIdentityCache } from "@/hooks/use-company-identity";
 import { stopNativeTracking } from "@/lib/gps/native-tracking";
+import { HEARTBEAT_INTERVAL_MS } from "@/lib/session-activity";
 import type { CurrentUser } from "@/types/auth";
 
 type LoginResult =
@@ -108,6 +109,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("online", onResume);
     };
   }, [revalidateSession]);
+
+  /**
+   * Presence heartbeat: while signed in and the tab is visible, tell the
+   * server once a minute that this device is still here (stamps the session's
+   * lastUsedAt - read by the SUPER_ADMIN live "appareils connectes" view).
+   * Fire-and-forget: a failure is ignored and never touches the session state.
+   */
+  const isSignedIn = currentUser !== null;
+  React.useEffect(() => {
+    if (!isSignedIn) return;
+    const ping = () => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      void fetch("/api/auth/heartbeat", { cache: "no-store", credentials: "include" }).catch(
+        () => undefined,
+      );
+    };
+    const intervalId = window.setInterval(ping, HEARTBEAT_INTERVAL_MS);
+    document.addEventListener("visibilitychange", ping);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", ping);
+    };
+  }, [isSignedIn]);
 
   const login = React.useCallback(
     async (email: string, password: string): Promise<LoginResult> => {

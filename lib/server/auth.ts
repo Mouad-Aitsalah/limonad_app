@@ -5,9 +5,15 @@ import { cookies, headers } from "next/headers";
 import bcrypt from "bcryptjs";
 
 import { prisma } from "@/lib/prisma";
+import { isValidDeviceId, LAST_ACTIVITY_WRITE_THROTTLE_MS } from "@/lib/session-activity";
 import type { CurrentUser, UserRole } from "@/types/auth";
 
 const SESSION_COOKIE = "comdis.session";
+// Random, non-sensitive browser/device id (NOT a credential): lets the
+// SUPER_ADMIN's live "appareils connectes" count one device once. Long-lived
+// on purpose - it identifies the browser, not a login.
+const DEVICE_COOKIE = "comdis.device";
+const DEVICE_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 // Phase 5C: a full driver day (early start + a late close + margin) must fit
 // inside one window so a driver logged in that morning is never bounced to
 // /login mid-tour. Sliding renewal (refreshCurrentSession, below) keeps a
@@ -26,9 +32,12 @@ const SESSION_RENEW_WHEN_REMAINING_MS = (SESSION_MAX_AGE_SECONDS * 1000) / 2;
 const SESSION_TOKEN_BYTES = 32;
 // getCurrentSessionUser() runs on every authenticated request; writing
 // lastUsedAt on every single one would double the DB round trips on the
-// hottest path in the app for a field that only needs rough freshness.
-// Throttled instead: only touched if it is stale by more than this.
-const LAST_USED_UPDATE_THRESHOLD_MS = 5 * 60 * 1000;
+// hottest path in the app. Throttled instead: only touched if it is stale by
+// more than this. It also feeds the SUPER_ADMIN live-connections view (a
+// device is "connected" while its last activity is within a few minutes - see
+// lib/session-activity.ts), so it stays well under the 1-minute client
+// heartbeat (one write per minute per active session at most).
+const LAST_USED_UPDATE_THRESHOLD_MS = LAST_ACTIVITY_WRITE_THROTTLE_MS;
 
 const userForSessionSelect = {
   id: true,
@@ -224,7 +233,14 @@ export async function refreshCurrentSession(): Promise<CurrentUser | null> {
   const tokenHash = hashSessionToken(token);
   const session = await prisma.session.findUnique({
     where: { tokenHash },
-    select: { id: true, userId: true, createdAt: true, expiresAt: true, revokedAt: true },
+    select: {
+      id: true,
+      userId: true,
+      createdAt: true,
+      expiresAt: true,
+      revokedAt: true,
+      lastUsedAt: true,
+    },
   });
 
   if (!session) return null;
@@ -239,6 +255,13 @@ export async function refreshCurrentSession(): Promise<CurrentUser | null> {
   if (!user || user.status !== "ACTIVE") return null;
   if (user.role !== "SUPER_ADMIN" && !user.organizationId) return null;
   if (user.organization && user.organization.status !== "ACTIVE") return null;
+
+  if (!session.lastUsedAt || now - session.lastUsedAt.getTime() > LAST_USED_UPDATE_THRESHOLD_MS) {
+    // Same best-effort activity stamp as getCurrentSessionUser.
+    await prisma.session
+      .update({ where: { id: session.id }, data: { lastUsedAt: new Date(now) } })
+      .catch(() => undefined);
+  }
 
   const withinAbsoluteCeiling =
     now - session.createdAt.getTime() < SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000;
@@ -370,22 +393,52 @@ export async function revokeAllUserSessions(userId: string): Promise<number> {
  * yields a usable token, the same way a leaked passwordHash never yields a
  * usable password.
  */
-async function createSessionToken(userId: string): Promise<{ token: string; expiresAt: Date }> {
+async function createSessionToken(
+  userId: string,
+): Promise<{ token: string; expiresAt: Date; sessionId: string }> {
   const token = randomBytes(SESSION_TOKEN_BYTES).toString("base64url");
   const tokenHash = hashSessionToken(token);
   const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000);
 
-  await prisma.session.create({
-    data: { userId, tokenHash, expiresAt },
+  // lastUsedAt starts at "now" so a just-logged-in device counts as connected
+  // immediately. `select: { id }` keeps the INSERT ... RETURNING independent
+  // of optional columns (deviceId is written separately, best-effort).
+  const created = await prisma.session.create({
+    data: { userId, tokenHash, expiresAt, lastUsedAt: new Date() },
+    select: { id: true },
   });
 
-  return { token, expiresAt };
+  return { token, expiresAt, sessionId: created.id };
 }
 
 async function createSessionCookie(userId: string) {
-  const { token } = await createSessionToken(userId);
+  const { token, sessionId } = await createSessionToken(userId);
 
   const cookieStore = await cookies();
+
+  // Device identity for the live-connections view. Reuses the browser's
+  // existing id when it is well-formed, otherwise mints a fresh random one.
+  // Best-effort end to end: it must never be able to fail a login (e.g. the
+  // deviceId column not being deployed yet only costs the device grouping).
+  try {
+    const existing = cookieStore.get(DEVICE_COOKIE)?.value;
+    const deviceId = isValidDeviceId(existing)
+      ? existing
+      : randomBytes(16).toString("base64url");
+    cookieStore.set(DEVICE_COOKIE, deviceId, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: DEVICE_COOKIE_MAX_AGE_SECONDS,
+    });
+    await prisma.session
+      .update({ where: { id: sessionId }, data: { deviceId } })
+      .catch(() => undefined);
+  } catch {
+    // ignore: see above
+  }
+
   cookieStore.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",

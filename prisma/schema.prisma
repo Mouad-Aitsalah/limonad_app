@@ -400,6 +400,11 @@ model Session {
   expiresAt  DateTime
   revokedAt  DateTime?
   lastUsedAt DateTime?
+  // Random, non-sensitive id of the browser/device (cookie `comdis.device`),
+  // set best-effort at web login. Lets the SUPER_ADMIN's live "appareils
+  // connectes" count one device once even if it logged in several times.
+  // NULL (older sessions, mobile Bearer logins) = one device per session.
+  deviceId   String?
 
   @@index([userId])
   @@index([expiresAt])

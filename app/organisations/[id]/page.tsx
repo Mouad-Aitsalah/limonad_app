@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { OrganizationDetailView } from "@/components/organizations/organization-detail-view";
 import { getOrganizationById } from "@/lib/server/organizations";
+import { getOrganizationConnections } from "@/lib/server/organization-connections";
 
 export const metadata: Metadata = {
   title: "Detail organisation",
@@ -17,6 +18,10 @@ export default async function OrganizationDetailPage({
 }) {
   const { id } = await params;
   const organization = await getOrganizationById(id);
+  // Live connections are a nice-to-have: if they cannot be computed (e.g. the
+  // optional Session.deviceId migration is not applied yet), the page still
+  // renders and the panel retries by polling.
+  const initialConnections = await getOrganizationConnections(id).catch(() => null);
 
   return (
     <div className="space-y-6">
@@ -29,7 +34,7 @@ export default async function OrganizationDetailPage({
         </Link>
       </div>
 
-      <OrganizationDetailView organization={organization} />
+      <OrganizationDetailView organization={organization} initialConnections={initialConnections} />
     </div>
   );
 }

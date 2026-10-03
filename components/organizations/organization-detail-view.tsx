@@ -2,6 +2,7 @@
 
 import { Building2, Package, ShoppingCart, Truck, Users } from "lucide-react";
 
+import { OrganizationConnectionsPanel } from "@/components/organizations/organization-connections-panel";
 import { OrganizationFormDialog } from "@/components/organizations/organization-form-dialog";
 import { OrganizationStatusBadge } from "@/components/organizations/organization-status-badge";
 import { AppPageHeader } from "@/components/ui/app-page-header";
@@ -15,12 +16,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { OrganizationConnectionsSnapshot } from "@/lib/session-activity";
 import type { OrganizationDetailDto } from "@/types/organization";
 
 export function OrganizationDetailView({
   organization,
+  initialConnections = null,
 }: {
   organization: OrganizationDetailDto;
+  /** Server-rendered live-connections snapshot (null = unavailable, the panel then polls). */
+  initialConnections?: OrganizationConnectionsSnapshot | null;
 }) {
   return (
     <div className="space-y-6">
@@ -101,6 +106,11 @@ export function OrganizationDetailView({
               <MiniStat label="Clients" value={String(organization.stats.customersCount)} helper="Base commerciale" />
               <MiniStat label="Ventes" value={String(organization.stats.salesCount)} helper="Historique facture" />
             </div>
+            <OrganizationConnectionsPanel
+              organizationId={organization.id}
+              users={organization.users}
+              initialConnections={initialConnections}
+            />
           </CardContent>
         </Card>
       </div>
