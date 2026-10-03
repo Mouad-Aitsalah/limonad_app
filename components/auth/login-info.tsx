@@ -80,13 +80,9 @@ export function LoginInfo() {
             Gérez toute votre entreprise{" "}
             <span className="text-[#10C99A]">au même endroit.</span>
           </h1>
-          <p className="mt-4 max-w-[32rem] text-[15px] leading-6 text-white/85 xl:mt-5 xl:text-lg xl:leading-8">
-            Une plateforme complète pour piloter vos ventes, achats, stocks, clients,
-            fournisseurs et la performance de votre activité.
-          </p>
         </div>
 
-        <ul className="relative z-10 mt-5 grid max-w-[40rem] grid-cols-2 gap-3 xl:mt-8 xl:gap-4">
+        <ul className="relative z-10 mt-5 grid max-w-[40rem] grid-cols-2 gap-3 xl:mt-7 xl:gap-4">
           {features.map((feature) => {
             const Icon = feature.icon;
             return (
@@ -114,7 +110,7 @@ export function LoginInfo() {
 
         {/* Counter photo: fills the free space under the cards, runs behind the
             bottom bar and fades into the panel at its top edge. */}
-        <div className="relative -z-10 mt-auto min-h-[8rem] flex-1 [@media(max-height:849px)]:hidden">
+        <div className="relative -z-10 mt-auto min-h-[8rem] flex-1 [@media(max-height:799px)]:hidden">
           <div
             aria-hidden="true"
             className="absolute inset-x-[-2rem] top-0 -bottom-3 bg-cover bg-bottom xl:inset-x-[-4rem] 2xl:inset-x-[-6rem] [mask-image:linear-gradient(to_bottom,transparent_0%,black_30%)]"
