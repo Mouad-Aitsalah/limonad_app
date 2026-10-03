@@ -1,8 +1,18 @@
 "use client";
 
 import * as React from "react";
-import { MonitorSmartphone } from "lucide-react";
+import { Loader2, LogOut, MonitorSmartphone } from "lucide-react";
+import { toast } from "sonner";
 
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { CONNECTIONS_REFRESH_MS } from "@/lib/session-activity";
 import type { OrganizationConnectionsSnapshot } from "@/lib/session-activity";
@@ -30,6 +40,15 @@ function useOrganizationConnections(
 ) {
   const [snapshot, setSnapshot] = React.useState(initial);
   const [failed, setFailed] = React.useState(initial === null);
+  // Bumped whenever a fresher snapshot is applied by hand (after a
+  // revocation): a poll that started before it must not overwrite it.
+  const versionRef = React.useRef(0);
+
+  const applySnapshot = React.useCallback((next: OrganizationConnectionsSnapshot) => {
+    versionRef.current += 1;
+    setSnapshot(next);
+    setFailed(false);
+  }, []);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -40,6 +59,7 @@ function useOrganizationConnections(
       inFlight?.abort();
       const controller = new AbortController();
       inFlight = controller;
+      const startedAtVersion = versionRef.current;
       try {
         const response = await fetch(`/api/organizations/${organizationId}/connections`, {
           cache: "no-store",
@@ -48,7 +68,7 @@ function useOrganizationConnections(
         });
         if (!response.ok) throw new Error("connections");
         const body = (await response.json()) as { connections: OrganizationConnectionsSnapshot };
-        if (cancelled) return;
+        if (cancelled || versionRef.current !== startedAtVersion) return;
         setSnapshot(body.connections);
         setFailed(false);
       } catch {
@@ -72,7 +92,7 @@ function useOrganizationConnections(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationId]);
 
-  return { snapshot, failed };
+  return { snapshot, failed, applySnapshot };
 }
 
 function StatusDot({ online }: { online: boolean }) {
@@ -96,8 +116,59 @@ export function OrganizationConnectionsPanel({
   users: OrgUser[];
   initialConnections: OrganizationConnectionsSnapshot | null;
 }) {
-  const { snapshot, failed } = useOrganizationConnections(organizationId, initialConnections);
+  const { snapshot, failed, applySnapshot } = useOrganizationConnections(
+    organizationId,
+    initialConnections,
+  );
   const byUser = new Map((snapshot?.users ?? []).map((entry) => [entry.userId, entry]));
+
+  const [target, setTarget] = React.useState<OrgUser | null>(null);
+  const [revoking, setRevoking] = React.useState(false);
+  const [revokeError, setRevokeError] = React.useState<string | null>(null);
+
+  function openConfirm(user: OrgUser) {
+    setRevokeError(null);
+    setTarget(user);
+  }
+
+  async function confirmRevoke() {
+    // One request at a time: ignore any further click while it is running.
+    if (!target || revoking) return;
+    setRevoking(true);
+    setRevokeError(null);
+    try {
+      const response = await fetch(
+        `/api/organizations/${organizationId}/connections/${target.id}/revoke`,
+        { method: "POST", credentials: "include", cache: "no-store" },
+      );
+      const body = (await response.json().catch(() => null)) as {
+        message?: string;
+        revokedSessions?: number;
+        connections?: OrganizationConnectionsSnapshot | null;
+      } | null;
+      if (!response.ok) {
+        // Explicit error, kept visible in the dialog (never swallowed).
+        setRevokeError(
+          body?.message
+            ? `${body.message} (code ${response.status})`
+            : `Impossible de déconnecter les appareils (code ${response.status}).`,
+        );
+        return;
+      }
+      const revoked = body?.revokedSessions ?? 0;
+      if (body?.connections) applySnapshot(body.connections);
+      toast.success(
+        revoked > 0
+          ? `${revoked} session${revoked > 1 ? "s" : ""} révoquée${revoked > 1 ? "s" : ""} pour ${target.fullName}.`
+          : `${target.fullName} n'avait aucune session active.`,
+      );
+      setTarget(null);
+    } catch {
+      setRevokeError("Erreur réseau : la déconnexion n'a pas pu être confirmée. Réessayez.");
+    } finally {
+      setRevoking(false);
+    }
+  }
 
   return (
     <div className="space-y-3" aria-live="polite">
@@ -148,7 +219,7 @@ export function OrganizationConnectionsPanel({
                   <p className="truncate text-sm font-medium text-foreground">{user.fullName}</p>
                   <p className="text-xs text-muted-foreground">{ROLE_LABELS[user.role]}</p>
                 </div>
-                <div className="flex items-center gap-4 text-sm">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                   <span className="tabular-nums text-muted-foreground">
                     {devices} appareil{devices > 1 ? "s" : ""} connecté{devices > 1 ? "s" : ""}
                   </span>
@@ -161,12 +232,77 @@ export function OrganizationConnectionsPanel({
                     <StatusDot online={online} />
                     {online ? "En ligne" : "Hors ligne"}
                   </span>
+                  {devices > 0 ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openConfirm(user)}
+                      aria-label={`Déconnecter tous les appareils de ${user.fullName}`}
+                      className="text-red-600 hover:text-red-700 max-sm:w-full"
+                    >
+                      <LogOut aria-hidden="true" />
+                      Déconnecter tous les appareils
+                    </Button>
+                  ) : null}
                 </div>
               </li>
             );
           })}
         </ul>
       )}
+
+      <Dialog
+        open={target !== null}
+        onOpenChange={(open) => {
+          // Cannot be dismissed while the request is running.
+          if (!open && !revoking) setTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md" showCloseButton={!revoking}>
+          <DialogHeader>
+            <DialogTitle>Déconnecter tous les appareils ?</DialogTitle>
+            <DialogDescription>
+              Voulez-vous vraiment déconnecter tous les appareils de cet utilisateur ? Toutes ses
+              sessions actives seront révoquées et il devra se reconnecter pour accéder à
+              l&apos;application.
+            </DialogDescription>
+            {target ? (
+              <p className="text-sm font-medium text-foreground">
+                {target.fullName} - {ROLE_LABELS[target.role]}
+              </p>
+            ) : null}
+          </DialogHeader>
+          {revokeError ? (
+            <p role="alert" className="rounded-xl bg-red-50 px-4 py-2.5 text-sm text-red-700">
+              {revokeError}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={revoking}
+              onClick={() => setTarget(null)}
+            >
+              Annuler
+            </Button>
+            <Button
+              type="button"
+              disabled={revoking}
+              onClick={() => void confirmRevoke()}
+              className="bg-red-600 bg-none text-white hover:bg-red-700"
+            >
+              {revoking ? (
+                <Loader2 aria-hidden="true" className="animate-spin" />
+              ) : (
+                <LogOut aria-hidden="true" />
+              )}
+              {revoking ? "Déconnexion..." : "Déconnecter tous les appareils"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

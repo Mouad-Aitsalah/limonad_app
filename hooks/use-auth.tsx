@@ -121,9 +121,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isSignedIn) return;
     const ping = () => {
       if (document.visibilityState !== "visible" || !navigator.onLine) return;
-      void fetch("/api/auth/heartbeat", { cache: "no-store", credentials: "include" }).catch(
-        () => undefined,
-      );
+      void fetch("/api/auth/heartbeat", { cache: "no-store", credentials: "include" })
+        .then((response) => {
+          // Only a definitive 401 (session revoked / expired) matters: the
+          // authoritative /api/auth/session check then clears the signed-in
+          // state and RouteGuard sends the user to /login. Network errors and
+          // 5xx are ignored (never a logout).
+          if (response.status === 401) void revalidateSession();
+        })
+        .catch(() => undefined);
     };
     const intervalId = window.setInterval(ping, HEARTBEAT_INTERVAL_MS);
     document.addEventListener("visibilitychange", ping);
@@ -132,7 +138,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", ping);
     };
-  }, [isSignedIn]);
+  }, [isSignedIn, revalidateSession]);
 
   const login = React.useCallback(
     async (email: string, password: string): Promise<LoginResult> => {

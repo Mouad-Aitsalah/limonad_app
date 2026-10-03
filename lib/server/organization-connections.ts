@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireSuperAdmin } from "@/lib/server/organization-context";
+import { revokeUserSessionsInOrganization } from "@/lib/session-revocation";
 import {
   buildOrganizationConnections,
   loadSessionsWithDeviceFallback,
@@ -76,4 +77,44 @@ export async function getOrganizationConnections(
   }
 
   return buildOrganizationConnections(userIds, sessions, now, deviceTracking);
+}
+
+/**
+ * SUPER_ADMIN only: signs a user out of ALL their devices by revoking every
+ * active session (revokedAt = now, one atomic updateMany; no row is deleted,
+ * the account and the session history stay). The target must belong to the
+ * given organization. Effective immediately on the server: the very next
+ * request made with any of those sessions fails (see isSessionValid in
+ * getCurrentSessionUser); the devices themselves return to the login page at
+ * their next heartbeat (<= 1 minute while a tab is visible) or request.
+ *
+ * Never returns or logs a token, token hash, session id or device id.
+ */
+export async function revokeOrganizationUserSessions(organizationId: string, userId: string) {
+  const actor = await requireSuperAdmin();
+
+  const { revokedSessions } = await revokeUserSessionsInOrganization(
+    {
+      findUser: (id) =>
+        prisma.user.findUnique({ where: { id }, select: { id: true, organizationId: true } }),
+      revokeActiveSessions: async (id, now) => {
+        const result = await prisma.session.updateMany({
+          where: { userId: id, revokedAt: null, expiresAt: { gt: now } },
+          data: { revokedAt: now },
+        });
+        return result.count;
+      },
+    },
+    { actorRole: actor.role, organizationId, userId },
+  );
+
+  // Audit trail (ids and a count only).
+  console.warn(
+    `[auth] sessions revoked by super admin actor=${actor.id} user=${userId} organization=${organizationId} count=${revokedSessions} at=${new Date().toISOString()}`,
+  );
+
+  // Fresh counts for the UI; a failure here must not turn a successful
+  // revocation into an error (the panel then simply re-polls).
+  const connections = await getOrganizationConnections(organizationId).catch(() => null);
+  return { revokedSessions, connections };
 }

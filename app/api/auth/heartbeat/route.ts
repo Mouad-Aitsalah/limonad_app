@@ -11,8 +11,16 @@ export const runtime = "nodejs";
  * session through getCurrentSessionUser also stamps the session's lastUsedAt
  * (throttled), which is what the SUPER_ADMIN live-connections view reads.
  * Returns nothing about the user; it never renews or alters the session.
+ *
+ * 401 when the session no longer exists (signed out from another place,
+ * "Deconnecter tous les appareils", expiry, disabled account): the client
+ * (hooks/use-auth.tsx) then re-checks the session and returns to /login.
  */
 export async function GET() {
   const user = await getCurrentSessionUser();
-  return NextResponse.json({ ok: Boolean(user) }, { headers: { "Cache-Control": "no-store" } });
+  const headers = { "Cache-Control": "no-store" };
+  if (!user) {
+    return NextResponse.json({ ok: false, reason: "session_ended" }, { status: 401, headers });
+  }
+  return NextResponse.json({ ok: true }, { headers });
 }

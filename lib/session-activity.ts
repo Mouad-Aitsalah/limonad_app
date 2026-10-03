@@ -55,6 +55,21 @@ export type OrganizationConnectionsSnapshot = {
   users: OrganizationConnectionsUser[];
 };
 
+/**
+ * A session can authenticate a request only if it is not revoked and not
+ * expired. Used by lib/server/auth.ts for every protected request, so a
+ * revoked session (logout, "Deconnecter tous les appareils") is refused
+ * immediately.
+ */
+export function isSessionValid(
+  session: { revokedAt: Date | null; expiresAt: Date },
+  now: Date | number,
+): boolean {
+  const nowMs = typeof now === "number" ? now : now.getTime();
+  if (session.revokedAt) return false;
+  return session.expiresAt.getTime() > nowMs;
+}
+
 export function lastActivityOf(session: ActivitySession): Date {
   return session.lastUsedAt ?? session.createdAt;
 }

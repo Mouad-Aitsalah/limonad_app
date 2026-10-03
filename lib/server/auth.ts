@@ -5,7 +5,11 @@ import { cookies, headers } from "next/headers";
 import bcrypt from "bcryptjs";
 
 import { prisma } from "@/lib/prisma";
-import { isValidDeviceId, LAST_ACTIVITY_WRITE_THROTTLE_MS } from "@/lib/session-activity";
+import {
+  isSessionValid,
+  isValidDeviceId,
+  LAST_ACTIVITY_WRITE_THROTTLE_MS,
+} from "@/lib/session-activity";
 import type { CurrentUser, UserRole } from "@/types/auth";
 
 const SESSION_COOKIE = "comdis.session";
@@ -186,8 +190,8 @@ export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
   });
 
   if (!session) return null;
-  if (session.revokedAt) return null;
-  if (session.expiresAt.getTime() <= Date.now()) return null;
+  // Revoked (logout / "Deconnecter tous les appareils") or expired -> refused.
+  if (!isSessionValid(session, Date.now())) return null;
 
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
@@ -244,9 +248,8 @@ export async function refreshCurrentSession(): Promise<CurrentUser | null> {
   });
 
   if (!session) return null;
-  if (session.revokedAt) return null;
   const now = Date.now();
-  if (session.expiresAt.getTime() <= now) return null;
+  if (!isSessionValid(session, now)) return null;
 
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
