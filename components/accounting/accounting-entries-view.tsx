@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { resolveAccountByCode } from "@/lib/accounting-account-resolve";
 import { cn, formatCurrency } from "@/lib/utils";
 import type {
   AccountingAccountOptionDto,
   AccountingEntryDto,
 } from "@/types/accounting";
+import { AccountCodeInput } from "@/components/accounting/account-code-input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,12 +52,6 @@ type ManualEntryForm = {
 // neutral value is sent. Line "désignations" are stored exactly as typed
 // (may be "") - no auto-fill.
 const NEUTRAL_ENTRY_DESCRIPTION = "Ecriture manuelle";
-
-type ResolvedAccount =
-  | { status: "empty" }
-  | { status: "not-found" }
-  | { status: "inactive"; account: AccountingAccountOptionDto }
-  | { status: "resolved"; account: AccountingAccountOptionDto };
 
 type LineField = "numCompt" | "label" | "debit" | "credit";
 
@@ -107,21 +103,6 @@ function isLineMeaningful(line: ManualLineForm) {
     Number(line.debit || 0) > 0 ||
     Number(line.credit || 0) > 0
   );
-}
-
-/** The account number is only ever a search key into the real chart of
- * accounts - the resolved AccountingAccount.id is what actually gets sent
- * to the server. */
-function resolveAccountByCode(
-  accounts: AccountingAccountOptionDto[],
-  rawCode: string,
-): ResolvedAccount {
-  const normalized = rawCode.trim().toUpperCase();
-  if (!normalized) return { status: "empty" };
-  const match = accounts.find((account) => account.code.trim().toUpperCase() === normalized);
-  if (!match) return { status: "not-found" };
-  if (!match.isActive) return { status: "inactive", account: match };
-  return { status: "resolved", account: match };
 }
 
 export function AccountingEntriesView({
@@ -702,12 +683,13 @@ export function AccountingEntriesView({
                 return (
                   <TableRow key={line.id}>
                     <TableCell className="p-1.5 align-top">
-                      <Input
-                        ref={(node) => setRowRef(line.id, "numCompt", node)}
+                      <AccountCodeInput
+                        inputRef={(node) => setRowRef(line.id, "numCompt", node)}
                         value={line.numCompt}
-                        onChange={(event) => updateLine(index, "numCompt", event.target.value)}
+                        onValueChange={(next) => updateLine(index, "numCompt", next)}
                         onKeyDown={(event) => handleLineKeyDown(index, "numCompt", event)}
-                        aria-invalid={isInvalid}
+                        accounts={accounts}
+                        invalid={isInvalid}
                         placeholder="Ex: 51111"
                         className="h-11 font-medium tabular-nums"
                       />
