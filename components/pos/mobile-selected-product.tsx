@@ -44,7 +44,10 @@ export function MobileSelectedProduct({ product, className, variant = "overlay" 
           className="h-6 w-6 shrink-0 rounded-md"
           sizes="24px"
         />
-        <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-foreground">
+        {/* Name + price: 14.3px = 1.3 x the former 11px (both share this size;
+            the name stays semibold, the price medium emerald). One line,
+            truncated with an ellipsis when too long. */}
+        <span className="min-w-0 flex-1 truncate text-[14.3px] leading-none text-foreground">
           <span className="font-semibold">{product.designation}</span>{" "}
           <span className="font-medium text-emerald-700">{formatCurrency(product.priceTTC)}</span>
         </span>
