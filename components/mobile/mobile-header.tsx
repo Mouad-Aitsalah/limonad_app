@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
+import { AssistantLauncherButton } from "@/components/assistant/assistant-panel";
 import { getNavigationPageLabel } from "@/components/layout/navigation";
 import { MobileBackLink } from "@/components/mobile/mobile-back-link";
 
@@ -16,6 +17,10 @@ export function MobileHeader() {
         <p className="min-w-0 flex-1 text-base font-semibold leading-snug text-foreground">
           {getNavigationPageLabel(pathname, currentUser?.role)}
         </p>
+        {/* AI Assistant (admin only - renders nothing otherwise, e.g. in the driver
+            shell). On the counter POS the fixed cart button occupies the top-right
+            corner, so the robot stays clear of it. */}
+        <AssistantLauncherButton compact className={pathname === "/pos" ? "mr-14" : undefined} />
       </div>
     </header>
   );

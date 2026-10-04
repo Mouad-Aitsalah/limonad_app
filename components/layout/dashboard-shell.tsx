@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { isDesktopScaleRoute } from "@/lib/desktop-scale-routes";
 import { SidebarProvider, useSidebar } from "@/hooks/use-sidebar";
+import { AssistantPanelProvider } from "@/components/assistant/assistant-panel";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { MobileHeader } from "@/components/mobile/mobile-header";
@@ -58,7 +59,10 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider>
-      <DashboardShellInner>{children}</DashboardShellInner>
+      {/* AI Assistant quick access (header robot button + floating panel), admin only. */}
+      <AssistantPanelProvider>
+        <DashboardShellInner>{children}</DashboardShellInner>
+      </AssistantPanelProvider>
     </SidebarProvider>
   );
 }

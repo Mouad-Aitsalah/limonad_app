@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 
+import { AssistantLauncherButton } from "@/components/assistant/assistant-panel";
 import { useAuth } from "@/hooks/use-auth";
 import { getNavigationPageLabel } from "@/components/layout/navigation";
 import { UserMenu } from "@/components/layout/user-menu";
@@ -37,6 +38,7 @@ export function Header() {
         </div>
 
         <div className="hidden shrink-0 items-center gap-3 lg:flex">
+          <AssistantLauncherButton />
           <UserMenu
             userName={currentUser?.nom ?? "Utilisateur"}
             userRole={currentUser?.role ?? "admin"}
