@@ -106,10 +106,15 @@ test("warehouse table: phones get cards with the exact quantity and value of eac
     assert.ok(text.includes(`${qty}`), qty);
     assert.ok(text.split(String.fromCharCode(160)).join(" ").includes(`${value} DH`), value);
   }
-  // the 9 desktop columns are all still there
-  for (const head of ["Produit", "Categorie", "Emplacement", "Stock actuel", "Reserve", "Disponible", "Stock minimum", "Valeur", "Statut"]) {
+  // the desktop table keeps six columns: Emplacement, Reserve and Disponible were removed on request
+  for (const head of ["Produit", "Categorie", "Stock actuel", "Stock minimum", "Valeur", "Statut"]) {
     assert.ok(markup.includes(`>${head}</th>`), head);
   }
+  for (const removed of ["Emplacement", "Reserve", "Disponible"]) {
+    assert.equal(markup.includes(`>${removed}</th>`), false, `${removed} column removed`);
+  }
+  assert.equal((markup.match(/<th /g) ?? []).length, 6);
+  assert.equal(/<td[^>]*>DEP-01<\/td>/.test(markup), false, "no location cell in the table");
   assert.equal(/DEP-01 ·/.test(markup), false, "no location on the main-stock cards");
   assert.match(renderToStaticMarkup(<WarehouseStockTable rows={rows} showLocation />), /REF-1 · DEP-01/);
 });

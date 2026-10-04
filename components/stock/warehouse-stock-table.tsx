@@ -57,10 +57,7 @@ export function WarehouseStockTable({
         <TableRow>
           <TableHead>Produit</TableHead>
           <TableHead>Categorie</TableHead>
-          <TableHead>Emplacement</TableHead>
           <TableHead className="text-right">Stock actuel</TableHead>
-          <TableHead className="text-right">Reserve</TableHead>
-          <TableHead className="text-right">Disponible</TableHead>
           <TableHead className="text-right">Stock minimum</TableHead>
           <TableHead className="text-right">Valeur</TableHead>
           <TableHead>Statut</TableHead>
@@ -83,9 +80,6 @@ export function WarehouseStockTable({
               <TableCell className="text-muted-foreground">
                 {row.categoryName}
               </TableCell>
-              <TableCell className="text-muted-foreground">
-                {row.locationCode}
-              </TableCell>
               <TableCell
                 className={cn(
                   "text-right font-medium tabular-nums",
@@ -94,12 +88,6 @@ export function WarehouseStockTable({
                 )}
               >
                 {row.quantity}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {row.reservedQuantity}
-              </TableCell>
-              <TableCell className="text-right font-medium tabular-nums">
-                {row.availableQuantity}
               </TableCell>
               <TableCell className="text-right text-muted-foreground tabular-nums">
                 {row.minimumStock}

@@ -296,26 +296,6 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
     Math.max(productSuggestions.length - 1, 0),
   );
 
-  const draftTotals = React.useMemo(
-    () =>
-      draftLines.reduce(
-        (totals, line) => {
-          totals.initialLoadQuantity += line.initialLoadQuantity;
-          totals.reloadedQuantity += line.reloadedQuantity;
-          totals.actualRemainingQuantity += line.actualRemainingQuantity ?? 0;
-          totals.theoreticalRemainingQuantity += truckLevelsByProductId[line.productId] ?? 0;
-          return totals;
-        },
-        {
-          initialLoadQuantity: 0,
-          reloadedQuantity: 0,
-          actualRemainingQuantity: 0,
-          theoreticalRemainingQuantity: 0,
-        },
-      ),
-    [draftLines, truckLevelsByProductId],
-  );
-
   // Phase 3: historyState now holds one server-paginated page (see
   // getLoadingHistoryPage), already sorted server-side (createdAt desc, id
   // as tie-breaker) - no client re-sort needed. The search box filters
@@ -823,19 +803,6 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                         </p>
                       </div>
                       <LoadingStatusBadge status={openLoading.status} />
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-4">
-                      <MetricCard label="Charge initiale" value={draftTotals.initialLoadQuantity} />
-                      <MetricCard label="Rechargee" value={draftTotals.reloadedQuantity} />
-                      <MetricCard
-                        label="Restante theorique"
-                        value={draftTotals.theoreticalRemainingQuantity}
-                      />
-                      <MetricCard
-                        label="Restante reelle"
-                        value={draftTotals.actualRemainingQuantity}
-                      />
                     </div>
                   </section>
 
@@ -1378,25 +1345,6 @@ function InfoCard({
       </div>
       <p className="mt-2 truncate text-sm font-semibold text-foreground">{value}</p>
       {secondary ? <p className="text-xs text-muted-foreground">{secondary}</p> : null}
-    </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  valueLabel,
-}: {
-  label: string;
-  value?: number;
-  valueLabel?: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-border p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-2 text-xl font-semibold text-foreground tabular-nums">
-        {valueLabel ?? value ?? 0}
-      </p>
     </div>
   );
 }
