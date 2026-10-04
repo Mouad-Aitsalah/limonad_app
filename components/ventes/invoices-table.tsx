@@ -42,6 +42,13 @@ import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
 type InvoicesTableProps = {
   invoices: SaleHistoryListItemDto[];
   onSaleChanged?: () => void | Promise<void>;
+  /**
+   * "Factures journalières" layout (opt-in): the user column is titled
+   * "Utilisateur" and the "Net" column is not shown. The data behind it
+   * (SaleHistoryListItemDto.net) is untouched and the other callers (archives
+   * des factures, drill-down dialog) keep the original table.
+   */
+  dailyLayout?: boolean;
 };
 
 // Terminal statuses: nothing left to cancel.
@@ -63,7 +70,7 @@ function formatDateTime(value: string) {
   });
 }
 
-export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
+export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: InvoicesTableProps) {
   const router = useRouter();
   const { currentUser } = useAuth();
   const isAdmin =
@@ -150,10 +157,10 @@ export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
             <TableHead>Commande</TableHead>
             <TableHead>Date</TableHead>
             <TableHead>Client</TableHead>
-            <TableHead>Chauffeur / utilisateur</TableHead>
+            <TableHead>{dailyLayout ? "Utilisateur" : "Chauffeur / utilisateur"}</TableHead>
             <TableHead className="text-right">Articles</TableHead>
             <TableHead className="text-right">Total</TableHead>
-            <TableHead className="text-right">Net</TableHead>
+            {dailyLayout ? null : <TableHead className="text-right">Net</TableHead>}
             <TableHead>Paiement</TableHead>
             <TableHead>Statut</TableHead>
             <TableHead className="text-right">Actions</TableHead>
@@ -203,9 +210,11 @@ export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
                 <TableCell className="text-right tabular-nums">
                   {formatCurrency(invoice.totalTTC)}
                 </TableCell>
-                <TableCell className="text-right font-medium tabular-nums">
-                  {formatCurrency(invoice.net)}
-                </TableCell>
+                {dailyLayout ? null : (
+                  <TableCell className="text-right font-medium tabular-nums">
+                    {formatCurrency(invoice.net)}
+                  </TableCell>
+                )}
                 <TableCell className="text-muted-foreground">
                   {paymentMethodLabels[invoice.paymentMethod] ?? invoice.paymentMethod}
                 </TableCell>
@@ -258,7 +267,7 @@ export function InvoicesTable({ invoices, onSaleChanged }: InvoicesTableProps) {
                 </TableRow>
                 {expanded ? (
                   <TableRow>
-                    <TableCell colSpan={11} className="bg-muted/10 p-3 sm:p-4">
+                    <TableCell colSpan={dailyLayout ? 10 : 11} className="bg-muted/10 p-3 sm:p-4">
                       {expandedLoading ? (
                         <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
                           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />

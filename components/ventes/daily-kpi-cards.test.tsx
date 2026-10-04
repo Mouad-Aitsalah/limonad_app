@@ -149,7 +149,7 @@ test("filters: same three fields and handlers; phones get 40px touch heights and
 test("the page keeps its filters, table and data flow; the server and other screens are untouched", () => {
   const view = readFileSync(new URL("./daily-invoices-view.tsx", import.meta.url), "utf8");
   assert.match(view, /<DailyKpiCards kpis=\{kpis\} \/>/);
-  for (const kept of ["DailyInvoicesUserFilter", "paymentMethodOptions", "useDailyInvoicesPage({ day, userIds, paymentMethod }, initialData)", "goToNextPage", "goToPreviousPage", "<InvoicesTable invoices={data.items} onSaleChanged={refetch} />", "kpis.reconciled"]) {
+  for (const kept of ["DailyInvoicesUserFilter", "paymentMethodOptions", "useDailyInvoicesPage({ day, userIds, paymentMethod }, initialData)", "goToNextPage", "goToPreviousPage", "<InvoicesTable invoices={data.items} onSaleChanged={refetch} dailyLayout />", "kpis.reconciled"]) {
     assert.ok(view.includes(kept), kept);
   }
   const server = readFileSync(new URL("../../lib/server/daily-invoices.ts", import.meta.url), "utf8");

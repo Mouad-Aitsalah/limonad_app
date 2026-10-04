@@ -134,7 +134,7 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
             </div>
           </div>
 
-          <InvoicesTable invoices={data.items} onSaleChanged={refetch} />
+          <InvoicesTable invoices={data.items} onSaleChanged={refetch} dailyLayout />
         </CardContent>
       </Card>
     </div>
