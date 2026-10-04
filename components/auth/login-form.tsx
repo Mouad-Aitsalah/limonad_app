@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Eye, EyeOff, LockKeyhole, LogIn, Mail, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff, LockKeyhole, LogIn, Mail, ShieldCheck, ShoppingBag } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -146,6 +147,16 @@ export function LoginForm() {
           {isSubmitting ? "Connexion..." : "Se connecter"}
         </Button>
       </form>
+
+      {/* CLIENT PLATFORM: entry point into the separate customer-facing
+          catalog space (/client/*), never the staff dashboard. */}
+      <Link
+        href="/client/login"
+        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#00845F]/25 bg-[#e8f6f0] text-sm font-semibold text-[#00845F] transition duration-200 hover:bg-[#d3eee3] focus-visible:ring-2 focus-visible:ring-[#00966D]/40 focus-visible:outline-none"
+      >
+        <ShoppingBag aria-hidden="true" className="h-4 w-4" />
+        Espace Client · Commander en ligne
+      </Link>
 
       <div className="mt-9 flex items-center gap-4 rounded-2xl bg-[#e8f6f0] px-5 py-5 [@media(max-height:850px)]:mt-5 [@media(max-height:850px)]:py-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#d3eee3] text-[#00845F]">

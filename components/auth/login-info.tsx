@@ -54,7 +54,7 @@ export function LoginInfo() {
   return (
     <section
       aria-label="Présentation de COMDIS Manager"
-      className="relative isolate hidden min-h-screen flex-col overflow-hidden bg-[#102B4C] text-white lg:flex"
+      className="relative isolate hidden min-h-screen flex-col overflow-clip bg-[#102B4C] text-white lg:flex"
     >
       <div
         aria-hidden="true"
@@ -119,19 +119,27 @@ export function LoginInfo() {
         </div>
       </div>
 
-      <footer className="relative mx-5 mb-5 rounded-2xl border border-white/10 bg-[#102B4C]/70 px-4 py-3 backdrop-blur-md xl:mx-10 xl:px-6 xl:py-4 2xl:mx-16">
+      {/* The three highlights: one compact row at the very bottom of the panel
+          (mt-auto), 16px above the lower edge. When the page is taller than the
+          screen (the form column decides the height), `sticky bottom-4` keeps the
+          row 16px above the bottom of the SCREEN instead of below the fold - this is
+          why the section clips with overflow-clip (same clipping as overflow-hidden,
+          but it does not become a scroll container that would disable sticky).
+          Only from 640px of screen height: below that the row would sit on the
+          feature cards, so it keeps its place at the end of the panel instead. */}
+      <footer className="relative z-10 mx-5 mt-auto mb-4 rounded-2xl [@media(min-height:640px)]:sticky [@media(min-height:640px)]:bottom-4 border border-white/10 bg-[#102B4C]/70 px-3 py-2 backdrop-blur-md xl:mx-10 xl:px-5 xl:py-2.5 2xl:mx-16">
         <ul className="grid grid-cols-3 divide-x divide-white/10">
           {highlights.map((item) => {
             const Icon = item.icon;
             return (
-              <li key={item.title} className="flex items-center gap-3 px-3 first:pl-0 last:pr-0">
+              <li key={item.title} className="flex min-w-0 items-center gap-2 px-2.5 first:pl-0 last:pr-0 xl:gap-2.5 xl:px-3">
                 <span
-                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white ${item.iconClass}`}
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-white xl:h-9 xl:w-9 ${item.iconClass}`}
                 >
-                  <Icon aria-hidden="true" className="h-5 w-5" />
+                  <Icon aria-hidden="true" className="h-4 w-4 xl:h-[18px] xl:w-[18px]" />
                 </span>
-                <p className="text-[12.5px] leading-5 text-white/70 xl:whitespace-nowrap">
-                  <span className="block font-serif text-[15px] font-semibold text-white xl:whitespace-nowrap">
+                <p className="min-w-0 text-[11.5px] leading-4 text-white/70 xl:text-[12px] xl:whitespace-nowrap">
+                  <span className="block font-serif text-[12.5px] leading-5 font-semibold whitespace-nowrap text-white xl:text-[14px]">
                     {item.title}
                   </span>
                   {item.description}
