@@ -4,7 +4,7 @@ import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
 import { toLightweightProductImageUrl } from "@/lib/server/product-image-url";
-import type { ClientCatalogDto } from "@/types/client-portal";
+import type { ClientCatalogDto, ClientOrganizationIdentityDto } from "@/types/client-portal";
 
 /**
  * CLIENT PLATFORM (branch `client-platform`) - the customer-facing catalog.
@@ -75,4 +75,16 @@ export async function getClientCatalog(organizationId: string): Promise<ClientCa
       available: availabilityByProduct.get(product.id) ?? false,
     })),
   };
+}
+
+/**
+ * Lightweight sibling of getClientCatalog for pages that only need the
+ * organisation's identity (e.g. the cart page header) - same SECURITY rule:
+ * `organizationId` comes only from the verified client session.
+ */
+export async function getClientOrganizationIdentity(organizationId: string): Promise<ClientOrganizationIdentityDto> {
+  return prisma.organization.findUniqueOrThrow({
+    where: { id: organizationId },
+    select: { name: true, tradeName: true, logoUrl: true },
+  });
 }

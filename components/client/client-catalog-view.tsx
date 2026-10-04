@@ -1,20 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
-import { LogOut, Minus, Plus, Search, ShoppingCart, Trash2 } from "lucide-react";
+import { Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ClientHeader } from "@/components/client/client-header";
 import { ProductMedia } from "@/components/products/product-media";
 import { cartStorageKey, useClientCart } from "@/lib/client-cart-store";
 import { formatCurrency } from "@/lib/utils";
@@ -36,15 +28,9 @@ function normalize(value: string): string {
 }
 
 export function ClientCatalogView({ client, catalog }: ClientCatalogViewProps) {
-  const router = useRouter();
   const [search, setSearch] = React.useState("");
   const [categoryId, setCategoryId] = React.useState<string>(ALL_CATEGORIES);
-  const [cartOpen, setCartOpen] = React.useState(false);
-  const { cart, addToCart, updateQuantity, removeFromCart } = useClientCart(
-    cartStorageKey(client.organizationId, client.email),
-  );
-
-  const organizationName = catalog.organization.tradeName?.trim() || catalog.organization.name;
+  const { addToCart } = useClientCart(cartStorageKey(client.organizationId, client.email));
 
   const filteredProducts = React.useMemo(() => {
     const query = normalize(search);
@@ -55,53 +41,9 @@ export function ClientCatalogView({ client, catalog }: ClientCatalogViewProps) {
     });
   }, [catalog.products, search, categoryId]);
 
-  const cartCount = cart.reduce((sum, line) => sum + line.quantity, 0);
-  const cartTotal = cart.reduce((sum, line) => sum + line.priceTTC * line.quantity, 0);
-
-  async function handleLogout() {
-    await fetch("/api/client/logout", { method: "POST" }).catch(() => undefined);
-    router.replace("/client/login");
-  }
-
   return (
     <div className="min-h-screen bg-emerald-50/30">
-      <header className="sticky top-0 z-20 border-b border-emerald-100 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
-            {catalog.organization.logoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={catalog.organization.logoUrl}
-                alt={organizationName}
-                className="h-10 w-10 rounded-xl object-contain"
-              />
-            ) : (
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-sm font-bold text-white">
-                {organizationName.charAt(0).toUpperCase()}
-              </div>
-            )}
-            <div className="min-w-0">
-              <p className="truncate font-heading text-lg font-semibold text-foreground">
-                {organizationName}
-              </p>
-              <p className="truncate text-xs text-muted-foreground">Espace Client · Catalogue</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" onClick={() => setCartOpen(true)} className="relative">
-              <ShoppingCart aria-hidden="true" className="h-4 w-4" />
-              <span className="hidden sm:inline">Panier</span>
-              {cartCount > 0 ? (
-                <Badge className="ml-1 bg-emerald-600 text-white">{cartCount}</Badge>
-              ) : null}
-            </Button>
-            <Button type="button" variant="ghost" size="icon" onClick={handleLogout} aria-label="Se déconnecter">
-              <LogOut aria-hidden="true" className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </header>
+      <ClientHeader client={client} organization={catalog.organization} subtitle="Espace Client · Catalogue" />
 
       <main className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6">
         <div className="relative">
@@ -178,82 +120,6 @@ export function ClientCatalogView({ client, catalog }: ClientCatalogViewProps) {
           </div>
         )}
       </main>
-
-      <Dialog open={cartOpen} onOpenChange={setCartOpen}>
-        <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Votre panier</DialogTitle>
-            <DialogDescription>
-              {cartCount > 0
-                ? `${cartCount} article${cartCount > 1 ? "s" : ""}`
-                : "Votre panier est vide."}
-            </DialogDescription>
-          </DialogHeader>
-
-          {cart.length > 0 ? (
-            <div className="flex-1 space-y-3 overflow-y-auto px-1 py-1">
-              {cart.map((line) => (
-                <div
-                  key={line.productId}
-                  className="flex items-center gap-3 rounded-xl border border-border p-2.5"
-                >
-                  <ProductMedia
-                    imageUrl={line.imageUrl}
-                    alt={line.productName}
-                    fit="cover"
-                    className="h-14 w-14 shrink-0 rounded-lg"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-foreground">{line.productName}</p>
-                    <p className="text-xs text-muted-foreground">{formatCurrency(line.priceTTC)}</p>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon-xs"
-                      onClick={() => updateQuantity(line.productId, line.quantity - 1)}
-                      aria-label="Diminuer la quantité"
-                    >
-                      <Minus className="h-3 w-3" />
-                    </Button>
-                    <span className="w-6 text-center text-sm tabular-nums">{line.quantity}</span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon-xs"
-                      onClick={() => updateQuantity(line.productId, line.quantity + 1)}
-                      aria-label="Augmenter la quantité"
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => removeFromCart(line.productId)}
-                    aria-label={`Retirer ${line.productName}`}
-                    className="text-muted-foreground hover:text-red-600"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          <DialogFooter className="flex-col gap-3 sm:flex-col">
-            <div className="flex w-full items-center justify-between border-t border-border pt-3 text-base font-semibold">
-              <span>Total</span>
-              <span className="tabular-nums">{formatCurrency(cartTotal)}</span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              La validation de commande sera disponible dans une prochaine étape.
-            </p>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
