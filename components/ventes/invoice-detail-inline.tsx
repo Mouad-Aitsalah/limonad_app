@@ -96,7 +96,7 @@ export function InvoiceDetailInline({ listItem, sale }: InvoiceDetailInlineProps
         </Table>
       </div>
 
-      <div className="ml-auto max-w-xs space-y-2 rounded-xl border border-border bg-background p-3">
+      <div className="mx-auto w-full max-w-xs space-y-2 rounded-xl border border-border bg-background p-3">
         <TotalRow label="Total HT" value={formatCurrency(sale.subtotalHT)} />
         <TotalRow label="TVA" value={formatCurrency(sale.taxAmount)} />
         {(sale.roundingAmount ?? 0) !== 0 ? (

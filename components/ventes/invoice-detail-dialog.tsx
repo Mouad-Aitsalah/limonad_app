@@ -245,7 +245,7 @@ export function InvoiceDetailDialog({
 
                 <Separator />
 
-                <div className="ml-auto max-w-xs space-y-2">
+                <div className="mx-auto w-full max-w-xs space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Total HT</span>
                     <span className="tabular-nums text-foreground">
