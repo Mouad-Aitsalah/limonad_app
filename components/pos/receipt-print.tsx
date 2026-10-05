@@ -3,6 +3,7 @@
 import { useCompanyIdentity, type CompanyIdentity } from "@/hooks/use-company-identity";
 import { formatCustomerCode } from "@/lib/customer-code";
 import { receiptUnitPriceTTC } from "@/lib/receipt-line-price";
+import { formatSignedCurrency } from "@/lib/currency";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto } from "@/types/operations-dto";
 
@@ -235,6 +236,16 @@ export function ReceiptPrint({
         </div>
 
         <div className="receipt-print-separator" />
+
+        {/* Commercial rounding of the final total (lib/sale-rounding.ts), only when
+            the sale has one: the lines above stay at the cent, the total below is the
+            rounded amount actually due. */}
+        {(sale.roundingAmount ?? 0) !== 0 ? (
+          <div className="receipt-print-rounding">
+            <span>Arrondi</span>
+            <span>{formatSignedCurrency(sale.roundingAmount ?? 0)}</span>
+          </div>
+        ) : null}
 
         {ruled ? (
           <div className="receipt-print-total receipt-print-total-ruled">

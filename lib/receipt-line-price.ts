@@ -10,7 +10,7 @@ import { reconstructDiscountUnitAmount, unitPriceTTCFromHT } from "@/lib/pos-dis
  * from the line's own persisted totalTTC), so what is printed always equals
  * the amount actually charged (quantity x printed price = printed amount).
  * Nothing is recomputed or stored: a line without discount is returned
- * exactly as it was printed before (HT x (1 + VAT)).
+ * exactly as it was printed before (HT x (1 + VAT), to the cent).
  */
 export function receiptUnitPriceTTC(line: {
   unitPriceHT: number;
@@ -19,6 +19,8 @@ export function receiptUnitPriceTTC(line: {
   totalTTC: number;
 }): number {
   const discountUnitAmount = reconstructDiscountUnitAmount(line);
-  if (discountUnitAmount <= 0) return line.unitPriceHT * (1 + line.taxRate / 100);
+  // Rounded to the cent like the unit price the POS prices the line from
+  // (unitPriceTTCFromHT), so quantity x printed price = printed amount.
+  if (discountUnitAmount <= 0) return unitPriceTTCFromHT(line.unitPriceHT, line.taxRate);
   return roundMoney(unitPriceTTCFromHT(line.unitPriceHT, line.taxRate) - discountUnitAmount);
 }

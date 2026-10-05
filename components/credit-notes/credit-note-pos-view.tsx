@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { creditNoteReasonLabels } from "@/lib/credit-note-calculations";
+import { creditNoteRoundingShareForSales, type SaleReturnOrigin } from "@/lib/credit-note-rounding";
 import { roundMoney } from "@/lib/money";
 import { computeLinkedReturnTotals } from "@/lib/pos-discount";
 import type { CurrentUser } from "@/types/auth";
@@ -30,6 +31,7 @@ import type {
   CreditNoteReason,
   CreateCreditNoteInput,
   ReturnableProduct,
+  ReturnableProductOrigin,
 } from "@/types/credit-note";
 import type { CustomerDto, StockLocationDto } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
@@ -57,6 +59,11 @@ type CartLine = {
   invoiceNumber: string | null;
   originalQuantity: number | null;
   originalTotalTTC: number | null;
+  // The original sale and, only when it carries a commercial rounding, what the
+  // preview needs to compute the share of that rounding this return gives back
+  // (same pure function as the server: lib/credit-note-rounding.ts).
+  saleId: string | null;
+  saleRounding: ReturnableProductOrigin["saleRounding"] | null;
   maxQuantityReturnable: number | null;
 };
 
@@ -109,6 +116,8 @@ type InvoiceGroup = {
     discountPercent: number;
     taxRate: number;
     originalTotalTTC: number;
+    saleId: string;
+    saleRounding?: ReturnableProductOrigin["saleRounding"];
   }[];
 };
 
@@ -268,6 +277,8 @@ export function CreditNotePosView({
           discountPercent: origin.discountPercent,
           taxRate: origin.taxRate,
           originalTotalTTC: origin.originalTotalTTC,
+          saleId: origin.saleId,
+          saleRounding: origin.saleRounding,
         });
         map.set(origin.saleId, entry);
       }
@@ -316,8 +327,40 @@ export function CreditNotePosView({
     });
   }, [cart]);
 
+  // The share of the original sale's commercial rounding this return gives back,
+  // previewed with the same pure function the server uses (cumulative proportional
+  // rule). Only a sale that carries a rounding contributes; a return of a sale made
+  // before the rounding existed, and a free return, give back nothing. The server
+  // recomputes it on save and at validation: this is the amount it will confirm
+  // unless another return of the same sale is validated in between.
+  const roundingAmount = React.useMemo(() => {
+    const origins = new Map<string, SaleReturnOrigin>();
+    for (const line of cart) {
+      if (!line.saleId || !line.saleRounding) continue;
+      if (!origins.has(line.saleId)) {
+        origins.set(line.saleId, {
+          saleRoundingAmount: line.saleRounding.roundingAmount,
+          lines: line.saleRounding.lines.map((saleLine) => ({
+            totalTTC: saleLine.totalTTC,
+            quantity: saleLine.quantity,
+            alreadyReturnedQuantity: saleLine.alreadyReturnedQuantity,
+            returningQuantity: cart
+              .filter((item) => item.saleLineId === saleLine.saleLineId)
+              .reduce((sum, item) => sum + item.quantityReturned, 0),
+          })),
+        });
+      }
+    }
+    if (origins.size === 0) {
+      // A reopened draft carries no sale detail: show the share it stored.
+      const reopenedDraftWithSale = cart.some((line) => line.saleLineId !== null);
+      return reopenedDraftWithSale ? (editingCreditNote?.roundingAmount ?? 0) : 0;
+    }
+    return creditNoteRoundingShareForSales([...origins.values()]);
+  }, [cart, editingCreditNote]);
+
   const totals = React.useMemo(() => {
-    return cartLines.reduce(
+    const sums = cartLines.reduce(
       (acc, line) => {
         acc.totalHT += line.totalHT;
         acc.discountAmount += line.discountAmount;
@@ -327,7 +370,8 @@ export function CreditNotePosView({
       },
       { totalHT: 0, discountAmount: 0, taxAmount: 0, totalTTC: 0 },
     );
-  }, [cartLines]);
+    return { ...sums, totalTTC: roundMoney(sums.totalTTC + roundingAmount) };
+  }, [cartLines, roundingAmount]);
 
   // A user-driven customer change resets which invoice was selected here
   // (rather than in the returnables-fetch effect above) so that effect
@@ -392,6 +436,8 @@ export function CreditNotePosView({
           invoiceNumber: null,
           originalQuantity: null,
           originalTotalTTC: null,
+          saleId: null,
+          saleRounding: null,
           maxQuantityReturnable: null,
         },
       ];
@@ -428,6 +474,8 @@ export function CreditNotePosView({
           invoiceNumber,
           originalQuantity: line.quantityBought,
           originalTotalTTC: line.originalTotalTTC,
+          saleId: line.saleId,
+          saleRounding: line.saleRounding ?? null,
           maxQuantityReturnable: line.quantityReturnable,
         },
       ];
@@ -827,6 +875,7 @@ export function CreditNotePosView({
             discountAmount={totals.discountAmount}
             taxAmount={totals.taxAmount}
             totalTTC={totals.totalTTC}
+            roundingAmount={roundingAmount}
             typeLabel="Avoir client"
           />
 
@@ -939,6 +988,8 @@ function createFormState(
     // endpoint just to refetch originalQuantity/originalTotalTTC here.
     originalQuantity: null,
     originalTotalTTC: null,
+    saleId: null,
+    saleRounding: null,
     maxQuantityReturnable: null,
   }));
 

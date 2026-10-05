@@ -91,6 +91,8 @@ export type SyncSaleBody = {
   customerId: string | null;
   paymentMethod: OfflineSaleWithLines["paymentMethod"];
   expectedTotalTTC: number;
+  /** Commercial rounding of the ticket (lib/sale-rounding.ts), signed; absent on a legacy sale. */
+  roundingAmount?: number;
   lines: Array<{
     productId: string;
     quantity: number;
@@ -124,6 +126,9 @@ export function buildSyncPayload(sale: OfflineSaleWithLines): SyncPayloadResult 
       customerId: sale.customerId,
       paymentMethod: sale.paymentMethod,
       expectedTotalTTC: sale.totalTTC,
+      // Only a sale made with the rounding carries one (even 0): the server then
+      // applies the rounding. A sale saved before has none and keeps its cent total.
+      ...(sale.roundingAmount !== undefined ? { roundingAmount: sale.roundingAmount } : {}),
       lines,
     },
   };

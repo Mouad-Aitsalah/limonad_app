@@ -61,14 +61,16 @@ test("HT + VAT always add up exactly to TTC, and no line shows a negative or pha
   }
 });
 
-test("lines with a discount (percentage rule unchanged): TTC gross minus the rounded percentage", () => {
+test("lines with a discount: the NET UNIT price (rounded to the cent) times the quantity", () => {
   const row = line(62.5, 20, 2, 10);
-  assert.equal(row.totals.totalTTC, 112.5); // 125.00 - 12.50
+  assert.equal(row.totals.totalTTC, 112.5); // (62.50 - 6.25) x 2
   assert.equal(roundMoney(row.totals.totalHT + row.totals.taxAmount), 112.5);
   assert.ok(row.totals.discountAmount > 0);
 
+  // 33.33 % of 72.00 = 23.9976 -> 24.00 per unit, net 48.00, x 3 = 144.00
+  // (the old whole-line percentage gave 144.01, a cent more than the unit price shown)
   const third = line(72, 20, 3, 33.33);
-  assert.equal(third.totals.totalTTC, roundMoney(216 - roundMoney(216 * 0.3333)));
+  assert.equal(third.totals.totalTTC, 144);
 
   const full = line(62.5, 20, 2, 100);
   assert.equal(full.totals.totalTTC, 0);
@@ -76,18 +78,74 @@ test("lines with a discount (percentage rule unchanged): TTC gross minus the rou
   assert.equal(full.totals.taxAmount, 0);
 });
 
-test("discounted lines stay within 1 cent of the exact amount (displayed unit TTC x quantity x (1 - rate))", () => {
-  let worst = 0;
-  for (const ttc of [62.5, 17.5, 72, 12.99, 199.9, 45.45]) {
-    for (const quantity of [1, 2, 3, 5, 10, 24]) {
-      for (const rate of [5, 10, 12.5, 20, 23.08, 33.33, 50]) {
+test("discounted lines: total = round(net unit price x quantity) where the net unit price is the one displayed", () => {
+  for (const ttc of [62.5, 17.5, 72, 12.99, 199.9, 45.45, 18]) {
+    for (const quantity of [1, 2, 3, 5, 10, 20, 24]) {
+      for (const rate of [5, 5.56, 10, 12.5, 20, 23.08, 33.33, 50]) {
         const { unitPriceTTC, totals } = line(ttc, 20, quantity, rate);
-        const exact = unitPriceTTC * quantity * (1 - rate / 100);
-        worst = Math.max(worst, Math.abs(totals.totalTTC - exact));
+        const displayedDiscount = discountRateToUnitAmount(rate, unitPriceTTC);
+        const displayedNetUnit = roundMoney(unitPriceTTC - displayedDiscount);
+        assert.equal(totals.totalTTC, roundMoney(displayedNetUnit * quantity), `${ttc} x ${quantity} @ ${rate}%`);
       }
     }
   }
-  assert.ok(worst <= 0.0100001, `max difference ${worst}`);
+});
+
+// The two conversions of components/driver-pos/driver-pos-view.tsx (guarded below).
+function discountRateToUnitAmount(discountRate: number, unitPriceTTC: number) {
+  return roundMoney((discountRate / 100) * unitPriceTTC);
+}
+function discountUnitAmountToRate(discountUnitAmount: number, unitPriceTTC: number) {
+  if (unitPriceTTC <= 0) return 0;
+  return Math.min(100, Math.max(0, roundMoney((discountUnitAmount / unitPriceTTC) * 100)));
+}
+
+test("REQUIRED CASE: price 18.00, discount 1.00, quantity 20 -> net unit 17.00, total 340.00 (was 339.98)", () => {
+  const price = catalogue(18, 20);
+  assert.equal(price.unitPriceTTC, 18);
+  const rate = discountUnitAmountToRate(1, price.unitPriceTTC); // the cart stores a percentage: 5.56
+  assert.equal(rate, 5.56);
+
+  // the displayed unit price
+  assert.equal(roundMoney(price.unitPriceTTC - discountRateToUnitAmount(rate, price.unitPriceTTC)), 17);
+  // the old formula: 5.56 % of 360.00 = 20.02 -> 339.98, a total that disagrees with 17.00 x 20
+  const grossTTC = roundMoney(price.unitPriceTTC * 20);
+  assert.equal(roundMoney(grossTTC - roundMoney(grossTTC * (rate / 100))), 339.98, "the old computation reproduces the bug");
+
+  const { totals } = line(18, 20, 20, rate);
+  assert.equal(totals.totalTTC, 340);
+  assert.equal(roundMoney(totals.totalHT + totals.taxAmount), 340);
+  assert.equal(totals.totalHT, 283.33);
+  assert.equal(totals.taxAmount, 56.67);
+});
+
+test("a DH discount typed in the cart gives exactly displayed net unit x quantity, for many prices, discounts and quantities", () => {
+  for (const ttc of [18, 62.5, 17.5, 72, 12.99, 3.33, 199.9, 45.45]) {
+    const price = catalogue(ttc, 20);
+    for (const typed of [0.1, 0.25, 0.5, 1, 1.5, 2, 2.75, 5]) {
+      if (typed > price.unitPriceTTC) continue;
+      const rate = discountUnitAmountToRate(typed, price.unitPriceTTC);
+      const shownDiscount = discountRateToUnitAmount(rate, price.unitPriceTTC); // what the "Rem." field shows back
+      const shownNetUnit = roundMoney(price.unitPriceTTC - shownDiscount);
+      for (const quantity of [1, 2, 3, 7, 12, 20, 24]) {
+        const { totals } = line(ttc, 20, quantity, rate);
+        assert.equal(totals.totalTTC, roundMoney(shownNetUnit * quantity), `${ttc} -${typed} x ${quantity}`);
+        assert.equal(roundMoney(totals.totalHT + totals.taxAmount), totals.totalTTC);
+      }
+    }
+  }
+});
+
+test("a commercial total is never rounded to an integer: 339.49 stays 339.49, 339.98 stays 339.98 when it is the real amount", () => {
+  assert.equal(line(339.49, 20, 1).totals.totalTTC, 339.49);
+  assert.equal(line(339.98, 20, 1).totals.totalTTC, 339.98);
+  assert.equal(line(16.999 + 0.001, 20, 20).totals.totalTTC, 340);
+});
+
+test("the driver conversions in the cart are the ones this file mirrors", () => {
+  const cart = readFileSync(new URL("../components/driver-pos/driver-pos-view.tsx", import.meta.url), "utf8");
+  assert.match(cart, /function discountRateToUnitAmount\(discountRate: number, unitPriceTTC: number\): number \{\s*return round\(\(discountRate \/ 100\) \* unitPriceTTC\);/);
+  assert.match(cart, /Math\.min\(100, Math\.max\(0, round\(\(discountUnitAmount \/ unitPriceTTC\) \* 100\)\)\)/);
 });
 
 test("invalid discount input is neutralised (NaN, negative, > 100)", () => {

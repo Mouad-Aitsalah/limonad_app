@@ -168,6 +168,14 @@ export type OfflineSaleInput = {
   subtotalHT: number;
   taxAmount: number;
   totalTTC: number;
+  /**
+   * Commercial rounding of the ticket (lib/sale-rounding.ts), signed:
+   * totalTTC = subtotalHT + taxAmount + roundingAmount. Present (even 0) on every
+   * sale made by this version - it tells the server to apply the rounding at sync
+   * time. UNDEFINED on a sale saved before the rounding existed (NULL in SQLite):
+   * it is synchronised without it and keeps its cent total.
+   */
+  roundingAmount?: number;
   paidAmount: number;
   creditAmount: number;
   lines: OfflineSaleLineInput[];

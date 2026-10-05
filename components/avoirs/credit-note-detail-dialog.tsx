@@ -158,7 +158,14 @@ export function CreditNoteDetailDialog({
               <div className="ml-auto max-w-xs space-y-2">
                 <SummaryLine label="Total HT" value={totals.totalHT} />
                 <SummaryLine label="TVA" value={totals.totalTVA} />
-                <SummaryLine label="Total TTC" value={totals.totalTTC} strong />
+                {(creditNote.roundingAmount ?? 0) !== 0 ? (
+                  <SummaryLine label="Arrondi de la vente restitue" value={creditNote.roundingAmount ?? 0} />
+                ) : null}
+                <SummaryLine
+                  label="Total TTC"
+                  value={creditNote.totalTTC ?? totals.totalTTC}
+                  strong
+                />
               </div>
             </div>
           </>

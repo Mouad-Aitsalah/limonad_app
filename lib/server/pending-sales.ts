@@ -184,6 +184,7 @@ async function collectSaleCore(
             id: true,
             status: true,
             totalTTC: true,
+            roundingAmount: true,
             subtotalHT: true,
             taxAmount: true,
             customerId: true,
@@ -345,6 +346,9 @@ async function collectSaleCore(
           subtotalHT: sale.subtotalHT.toNumber(),
           taxAmount: sale.taxAmount.toNumber(),
           totalTTC,
+          // Stored on the sale when it was prepared (0 for a sale prepared before
+          // the rounding existed: it is collected at its stored cent total).
+          roundingAmount: sale.roundingAmount.toNumber(),
           stampAmount,
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,

@@ -28,6 +28,7 @@
 
 import { addMoney, roundMoney, subtractMoney } from "@/lib/money";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
+import { computeSaleTotals } from "@/lib/sale-rounding";
 import type { PosBankAccountOptionDto, SaleDto } from "@/types/operations-dto";
 import type { PosPaymentMethodValue } from "@/types/pos";
 
@@ -104,11 +105,19 @@ export function buildOfflineSaleInput(params: BuildOfflineSaleParams): BuildOffl
     return { ok: false, message: "Ce mode de règlement n'est pas disponible hors connexion." };
   }
 
-  // The same sums createCounterSale makes from its lines.
-  const subtotalHT = addMoney(...lines.map((line) => line.netHT));
-  const taxAmount = addMoney(...lines.map((line) => line.tvaAmount));
-  const discountAmount = addMoney(...lines.map((line) => line.discountAmount));
-  const totalTTC = addMoney(subtotalHT, taxAmount);
+  // The same computation createCounterSale makes from its lines (one shared
+  // function, lib/sale-rounding.ts): HT / VAT at the cent, the FINAL total rounded
+  // to 0.50 DH, the difference recorded as roundingAmount. Every NEW offline sale
+  // carries a roundingAmount (even 0): that is what tells the server to apply the
+  // rounding when it synchronises it (a sale queued before has none and keeps its
+  // cent total).
+  const { subtotalHT, taxAmount, discountAmount, roundingAmount, totalTTC } = computeSaleTotals(
+    lines.map((line) => ({
+      totalHT: line.netHT,
+      taxAmount: line.tvaAmount,
+      discountAmount: line.discountAmount,
+    })),
+  );
 
   let reference: string | null = null;
   let bankAccountingAccountId: string | null = null;
@@ -182,6 +191,7 @@ export function buildOfflineSaleInput(params: BuildOfflineSaleParams): BuildOffl
         discountAmount,
         taxAmount,
         totalTTC,
+        roundingAmount,
         paidAmount,
         creditAmount: subtractMoney(totalTTC, paidAmount),
       },
@@ -231,6 +241,9 @@ export function ticketFromOfflineSale(
       discountUnitAmount: line.discountUnitAmount,
       taxRate: line.taxRate,
     })),
+    // A sale saved before the rounding existed has no roundingAmount: its ticket
+    // keeps the cent total that was shown (and that the server will keep).
+    rounding: sale.roundingAmount === undefined ? "NONE" : "COMMERCIAL",
   });
   return {
     ...preview,

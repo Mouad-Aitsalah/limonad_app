@@ -273,6 +273,13 @@ export type OfflineSaleRecord = {
   discountAmount: number;
   taxAmount: number;
   totalTTC: number;
+  /**
+   * Commercial rounding of the ticket (lib/sale-rounding.ts), signed. UNDEFINED
+   * on a row saved before the rounding existed: it is then synchronised without
+   * roundingAmount and the server keeps its cent total. Not indexed: no new
+   * Dexie version is needed.
+   */
+  roundingAmount?: number;
   paidAmount: number;
   creditAmount: number;
   /** Unique per organization (IndexedDB unique index): the same value is sent

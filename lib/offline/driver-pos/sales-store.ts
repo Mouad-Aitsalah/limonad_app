@@ -67,7 +67,7 @@ const EXPECTED_OFFLINE_SCHEMA_COLUMNS: Record<string, string[]> = {
     "stockLocationId", "customerId", "paymentMethod", "syncStatus", "soldAt",
     "createdAtLocal", "syncedAt", "serverSaleId", "officialDisplayNumber",
     "subtotalHT", "taxAmount", "totalTTC", "paidAmount", "creditAmount",
-    "syncAttempts", "lastSyncError",
+    "roundingAmount", "syncAttempts", "lastSyncError",
   ],
   offline_sale_lines: [
     "id", "offlineSaleId", "productId", "productNameSnapshot", "quantity",
@@ -155,8 +155,8 @@ export async function createOfflineSale(
          stockLocationId, customerId, paymentMethod, syncStatus, soldAt,
          createdAtLocal, syncedAt, serverSaleId, officialDisplayNumber,
          subtotalHT, taxAmount, totalTTC, paidAmount, creditAmount,
-         syncAttempts, lastSyncError
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_SYNC', ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, 0, NULL)`,
+         roundingAmount, syncAttempts, lastSyncError
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_SYNC', ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, 0, NULL)`,
       [
         localId,
         input.clientMutationId,
@@ -174,6 +174,8 @@ export async function createOfflineSale(
         input.totalTTC,
         input.paidAmount,
         input.creditAmount,
+        // NULL = a sale saved before the rounding existed (never re-rounded).
+        input.roundingAmount ?? null,
       ],
       false,
     );
@@ -520,6 +522,9 @@ function mapSaleRow(row: Record<string, unknown>): OfflineSale {
     totalTTC: Number(row.totalTTC),
     paidAmount: Number(row.paidAmount),
     creditAmount: Number(row.creditAmount),
+    ...(row.roundingAmount === null || row.roundingAmount === undefined
+      ? {}
+      : { roundingAmount: Number(row.roundingAmount) }),
     syncAttempts: Number(row.syncAttempts),
     lastSyncError: (row.lastSyncError as string | null) ?? null,
   };

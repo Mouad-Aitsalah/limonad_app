@@ -13,6 +13,7 @@ import { businessDayRangeUtc, formatBusinessDayLabel, getCurrentBusinessDayParam
 import { resolveDirectionPeriod } from "@/lib/dashboard-period";
 import type { SaleStatus } from "@/lib/generated/prisma/client";
 import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
+import { computeSaleTotals } from "@/lib/sale-rounding";
 import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
 import { AuthServiceError } from "@/lib/server/auth";
@@ -528,6 +529,9 @@ type InvoiceDraftResolution =
       subtotalHT: number;
       discountAmount: number;
       taxAmount: number;
+      /** Commercial rounding of the final total (lib/sale-rounding.ts), signed. */
+      roundingAmount: number;
+      /** The final total due, rounded to 0.50 DH. */
       totalTTC: number;
       payment: { paidAmount: number; creditAmount: number };
       creditCheck: Record<string, unknown> | null;
@@ -628,12 +632,10 @@ async function resolveInvoiceDraft(args: InvoiceDraftInput): Promise<InvoiceDraf
     });
   }
 
-  const subtotalHT = roundMoney(resolvedLines.reduce((sum, line) => sum + line.totalHT, 0));
-  const discountAmount = roundMoney(
-    resolvedLines.reduce((sum, line) => sum + line.discountAmount, 0),
-  );
-  const taxAmount = roundMoney(resolvedLines.reduce((sum, line) => sum + line.taxAmount, 0));
-  const totalTTC = roundMoney(subtotalHT + taxAmount);
+  // Same computation as createCounterSale (which really creates the invoice): HT /
+  // VAT / lines at the cent, final total rounded to 0.50 DH.
+  const { subtotalHT, discountAmount, taxAmount, roundingAmount, totalTTC } =
+    computeSaleTotals(resolvedLines);
 
   let payment: { paidAmount: number; creditAmount: number };
   try {
@@ -692,6 +694,7 @@ async function resolveInvoiceDraft(args: InvoiceDraftInput): Promise<InvoiceDraf
     subtotalHT,
     discountAmount,
     taxAmount,
+    roundingAmount,
     totalTTC,
     payment,
     creditCheck,
@@ -1276,6 +1279,7 @@ export async function POST(request: Request) {
           subtotalHT: madFormatter.format(draft.subtotalHT),
           discountAmount: madFormatter.format(draft.discountAmount),
           taxAmount: madFormatter.format(draft.taxAmount),
+          roundingAmount: madFormatter.format(draft.roundingAmount),
           totalTTC: madFormatter.format(draft.totalTTC),
           paidAmount: madFormatter.format(draft.payment.paidAmount),
           creditAmount: madFormatter.format(draft.payment.creditAmount),

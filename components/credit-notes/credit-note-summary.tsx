@@ -1,11 +1,15 @@
 import { Separator } from "@/components/ui/separator";
+import { formatSignedCurrency } from "@/lib/currency";
 import { formatCurrency } from "@/lib/utils";
 
 type CreditNoteSummaryProps = {
   totalHT: number;
   discountAmount: number;
   taxAmount: number;
+  /** Final amount of the note: lines + roundingAmount. */
   totalTTC: number;
+  /** Share of the original sale's commercial rounding the note gives back (0 / absent when none). */
+  roundingAmount?: number;
   typeLabel?: string;
 };
 
@@ -14,6 +18,7 @@ export function CreditNoteSummary({
   discountAmount,
   taxAmount,
   totalTTC,
+  roundingAmount = 0,
   typeLabel = "Avoir",
 }: CreditNoteSummaryProps) {
   return (
@@ -40,6 +45,14 @@ export function CreditNoteSummary({
           {formatCurrency(taxAmount)}
         </span>
       </div>
+      {roundingAmount !== 0 ? (
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Arrondi de la vente restitue</span>
+          <span className="tabular-nums text-foreground">
+            {formatSignedCurrency(roundingAmount)}
+          </span>
+        </div>
+      ) : null}
       <div className="flex items-center justify-between text-sm">
         <span className="text-muted-foreground">Total TTC</span>
         <span className="tabular-nums text-foreground">

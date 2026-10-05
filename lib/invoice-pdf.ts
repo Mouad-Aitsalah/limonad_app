@@ -1,4 +1,5 @@
 import { reconstructDiscountUnitAmount, unitPriceTTCFromHT } from "@/lib/pos-discount";
+import { formatSignedCurrency } from "@/lib/currency";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto } from "@/types/operations-dto";
 
@@ -204,7 +205,17 @@ function createInvoicePage({
     const total = document.createElement("div");
     total.className = "invoice-pdf-summary-row invoice-pdf-grand-total";
     total.append(text("Total TTC"), text(formatCurrency(sale.totalTTC), "invoice-pdf-money"));
-    summary.append(subtotal, tax, total);
+    // Commercial rounding of the final total (lib/sale-rounding.ts), only when the
+    // sale has one: HT and VAT above stay real, Total TTC is the rounded amount due.
+    const roundingAmount = sale.roundingAmount ?? 0;
+    if (roundingAmount !== 0) {
+      const rounding = document.createElement("div");
+      rounding.className = "invoice-pdf-summary-row";
+      rounding.append(text("Arrondi"), text(formatSignedCurrency(roundingAmount), "invoice-pdf-money"));
+      summary.append(subtotal, tax, rounding, total);
+    } else {
+      summary.append(subtotal, tax, total);
+    }
     page.append(summary);
 
     const payment = document.createElement("div");

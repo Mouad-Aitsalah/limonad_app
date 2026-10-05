@@ -798,7 +798,13 @@ export interface SaleDto {
   subtotalHT: number;
   discountAmount: number;
   taxAmount: number;
+  /** The FINAL total due: subtotalHT + taxAmount + roundingAmount. */
   totalTTC: number;
+  /**
+   * Commercial rounding of the final total to 0.50 DH (lib/sale-rounding.ts),
+   * signed. Absent / 0 for a sale made before the rounding existed.
+   */
+  roundingAmount?: number;
   stampAmount: number;
   paidAmount: number;
   creditAmount: number;

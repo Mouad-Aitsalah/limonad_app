@@ -5,6 +5,7 @@ import { z } from "zod";
 import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
+import { computeSaleTotals } from "@/lib/sale-rounding";
 import {
   computeCashSaleStampAmount,
   postSaleAccountingEntry,
@@ -480,13 +481,22 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
           };
         });
 
-        const subtotalHT = roundMoney(computedLines.reduce((sum, line) => sum + line.totalHT, 0));
-        const discountAmount = roundMoney(
-          computedLines.reduce((sum, line) => sum + line.discountAmount, 0),
-        );
-        const taxAmount = roundMoney(computedLines.reduce((sum, line) => sum + line.taxAmount, 0));
-        const totalTTC = roundMoney(subtotalHT + taxAmount);
+        // A REAL revision (never a plain read of the sale) prices the new version
+        // with the commercial rounding rule, even when the sale being revised was
+        // created before it existed: HT / VAT / lines keep their cent values, only
+        // the final total is rounded to 0.50 DH and the difference is recorded as
+        // roundingAmount. The previous accounting entry (without rounding) is
+        // contre-passed below and the new one is posted balanced.
+        const {
+          subtotalHT,
+          discountAmount,
+          taxAmount,
+          totalBeforeRounding,
+          roundingAmount,
+          totalTTC,
+        } = computeSaleTotals(computedLines, "COMMERCIAL");
         assertMoneyRange(subtotalHT, "subtotalHT");
+        assertMoneyRange(roundingAmount, "roundingAmount");
         assertMoneyRange(totalTTC, "totalTTC");
 
         const isDraft = sale.status === "DRAFT";
@@ -750,6 +760,7 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
             subtotalHT,
             taxAmount,
             totalTTC,
+            roundingAmount,
             stampAmount: stampDecimal,
             paidAmount: payment.paidAmount,
             creditAmount: payment.creditAmount,
@@ -799,6 +810,7 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
             discountAmount,
             taxAmount,
             totalTTC,
+            roundingAmount,
             stampAmount: isDraft ? 0 : stampDecimal.toNumber(),
             paidAmount: payment.paidAmount,
             creditAmount: payment.creditAmount,
@@ -833,6 +845,9 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
             oldValue: {
               status: sale.status,
               customerId: sale.customerId,
+              subtotalHT: sale.subtotalHT.toNumber(),
+              taxAmount: sale.taxAmount.toNumber(),
+              roundingAmount: sale.roundingAmount.toNumber(),
               totalTTC: sale.totalTTC.toNumber(),
               paidAmount: sale.paidAmount.toNumber(),
               creditAmount: sale.creditAmount.toNumber(),
@@ -847,6 +862,10 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
             newValue: {
               status: newStatus,
               customerId: customer?.id ?? null,
+              subtotalHT,
+              taxAmount,
+              totalBeforeRounding,
+              roundingAmount,
               totalTTC,
               paidAmount: payment.paidAmount,
               creditAmount: payment.creditAmount,

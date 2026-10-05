@@ -55,6 +55,7 @@ import {
   type QuickCustomerCreator,
 } from "@/components/driver-tour/quick-add-customer-dialog";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
+import { applyCommercialRounding } from "@/lib/sale-rounding";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { posPaymentMethods, type PosPaymentMethodValue } from "@/types/pos";
 import {
@@ -883,15 +884,23 @@ export function DriverPosView({
     [cart, productById],
   );
 
-  const totals = React.useMemo(
-    () => ({
+  const totals = React.useMemo(() => {
+    // HT / VAT / lines at the cent; `ttc` is the FINAL total due, rounded to 0.50 DH
+    // exactly like the server (createDriverSale, lib/sale-rounding.ts), with the
+    // difference as `roundingAmount`. Line HT + VAT = line TTC, so the sum of the
+    // line TTC IS HT + VAT.
+    const rounded = applyCommercialRounding(
+      cartRows.reduce((sum, row) => sum + row.totals.totalTTC, 0),
+    );
+    return {
       ht: round(cartRows.reduce((sum, row) => sum + row.totals.totalHT, 0)),
       tax: round(cartRows.reduce((sum, row) => sum + row.totals.taxAmount, 0)),
-      ttc: round(cartRows.reduce((sum, row) => sum + row.totals.totalTTC, 0)),
+      totalBeforeRounding: rounded.totalBeforeRounding,
+      roundingAmount: rounded.roundingAmount,
+      ttc: rounded.totalTTC,
       quantity: cartRows.reduce((sum, row) => sum + row.quantity, 0),
-    }),
-    [cartRows],
-  );
+    };
+  }, [cartRows]);
 
   // Adapters so the shared admin cart components (CartTable/CartSummary) can
   // render driver's own cartRows/totals unchanged - no driver pricing/stock
@@ -948,6 +957,8 @@ export function DriverPosView({
       remise: 0,
       tva: totals.tax,
       totalTTC: totals.ttc,
+      totalBeforeRounding: totals.totalBeforeRounding,
+      roundingAmount: totals.roundingAmount,
       netAPayer: totals.ttc,
       transferValue: 0,
     }),
@@ -1223,6 +1234,9 @@ export function DriverPosView({
       subtotalHT: totals.ht,
       taxAmount: totals.tax,
       totalTTC: totals.ttc,
+      // Present (even 0) = made with the rounding: the server applies it when it
+      // synchronises this sale (a sale saved before has none and stays at cents).
+      roundingAmount: totals.roundingAmount,
       // CASH is always paid in full on the spot - never a credit line.
       paidAmount: totals.ttc,
       creditAmount: 0,
@@ -2314,13 +2328,18 @@ function withDriverLineTotals(
       totalTTC: row.totals.totalTTC,
     };
   });
-  const totalTTC = round(lines.reduce((sum, line) => sum + line.totalTTC, 0));
+  // The lines keep their cent values; the sale's FINAL total is rounded to 0.50 DH
+  // like the cart and the server do (lib/sale-rounding.ts).
+  const { totalTTC, roundingAmount } = applyCommercialRounding(
+    lines.reduce((sum, line) => sum + line.totalTTC, 0),
+  );
   return {
     ...sale,
     lines,
     discountAmount: round(lines.reduce((sum, line) => sum + line.discountAmount, 0)),
     taxAmount: round(lines.reduce((sum, line) => sum + line.taxAmount, 0)),
     totalTTC,
+    roundingAmount,
     creditAmount: sale.creditAmount > 0 ? totalTTC : sale.creditAmount,
   };
 }

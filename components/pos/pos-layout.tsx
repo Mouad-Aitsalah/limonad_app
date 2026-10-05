@@ -40,6 +40,7 @@ import { CheckoutDialog } from "@/components/pos/checkout-dialog";
 import { ReceiptPrint } from "@/components/pos/receipt-print";
 import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { computeDiscountedLineTotals, reconstructDiscountUnitAmount } from "@/lib/pos-discount";
+import { computeSaleTotals } from "@/lib/sale-rounding";
 import { purchasePriceTTC } from "@/lib/pos-margin";
 import { OfflineStatusBar } from "@/components/pos/offline-status-bar";
 import { useCounterPosOffline } from "@/components/pos/use-counter-pos-offline";
@@ -104,7 +105,12 @@ export type CartTotals = {
   sousTotalHT: number;
   remise: number;
   tva: number;
+  /** The FINAL total due (HT + VAT + roundingAmount): rounded to 0.50 DH, see lib/sale-rounding.ts. */
   totalTTC: number;
+  /** HT + VAT before the commercial rounding. Equals totalTTC when there is no rounding. */
+  totalBeforeRounding?: number;
+  /** Commercial rounding of the final total, signed (0 when none). */
+  roundingAmount?: number;
   netAPayer: number;
   transferValue: number;
 };
@@ -436,17 +442,32 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
     const tva = roundCurrency(
       cartLines.reduce((sum, line) => sum + line.tvaAmount, 0),
     );
-    const totalTTC = roundCurrency(sousTotalHT - remise + tva);
+    // The same computation the server makes (lib/sale-rounding.ts): HT + VAT from
+    // the line amounts, then the FINAL total rounded to 0.50 DH. A pending sale
+    // opened for collection keeps the amounts stored when it was prepared (a sale
+    // prepared before the rounding existed stays at its cent total).
+    const rounded = openPendingSale
+      ? {
+          totalBeforeRounding: roundCurrency(openPendingSale.totalTTC - (openPendingSale.roundingAmount ?? 0)),
+          roundingAmount: openPendingSale.roundingAmount ?? 0,
+          totalTTC: openPendingSale.totalTTC,
+        }
+      : computeSaleTotals(
+          cartLines.map((line) => ({ totalHT: line.netHT, taxAmount: line.tvaAmount })),
+        );
+    const { totalBeforeRounding, roundingAmount, totalTTC } = rounded;
 
     return {
       sousTotalHT,
       remise,
       tva,
       totalTTC,
+      totalBeforeRounding,
+      roundingAmount,
       netAPayer: totalTTC,
       transferValue: 0,
     };
-  }, [cartLines]);
+  }, [cartLines, openPendingSale]);
 
   const mobileSelectedProduct = React.useMemo(() => {
     // Feedback for the LAST tapped product only - its live cart quantity

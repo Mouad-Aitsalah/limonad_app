@@ -1335,6 +1335,13 @@ model Sale {
   taxAmount               Decimal            @db.Decimal(12, 2)
   totalTTC                Decimal            @db.Decimal(12, 2)
   stampAmount             Decimal            @default(0) @db.Decimal(12, 2)
+  // Commercial rounding of the FINAL total to the nearest 0.50 DH (see
+  // lib/sale-rounding.ts): roundingAmount = totalTTC - (subtotalHT + taxAmount),
+  // positive when the customer pays more than HT + VAT, negative when less.
+  // totalTTC is therefore the amount actually due / collected / put on credit,
+  // while subtotalHT, taxAmount and the lines keep their real cent values.
+  // 0 on every sale created before the rounding existed (never recomputed).
+  roundingAmount          Decimal            @default(0) @db.Decimal(12, 2)
   paidAmount              Decimal            @default(0) @db.Decimal(12, 2)
   creditAmount            Decimal            @default(0) @db.Decimal(12, 2)
   paymentMethod           PaymentMethod
@@ -1465,6 +1472,11 @@ model CreditNote {
   subtotalHT                 Decimal                @db.Decimal(12, 2)
   taxAmount                  Decimal                @db.Decimal(12, 2)
   totalTTC                   Decimal                @db.Decimal(12, 2)
+  // The share of the original sale's roundingAmount this credit note gives back
+  // (cumulative proportional rule, lib/credit-note-rounding.ts):
+  // totalTTC = subtotalHT + taxAmount + roundingAmount. 0 for a free return, a
+  // supplier credit note and every credit note created before the rounding existed.
+  roundingAmount             Decimal                @default(0) @db.Decimal(12, 2)
   createdByUserId            String
   createdBy                  User                   @relation("CreditNoteCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   validatedByUserId          String?

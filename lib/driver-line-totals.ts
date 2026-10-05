@@ -17,9 +17,18 @@ import { roundMoney } from "@/lib/money";
  *     62.50 x 2 = 125.00 ; HT = 125.00 / 1.2 = 104.17 ; VAT = 125.00 - 104.17
  * (same TTC-first order as the counter POS, lib/pos-discount.ts).
  *
- * DISCOUNT. The driver rule is unchanged: `discountRate` is a percentage
- * (0-100) of the line price; it is just applied to the TTC gross (the same
- * percentage as on the HT gross) and rounded to the cent.
+ * DISCOUNT. `discountRate` is still the percentage (0-100) the server stores
+ * and the offline sync sends, but the line is priced from the NET UNIT PRICE
+ * the driver actually sees, rounded to the cent BEFORE the quantity is applied:
+ *     discount per unit = round(unit TTC x rate / 100, 2)   (what the cart shows
+ *                         in the "Rem." field, see discountRateToUnitAmount)
+ *     net unit TTC      = round(unit TTC - discount per unit, 2)
+ *     line total TTC    = round(net unit TTC x quantity, 2)
+ * The previous order (percentage of the whole line gross) disagreed with the
+ * displayed unit price by up to half a cent PER UNIT: a 1.00 DH discount on an
+ * 18.00 DH price is stored as 5.56 %, and 5.56 % of 360.00 is 20.02, i.e. a
+ * total of 339.98 while the cart showed 17.00 x 20. With the net unit price
+ * first, 18.00 - 1.00 = 17.00 and 17.00 x 20 = 340.00.
  *
  * All steps use roundMoney (decimal arithmetic, half-up) - never raw float
  * multiplication results.
@@ -55,9 +64,9 @@ export function computeDriverLineTotals({
 }: DriverLineInput): DriverLineTotals {
   const rate = Number.isFinite(discountRate) ? Math.min(100, Math.max(0, discountRate)) : 0;
   const grossHT = unitPriceHT * quantity;
-  const grossTTC = roundMoney(unitPriceTTC * quantity);
-  const discountTTC = roundMoney(grossTTC * (rate / 100));
-  const totalTTC = roundMoney(grossTTC - discountTTC);
+  const discountUnitAmount = roundMoney(unitPriceTTC * (rate / 100));
+  const netUnitPriceTTC = roundMoney(unitPriceTTC - discountUnitAmount);
+  const totalTTC = roundMoney(netUnitPriceTTC * quantity);
   const totalHT = roundMoney(totalTTC / (1 + taxRate / 100));
   const taxAmount = roundMoney(totalTTC - totalHT);
   // HT discount of the line. With no discount it is exactly 0: HT x quantity

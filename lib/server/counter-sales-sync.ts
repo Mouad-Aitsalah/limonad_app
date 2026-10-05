@@ -92,7 +92,12 @@ export async function syncOfflineCounterSale(input: unknown): Promise<CounterSal
   });
 
   try {
-    const sale = await createCounterSale(buildCounterSaleInput(payload));
+    // A sale queued BEFORE the rounding existed carries no roundingAmount: it keeps
+    // the cent total its customer was shown (never re-rounded). Every sale made
+    // with the new version carries one (even 0) and is rounded like an online sale.
+    const sale = await createCounterSale(buildCounterSaleInput(payload), {
+      rounding: payload.totals.roundingAmount === undefined ? "NONE" : "COMMERCIAL",
+    });
     return {
       success: true,
       result: existing ? "ALREADY_SYNCED" : "CREATED",

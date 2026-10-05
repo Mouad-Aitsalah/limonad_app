@@ -667,6 +667,17 @@ body {
     margin-left: 5.7mm;
   }
 
+  /* Commercial rounding line, just above the total (only printed when non-zero). */
+  .receipt-print-rounding {
+    display: flex;
+    flex-direction: row;
+    direction: ltr;
+    justify-content: space-between;
+    gap: 2mm;
+    margin-bottom: 1mm;
+    font-size: 10px;
+  }
+
   /* Amount on the far LEFT, "TOTAL TTC" on the far RIGHT, same line. The
      direction and the per-side alignment are explicit so nothing inherited
      can swap them. */

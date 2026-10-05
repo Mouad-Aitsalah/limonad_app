@@ -6,6 +6,7 @@ import { customerAccountNumber } from "@/lib/customer-code";
 import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
+import { computeSaleTotals, type SaleRoundingMode } from "@/lib/sale-rounding";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
   computeCashSaleStampAmount,
@@ -314,7 +315,16 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
 
 export async function createCounterSale(
   input: CounterSaleInput,
-  opts: { collectNow?: boolean } = {},
+  opts: {
+    collectNow?: boolean;
+    /**
+     * Commercial rounding of the final total to 0.50 DH (lib/sale-rounding.ts).
+     * Always "COMMERCIAL" except for an offline sale queued BEFORE the rounding
+     * existed (no roundingAmount in its payload), which keeps its cent total -
+     * set only by lib/server/counter-sales-sync.ts, never from a request body.
+     */
+    rounding?: SaleRoundingMode;
+  } = {},
 ): Promise<SaleDto> {
   const sessionUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
   // collectNow (default true) keeps today's behaviour exactly: create + pay
@@ -495,17 +505,24 @@ export async function createCounterSale(
           totalTTC,
         };
       });
-      const subtotalHT = roundMoney(computedLines.reduce((sum, line) => sum + line.totalHT, 0));
-      const discountAmount = roundMoney(
-        computedLines.reduce((sum, line) => sum + line.discountAmount, 0),
-      );
-      const taxAmount = roundMoney(computedLines.reduce((sum, line) => sum + line.taxAmount, 0));
-      const totalTTC = roundMoney(subtotalHT + taxAmount);
+      // HT, VAT and the lines keep their real cent values; only the FINAL total
+      // (totalTTC = what is due, collected, put on credit and printed) is rounded
+      // to 0.50 DH and the difference is recorded as roundingAmount.
+      const {
+        subtotalHT,
+        discountAmount,
+        taxAmount,
+        totalBeforeRounding,
+        roundingAmount,
+        totalTTC,
+      } = computeSaleTotals(computedLines, opts.rounding ?? "COMMERCIAL");
       // F8-D: aggregate totals, checked before any write in this
       // transaction (stock decrement is the first one, further below).
       assertMoneyRange(subtotalHT, "subtotalHT");
       assertMoneyRange(discountAmount, "discountAmount");
       assertMoneyRange(taxAmount, "taxAmount");
+      assertMoneyRange(totalBeforeRounding, "totalBeforeRounding");
+      assertMoneyRange(roundingAmount, "roundingAmount");
       assertMoneyRange(totalTTC, "totalTTC");
       const stampAmount = await computeCashSaleStampAmount(tx, {
         organizationId: sessionUser.organizationId,
@@ -652,6 +669,7 @@ export async function createCounterSale(
           discountAmount,
           taxAmount,
           totalTTC,
+          roundingAmount,
           stampAmount: collectNow ? stampAmount : 0,
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
@@ -725,6 +743,7 @@ export async function createCounterSale(
           subtotalHT,
           taxAmount,
           totalTTC,
+          roundingAmount,
           stampAmount,
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,

@@ -37,6 +37,13 @@ export type CreditNoteLine = {
 
 export type CreditNote = {
   id: string;
+  /**
+   * Final amount of the note as stored: lines + roundingAmount. Absent on a DTO
+   * built before these fields existed (the lists then re-sum the lines as before).
+   */
+  totalTTC?: number;
+  /** The share of the original sale's commercial rounding the note gives back (0 when none). */
+  roundingAmount?: number;
   number: string;
   partyType: CreditNotePartyType;
   invoiceId?: string | null;
@@ -104,6 +111,20 @@ export type ReturnableProductOrigin = {
   // recomputing from discountPercent, which is only a rounded-to-the-
   // centime approximation for display/compatibility.
   originalTotalTTC: number;
+  // Present ONLY when the original sale carries a commercial rounding
+  // (Sale.roundingAmount != 0, see lib/sale-rounding.ts): everything the cart
+  // needs to preview the share of that rounding a return gives back, with the
+  // same pure function as the server (lib/credit-note-rounding.ts) - the sale's
+  // rounding and EVERY line of the sale with its validated returned quantity.
+  saleRounding?: {
+    roundingAmount: number;
+    lines: Array<{
+      saleLineId: string;
+      totalTTC: number;
+      quantity: number;
+      alreadyReturnedQuantity: number;
+    }>;
+  };
 };
 
 export type ReturnableProduct = {

@@ -22,6 +22,7 @@ import {
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
 import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
+import { formatSignedCurrency } from "@/lib/currency";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
 
@@ -257,6 +258,14 @@ export function InvoiceDetailDialog({
                       {formatCurrency(sale.taxAmount)}
                     </span>
                   </div>
+                  {(sale.roundingAmount ?? 0) !== 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Arrondi</span>
+                      <span className="tabular-nums text-foreground">
+                        {formatSignedCurrency(sale.roundingAmount ?? 0)}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between text-base font-semibold">
                     <span className="text-foreground">Total TTC</span>
                     <span className="tabular-nums text-emerald-700">

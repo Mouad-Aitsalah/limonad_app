@@ -33,7 +33,17 @@ export const counterSaleSyncSchema = z.object({
     )
     .min(1)
     .max(4),
-  totals: z.object({ totalTTC: money, paidAmount: money, creditAmount: money }),
+  totals: z.object({
+    totalTTC: money,
+    paidAmount: money,
+    creditAmount: money,
+    /**
+     * Commercial rounding of the ticket (lib/sale-rounding.ts), signed. PRESENT
+     * (even 0) = a sale made with the rounding: the server applies it. ABSENT = a
+     * sale queued before the rounding existed: it keeps its cent total.
+     */
+    roundingAmount: z.coerce.number().min(-1).max(1).optional(),
+  }),
   lines: z
     .array(
       z.object({

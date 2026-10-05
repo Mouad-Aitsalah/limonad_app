@@ -64,6 +64,7 @@ export function mapSaleToDto(sale: SaleWithRelations): SaleDto {
     discountAmount: sale.discountAmount.toNumber(),
     taxAmount: sale.taxAmount.toNumber(),
     totalTTC: sale.totalTTC.toNumber(),
+    roundingAmount: sale.roundingAmount.toNumber(),
     stampAmount: sale.stampAmount.toNumber(),
     paidAmount: sale.paidAmount.toNumber(),
     creditAmount: sale.creditAmount.toNumber(),

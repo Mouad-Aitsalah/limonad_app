@@ -8,7 +8,13 @@ import {
   accountingSystemAccountCodes,
   defaultAccountingAccounts,
   defaultAccountingSettingsByCode,
+  salesRoundingAccounts,
 } from "@/lib/accounting";
+import {
+  buildCustomerCreditNoteEntryLines,
+  buildSaleInvoiceEntryLines,
+  type RoundingAccountIds,
+} from "@/lib/accounting-sale-lines";
 import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import {
   canCreateManualEntryWithStatus,
@@ -153,7 +159,14 @@ type SaleAccountingPayload = {
   date: Date;
   subtotalHT: DecimalInput;
   taxAmount: DecimalInput;
+  /** The FINAL total due: subtotalHT + taxAmount + roundingAmount. */
   totalTTC: DecimalInput;
+  /**
+   * Commercial rounding of the sale (Sale.roundingAmount, signed). Posted on its
+   * own line (gain credited / loss debited) so the entry stays balanced without
+   * touching HT or VAT. Absent / 0 for every sale created before the rounding.
+   */
+  roundingAmount?: DecimalInput;
   stampAmount?: DecimalInput;
   paidAmount: DecimalInput;
   creditAmount: DecimalInput;
@@ -201,7 +214,15 @@ type CreditNoteAccountingPayload = {
   date: Date;
   subtotalHT: DecimalInput;
   taxAmount: DecimalInput;
+  /** Final amount of the note: subtotalHT + taxAmount + roundingAmount. */
   totalTTC: DecimalInput;
+  /**
+   * The share of the original sale's commercial rounding this CUSTOMER credit
+   * note gives back (CreditNote.roundingAmount, signed like Sale.roundingAmount).
+   * 0 / absent for a free return, a supplier note and every note created before
+   * the rounding existed.
+   */
+  roundingAmount?: DecimalInput;
   createdByUserId: string;
 };
 
@@ -1001,6 +1022,10 @@ export async function postSaleAccountingEntry(
   const subtotalHT = toMoneyDecimal(payload.subtotalHT);
   const taxAmount = toMoneyDecimal(payload.taxAmount);
   const stampAmount = toMoneyDecimal(payload.stampAmount ?? 0);
+  const roundingAmount = toMoneyDecimal(payload.roundingAmount ?? 0);
+  // The rounding accounts are resolved (and created on first use) ONLY for a
+  // sale that really carries a rounding of that direction.
+  const roundingAccountIds = await resolveRoundingAccountIds(db, organizationId, roundingAmount);
   // P2028 audit: these two accounts are only ever referenced inside the
   // stampAmount.gt(0) branches below - resolving them (2 round trips each,
   // see requireSystemAccountIdByCode) for every sale regardless of whether
@@ -1042,60 +1067,33 @@ export async function postSaleAccountingEntry(
       sourceType: "SALE",
       sourceId: payload.saleId,
       createdByUserId: payload.createdByUserId,
-      lines: [
-        {
-          accountId: customerAccountId,
-          label: buildSaleInvoiceCustomerLabel(payload.invoiceNumber),
-          debit: toMoneyDecimal(payload.totalTTC),
-          credit: 0,
+      // Same lines, same order and labels as before the rounding (customer debit,
+      // stamp, sales, VAT only when > 0, stamp payable) plus, when the sale carries
+      // a rounding, ONE explicit rounding line - see lib/accounting-sale-lines.ts.
+      // The entry is checked balanced there before it is posted.
+      lines: buildSaleInvoiceEntryLines({
+        totalTTC: toMoneyDecimal(payload.totalTTC).toNumber(),
+        subtotalHT: subtotalHT.toNumber(),
+        taxAmount: taxAmount.toNumber(),
+        stampAmount: stampAmount.toNumber(),
+        roundingAmount: roundingAmount.toNumber(),
+        accounts: {
+          customer: customerAccountId,
+          sales: settings.salesAccountId,
+          vat: settings.salesVatAccountId,
+          stampExpense: stampExpenseAccountId,
+          stampPayable: stampTaxPayableAccountId,
+          rounding: roundingAccountIds,
         },
-        ...(stampAmount.gt(0)
-          ? [
-              {
-                // Non-null by construction: stampExpenseAccountId is only
-                // ever null when stampAmount is not >0 (see its own
-                // resolution above), the exact same condition gating this
-                // branch.
-                accountId: stampExpenseAccountId!,
-                label: buildSaleStampExpenseLabel(payload.invoiceNumber),
-                debit: stampAmount,
-                credit: 0,
-              },
-            ]
-          : []),
-        {
-          accountId: settings.salesAccountId,
-          label: buildSaleRevenueLabel(),
-          debit: 0,
-          credit: subtotalHT,
+        labels: {
+          customer: buildSaleInvoiceCustomerLabel(payload.invoiceNumber),
+          revenue: buildSaleRevenueLabel(),
+          vat: buildSaleVatLabel(),
+          stampExpense: buildSaleStampExpenseLabel(payload.invoiceNumber),
+          stampPayable: buildSaleStampPayableLabel(),
+          rounding: buildSaleRoundingLabel(payload.invoiceNumber),
         },
-        // F8 fix #1: a line with debit=0 AND credit=0 (a 0%-VAT sale) is
-        // rejected by assertBalancedEntry ("either a debit or a credit",
-        // never neither) - omit the VAT line entirely when there is no VAT
-        // to post, same guard already used for stampAmount just below.
-        ...(taxAmount.gt(0)
-          ? [
-              {
-                accountId: settings.salesVatAccountId,
-                label: buildSaleVatLabel(),
-                debit: 0,
-                credit: taxAmount,
-              },
-            ]
-          : []),
-        ...(stampAmount.gt(0)
-          ? [
-              {
-                // Non-null by construction - see stampExpenseAccountId's
-                // own comment above.
-                accountId: stampTaxPayableAccountId!,
-                label: buildSaleStampPayableLabel(),
-                debit: 0,
-                credit: stampAmount,
-              },
-            ]
-          : []),
-      ],
+      }),
     });
   }
 
@@ -1512,10 +1510,15 @@ export async function postValidatedCreditNoteAccountingEntry(
       description = `Avoir fournisseur ${payload.creditNoteNumber}`;
     }
   } else {
+    const roundingAmount = toMoneyDecimal(payload.roundingAmount ?? 0);
+    const roundingAccountIds = await resolveRoundingAccountIds(db, organizationId, roundingAmount);
     if (payload.refundMethod === "CASH") {
       // Cash-refunded customer credit note: fixed 4-line structure requested
       // to match the reference software exactly (7111 / 117 / 117 / 51611),
       // using the gross TTC amount on every line rather than an HT/VAT split.
+      // With a rounding share, only the first line is split (7111 for the
+      // amount net of the share + one rounding line), see
+      // lib/accounting-sale-lines.ts.
       const salesAccountId = await requireSystemAccountIdByCode(
         db,
         organizationId,
@@ -1532,12 +1535,20 @@ export async function postValidatedCreditNoteAccountingEntry(
         accountingSystemAccountCodes.cash,
       );
 
-      lines = [
-        { accountId: salesAccountId, label: "Avoir Client", debit: totalTTC, credit: 0 },
-        { accountId: transitAccountId, label: "Avoir Client", debit: 0, credit: totalTTC },
-        { accountId: transitAccountId, label: "Avoir Client", debit: totalTTC, credit: 0 },
-        { accountId: cashAccountId, label: "Avoir Client", debit: 0, credit: totalTTC },
-      ];
+      lines = buildCustomerCreditNoteEntryLines({
+        refundMethod: "CASH",
+        subtotalHT: subtotalHT.toNumber(),
+        taxAmount: taxAmount.toNumber(),
+        totalTTC: totalTTC.toNumber(),
+        roundingAmount: roundingAmount.toNumber(),
+        accounts: {
+          sales: salesAccountId,
+          transit: transitAccountId,
+          cash: cashAccountId,
+          rounding: roundingAccountIds,
+        },
+        labels: creditNoteEntryLabels(payload.creditNoteNumber),
+      });
       description = `Avoir Client ${payload.creditNoteNumber}`;
     } else {
       const settings = await requireSettings(db, organizationId, [
@@ -1546,32 +1557,22 @@ export async function postValidatedCreditNoteAccountingEntry(
         "salesVatAccountId",
       ]);
 
-      lines = [
-        {
-          accountId: settings.customerReturnAccountId,
-          label: `Retour client ${payload.creditNoteNumber}`,
-          debit: subtotalHT,
-          credit: 0,
+      // Same lines as before (7119 HT / VAT only when > 0 / customer), plus the
+      // rounding share's own line when the note gives back a sale's rounding.
+      lines = buildCustomerCreditNoteEntryLines({
+        refundMethod: "BANK",
+        subtotalHT: subtotalHT.toNumber(),
+        taxAmount: taxAmount.toNumber(),
+        totalTTC: totalTTC.toNumber(),
+        roundingAmount: roundingAmount.toNumber(),
+        accounts: {
+          customerReturn: settings.customerReturnAccountId,
+          vat: settings.salesVatAccountId,
+          customer: settings.customerAccountId,
+          rounding: roundingAccountIds,
         },
-        // F8 fix #1: same guard as the two branches above - omit the VAT
-        // line for a 0%-VAT credit note.
-        ...(taxAmount.gt(0)
-          ? [
-              {
-                accountId: settings.salesVatAccountId,
-                label: `TVA avoir client ${payload.creditNoteNumber}`,
-                debit: taxAmount,
-                credit: 0,
-              },
-            ]
-          : []),
-        {
-          accountId: settings.customerAccountId,
-          label: `Client ${payload.creditNoteNumber}`,
-          debit: 0,
-          credit: totalTTC,
-        },
-      ];
+        labels: creditNoteEntryLabels(payload.creditNoteNumber),
+      });
       description = `Avoir client ${payload.creditNoteNumber}`;
     }
   }
@@ -2177,6 +2178,59 @@ async function buildMixedSettlementDebitLines(
   return lines;
 }
 
+/**
+ * The rounding account of one direction (accounting.ts salesRoundingAccounts).
+ * Created on FIRST USE like the stamp accounts - never at bootstrap and never for
+ * a zero rounding - but an existing account of the same code is only reused when
+ * its type is the expected one: a different type means the code is already used
+ * for something else in this organisation's chart (6588, for instance, is
+ * "Frais de timbre" in the live chart) and posting there would be silently wrong.
+ */
+async function requireSalesRoundingAccountId(
+  db: DbClient,
+  organizationId: string,
+  role: "loss" | "gain",
+) {
+  const spec = salesRoundingAccounts[role];
+  const accountId = await ensureAccountingAccountByCode(db, organizationId, {
+    code: spec.code,
+    name: spec.name,
+    type: spec.type,
+  });
+  const account = await db.accountingAccount.findFirst({
+    where: { id: accountId, organizationId },
+    select: { isActive: true, type: true, code: true, name: true },
+  });
+  if (!account?.isActive) {
+    throw new OperationsServiceError(`Le compte comptable ${spec.code} est inactif.`, 409);
+  }
+  if (account.type !== spec.type) {
+    throw new OperationsServiceError(
+      `Le compte ${spec.code} (${account.name}) existe deja avec un autre type : impossible de l'utiliser pour les ecarts d'arrondi. Contactez l'administrateur comptable.`,
+      409,
+    );
+  }
+  return accountId;
+}
+
+/**
+ * Account ids for a rounding of the given sign: only the side that is actually
+ * posted is resolved (gain for a positive rounding, loss for a negative one).
+ */
+async function resolveRoundingAccountIds(
+  db: DbClient,
+  organizationId: string,
+  roundingAmount: Prisma.Decimal,
+): Promise<RoundingAccountIds> {
+  if (roundingAmount.gt(0)) {
+    return { gain: await requireSalesRoundingAccountId(db, organizationId, "gain"), loss: null };
+  }
+  if (roundingAmount.lt(0)) {
+    return { gain: null, loss: await requireSalesRoundingAccountId(db, organizationId, "loss") };
+  }
+  return { gain: null, loss: null };
+}
+
 async function requireSystemAccountIdByCode(
   db: DbClient,
   organizationId: string,
@@ -2722,6 +2776,20 @@ function buildSaleRevenueLabel() {
 
 function buildSaleVatLabel() {
   return "Etat TVA facturee";
+}
+
+function creditNoteEntryLabels(creditNoteNumber: string) {
+  return {
+    cash: "Avoir Client",
+    customerReturn: `Retour client ${creditNoteNumber}`,
+    vat: `TVA avoir client ${creditNoteNumber}`,
+    customer: `Client ${creditNoteNumber}`,
+    rounding: `Arrondi avoir num: ${creditNoteNumber}`,
+  };
+}
+
+function buildSaleRoundingLabel(invoiceNumber: string) {
+  return `Arrondi facture num: ${invoiceNumber}`;
 }
 
 function buildSaleStampPayableLabel() {

@@ -1,5 +1,6 @@
 import { roundMoney } from "@/lib/money";
 import { computeDiscountedLineTotals } from "@/lib/pos-discount";
+import { applyCommercialRounding, type SaleRoundingMode } from "@/lib/sale-rounding";
 import type { SaleDto, SaleLineDto } from "@/types/operations-dto";
 
 /**
@@ -40,6 +41,12 @@ export type PreviewSaleInput = {
   /** BANK_TRANSFER only - the chosen 5141 account, for the ticket line. */
   bankAccount?: { id: string; code: string; name: string } | null;
   lines: PreviewSaleLineInput[];
+  /**
+   * Commercial rounding of the final total (lib/sale-rounding.ts), the same one
+   * the server applies. "NONE" only for the ticket of an offline sale queued
+   * before the rounding existed, which keeps its cent total.
+   */
+  rounding?: SaleRoundingMode;
 };
 
 export function buildPreviewSale(input: PreviewSaleInput): SaleDto {
@@ -76,7 +83,12 @@ export function buildPreviewSale(input: PreviewSaleInput): SaleDto {
     lines.reduce((sum, l) => sum + l.discountAmount, 0),
   );
   const taxAmount = roundMoney(lines.reduce((sum, l) => sum + l.taxAmount, 0));
-  const totalTTC = roundMoney(lines.reduce((sum, l) => sum + l.totalTTC, 0));
+  // Sum of the line amounts (= HT + VAT), then the final total is rounded to
+  // 0.50 DH exactly like createCounterSale / createDriverSale do.
+  const { totalTTC, roundingAmount } = applyCommercialRounding(
+    lines.reduce((sum, l) => sum + l.totalTTC, 0),
+    input.rounding ?? "COMMERCIAL",
+  );
 
   return {
     id: "preview",
@@ -98,6 +110,7 @@ export function buildPreviewSale(input: PreviewSaleInput): SaleDto {
     discountAmount,
     taxAmount,
     totalTTC,
+    roundingAmount,
     stampAmount: 0,
     paidAmount: 0,
     creditAmount: totalTTC,

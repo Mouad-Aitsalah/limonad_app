@@ -18,7 +18,10 @@ type CreditNoteDetailViewProps = {
 export function CreditNoteDetailView({ creditNote }: CreditNoteDetailViewProps) {
   const totalHT = creditNote.lines.reduce((sum, line) => sum + (line.totalHT ?? 0), 0);
   const taxAmount = creditNote.lines.reduce((sum, line) => sum + (line.taxAmount ?? 0), 0);
-  const totalTTC = creditNote.lines.reduce((sum, line) => sum + (line.totalTTC ?? 0), 0);
+  // The stored final amount (lines + the share of the sale's rounding it gives back).
+  const roundingAmount = creditNote.roundingAmount ?? 0;
+  const totalTTC =
+    creditNote.totalTTC ?? creditNote.lines.reduce((sum, line) => sum + (line.totalTTC ?? 0), 0);
   const isSupplier = creditNote.partyType === "fournisseur";
   const partnerLabel = isSupplier ? "Fournisseur" : "Client";
   const partnerValue = isSupplier
@@ -166,6 +169,9 @@ export function CreditNoteDetailView({ creditNote }: CreditNoteDetailViewProps) 
         <div className="space-y-2 rounded-2xl border border-border bg-muted/40 p-4">
           <SummaryLine label="Sous-total HT" value={totalHT} />
           <SummaryLine label="TVA" value={taxAmount} />
+          {roundingAmount !== 0 ? (
+            <SummaryLine label="Arrondi de la vente restitue" value={roundingAmount} />
+          ) : null}
           <SummaryLine label="Total TTC" value={totalTTC} />
           <SummaryLine label="Montant de l'avoir" value={totalTTC} strong />
         </div>

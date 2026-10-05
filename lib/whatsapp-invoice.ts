@@ -1,4 +1,5 @@
 import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
+import { formatSignedCurrency } from "@/lib/currency";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto } from "@/types/operations-dto";
 
@@ -86,6 +87,10 @@ export function buildWhatsAppInvoiceMessage(
     "",
     ...productLines,
     "",
+    // The final total, rounded to 0.50 DH (lib/sale-rounding.ts); the line amounts stay at the cent.
+    ...((sale.roundingAmount ?? 0) !== 0
+      ? [`Arrondi : ${formatSignedCurrency(sale.roundingAmount ?? 0)}`]
+      : []),
     `Total : ${formatCurrency(sale.totalTTC)}`,
     "",
     "Merci pour votre confiance.",

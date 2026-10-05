@@ -2,6 +2,12 @@ import "server-only";
 
 import { z } from "zod";
 
+import {
+  creditNoteExceedsSaleTotal,
+  creditNoteRoundingShare,
+  roundingShareAlreadyReturned,
+  type SaleReturnOrigin,
+} from "@/lib/credit-note-rounding";
 import { addMoney, MONEY_RANGE_MAX_NUMBER, multiplyMoney, roundMoney, subtractMoney } from "@/lib/money";
 import { computeLinkedReturnTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
@@ -352,12 +358,35 @@ export async function validateCreditNote(id: string): Promise<CreditNote> {
 
         const validationDate = new Date();
 
+        // The rounding share is recomputed NOW, from the credit notes validated
+        // so far: other returns against the same sale may have been validated
+        // since this draft was saved (cumulative rule, lib/credit-note-rounding.ts).
+        const roundingAmount =
+          existing.partyType === "CUSTOMER"
+            ? await computeCustomerCreditNoteRounding(
+                tx,
+                user.organizationId,
+                existing.lines.map((line) => ({
+                  saleLineId: line.saleLineId,
+                  quantity: line.quantity,
+                  totalTTC: line.totalTTC.toNumber(),
+                })),
+              )
+            : 0;
+        const linesTotalTTC = subtractMoney(
+          existing.totalTTC.toNumber(),
+          existing.roundingAmount.toNumber(),
+        );
+
         const updated = await tx.creditNote.update({
           where: { id },
           data: {
             status: "VALIDATED",
             validatedByUserId: user.id,
             validatedAt: validationDate,
+            ...(roundingAmount !== existing.roundingAmount.toNumber()
+              ? { roundingAmount, totalTTC: addMoney(linesTotalTTC, roundingAmount) }
+              : {}),
           },
           include: creditNoteInclude,
         });
@@ -372,6 +401,7 @@ export async function validateCreditNote(id: string): Promise<CreditNote> {
           subtotalHT: updated.subtotalHT,
           taxAmount: updated.taxAmount,
           totalTTC: updated.totalTTC,
+          roundingAmount: updated.roundingAmount,
           createdByUserId: user.id,
         });
 
@@ -817,7 +847,12 @@ export async function createDriverReturn(input: CreateDriverReturnInput): Promis
           throw new OperationsServiceError("Client inactif ou bloque.", 409);
         }
 
-        const { resolvedLines: persistedLines, originalSaleId, anyLinked } = await resolveReturnLines(tx, {
+        const {
+          resolvedLines: persistedLines,
+          originalSaleId,
+          anyLinked,
+          roundingAmount,
+        } = await resolveReturnLines(tx, {
           organizationId: user.organizationId,
           partyType: "CUSTOMER",
           customerId,
@@ -825,7 +860,8 @@ export async function createDriverReturn(input: CreateDriverReturnInput): Promis
           lines: normalizedLines,
         });
 
-        const totals = computeTotals(persistedLines);
+        // totalTTC of the note = its lines + the share of the sale's rounding it gives back.
+        const totals = withRoundingShare(computeTotals(persistedLines), roundingAmount);
         const validationDate = new Date();
         const creditNoteNumber = await nextCreditNoteNumber(
           tx,
@@ -857,6 +893,7 @@ export async function createDriverReturn(input: CreateDriverReturnInput): Promis
             subtotalHT: totals.totalHT,
             taxAmount: totals.taxAmount,
             totalTTC: totals.totalTTC,
+            roundingAmount,
             createdByUserId: user.id,
             validatedByUserId: user.id,
             validatedAt: validationDate,
@@ -910,6 +947,7 @@ export async function createDriverReturn(input: CreateDriverReturnInput): Promis
           subtotalHT: note.subtotalHT,
           taxAmount: note.taxAmount,
           totalTTC: note.totalTTC,
+          roundingAmount: note.roundingAmount,
           createdByUserId: user.id,
         });
 
@@ -1131,7 +1169,12 @@ async function persistManualCreditNote(
         // BOTH draft and direct-validate: a saved draft that already
         // exceeds the cap is refused immediately rather than only failing
         // later at validateCreditNote.
-        const { resolvedLines: persistedLines, originalSaleId, anyLinked } = await resolveReturnLines(tx, {
+        const {
+          resolvedLines: persistedLines,
+          originalSaleId,
+          anyLinked,
+          roundingAmount,
+        } = await resolveReturnLines(tx, {
           organizationId: user.organizationId,
           partyType: partyTypeToPrisma[partyType],
           customerId,
@@ -1148,7 +1191,8 @@ async function persistManualCreditNote(
           ? await findFreeReturnMatches(tx, user.organizationId, customerId, persistedLines)
           : [];
 
-        const totals = computeTotals(persistedLines);
+        // totalTTC of the note = its lines + the share of the sale's rounding it gives back.
+        const totals = withRoundingShare(computeTotals(persistedLines), roundingAmount);
         const validationDate = status === "VALIDE" ? new Date() : null;
 
         let creditNoteId = existingDraft?.id ?? null;
@@ -1178,6 +1222,7 @@ async function persistManualCreditNote(
               subtotalHT: totals.totalHT,
               taxAmount: totals.taxAmount,
               totalTTC: totals.totalTTC,
+              roundingAmount,
               validatedByUserId: status === "VALIDE" ? user.id : null,
               validatedAt: validationDate,
               reversedAt: null,
@@ -1227,6 +1272,7 @@ async function persistManualCreditNote(
               subtotalHT: totals.totalHT,
               taxAmount: totals.taxAmount,
               totalTTC: totals.totalTTC,
+              roundingAmount,
               createdByUserId: user.id,
               validatedByUserId: status === "VALIDE" ? user.id : null,
               validatedAt: validationDate,
@@ -1287,6 +1333,7 @@ async function persistManualCreditNote(
             subtotalHT: note.subtotalHT,
             taxAmount: note.taxAmount,
             totalTTC: note.totalTTC,
+            roundingAmount: note.roundingAmount,
             createdByUserId: user.id,
           });
         }
@@ -1503,6 +1550,10 @@ function mapCreditNoteToDto(
     comment: note.comment ?? "",
     returnDate: note.createdAt.toISOString(),
     status: statusToUi[note.status] ?? "BROUILLON",
+    // Final amount of the note (lines + the share of the sale's rounding) and
+    // that share, as stored - the lists / detail show these, not a re-sum of the lines.
+    totalTTC: note.totalTTC.toNumber(),
+    roundingAmount: note.roundingAmount.toNumber(),
     lines: note.lines.map((line) => ({
       id: line.id,
       saleLineId: line.saleLineId ?? null,
@@ -1656,7 +1707,7 @@ type ResolvedReturnLine = PersistedLine & { saleLineId: string | null };
  * inside the caller's own transaction.
  */
 async function resolveReturnLines(
-  tx: Pick<typeof prisma, "saleLine" | "creditNoteLine" | "product">,
+  tx: Pick<typeof prisma, "sale" | "saleLine" | "creditNoteLine" | "product">,
   params: {
     organizationId: string;
     partyType: PrismaCreditNotePartyType;
@@ -1668,6 +1719,8 @@ async function resolveReturnLines(
   resolvedLines: ResolvedReturnLine[];
   originalSaleId: string | null;
   anyLinked: boolean;
+  /** Share of the original sale(s)' commercial rounding this note gives back (0 for a free / supplier note). */
+  roundingAmount: number;
 }> {
   const productIds = params.lines.map((line) => line.productId);
   const products = await tx.product.findMany({
@@ -1803,7 +1856,132 @@ async function resolveReturnLines(
   // field on the parent row).
   const originalSaleId = anyLinked && saleIdsSeen.size === 1 ? [...saleIdsSeen][0]! : null;
 
-  return { resolvedLines, originalSaleId, anyLinked };
+  // The part of the original sale(s)' rounding that goes back with this note
+  // (customer notes linked to a sale only - a free return and a supplier note
+  // have none). Also enforces the refund ceiling of each sale (409).
+  const roundingAmount =
+    params.partyType === "CUSTOMER" && anyLinked
+      ? await computeCustomerCreditNoteRounding(
+          tx,
+          params.organizationId,
+          resolvedLines.map((line) => ({
+            saleLineId: line.saleLineId,
+            quantity: line.quantityReturned,
+            totalTTC: line.totalTTC,
+          })),
+        )
+      : 0;
+
+  return { resolvedLines, originalSaleId, anyLinked, roundingAmount };
+}
+
+/**
+ * The rounding a CUSTOMER credit note gives back: per original sale, the
+ * cumulative proportional share of Sale.roundingAmount (lib/credit-note-rounding.ts),
+ * summed over the sales the note touches - computed from the credit notes
+ * VALIDATED so far (a draft or this very note never counts), inside the caller's
+ * Serializable transaction like the returnable-quantity guard.
+ *
+ * Also the refund ceiling: the validated notes already issued for a sale plus this
+ * one (lines + shares) may not exceed the sale's final total, else 409. Only
+ * sales that carry a rounding are looked at beyond the first read: a sale
+ * created before the rounding existed (roundingAmount 0) behaves exactly as before.
+ */
+async function computeCustomerCreditNoteRounding(
+  tx: Pick<typeof prisma, "sale" | "creditNoteLine">,
+  organizationId: string,
+  lines: Array<{ saleLineId: string | null; quantity: number; totalTTC: number }>,
+): Promise<number> {
+  const linked = lines.filter(
+    (line): line is { saleLineId: string; quantity: number; totalTTC: number } =>
+      line.saleLineId !== null && line.saleLineId !== undefined,
+  );
+  if (linked.length === 0) return 0;
+
+  const sales = await tx.sale.findMany({
+    where: {
+      organizationId,
+      roundingAmount: { not: 0 },
+      lines: { some: { id: { in: linked.map((line) => line.saleLineId) } } },
+    },
+    select: {
+      id: true,
+      totalTTC: true,
+      roundingAmount: true,
+      lines: { select: { id: true, quantity: true, totalTTC: true } },
+    },
+  });
+  if (sales.length === 0) return 0;
+
+  const grouped = await tx.creditNoteLine.groupBy({
+    by: ["saleLineId"],
+    where: {
+      saleLineId: { in: sales.flatMap((sale) => sale.lines.map((line) => line.id)) },
+      // Same filter as computeAlreadyReturnedValidated.
+      creditNote: { status: "VALIDATED" },
+    },
+    _sum: { quantity: true, totalTTC: true },
+  });
+  const returnedByLine = new Map(
+    grouped.map((row) => [
+      row.saleLineId,
+      { quantity: row._sum.quantity ?? 0, totalTTC: row._sum.totalTTC?.toNumber() ?? 0 },
+    ]),
+  );
+
+  const noteByLine = new Map<string, { quantity: number; totalTTC: number }>();
+  for (const line of linked) {
+    const current = noteByLine.get(line.saleLineId) ?? { quantity: 0, totalTTC: 0 };
+    noteByLine.set(line.saleLineId, {
+      quantity: current.quantity + line.quantity,
+      totalTTC: addMoney(current.totalTTC, line.totalTTC),
+    });
+  }
+
+  let total = 0;
+  for (const sale of sales) {
+    const origin: SaleReturnOrigin = {
+      saleRoundingAmount: sale.roundingAmount.toNumber(),
+      lines: sale.lines.map((line) => ({
+        totalTTC: line.totalTTC.toNumber(),
+        quantity: line.quantity,
+        alreadyReturnedQuantity: returnedByLine.get(line.id)?.quantity ?? 0,
+        returningQuantity: noteByLine.get(line.id)?.quantity ?? 0,
+      })),
+    };
+    const share = creditNoteRoundingShare(origin);
+
+    if (
+      creditNoteExceedsSaleTotal({
+        saleTotalTTC: sale.totalTTC.toNumber(),
+        alreadyCreditedLinesTTC: addMoney(
+          0,
+          ...sale.lines.map((line) => returnedByLine.get(line.id)?.totalTTC ?? 0),
+        ),
+        alreadyCreditedRounding: roundingShareAlreadyReturned(origin),
+        noteLinesTTC: addMoney(0, ...sale.lines.map((line) => noteByLine.get(line.id)?.totalTTC ?? 0)),
+        noteRoundingShare: share,
+        lineCount: sale.lines.length,
+      })
+    ) {
+      throw new OperationsServiceError(
+        "Le remboursement depasse le montant de la vente d'origine.",
+        409,
+      );
+    }
+    total = addMoney(total, share);
+  }
+  return total;
+}
+
+/** The note's totals with the rounding share it gives back: totalTTC = lines + share. */
+function withRoundingShare(
+  totals: { totalHT: number; taxAmount: number; totalTTC: number },
+  roundingAmount: number,
+) {
+  const totalTTC = addMoney(totals.totalTTC, roundingAmount);
+  assertMoneyRange(totalTTC, "creditNote.totalTTC");
+  return { ...totals, totalTTC };
 }
 
 /**
@@ -1867,6 +2045,7 @@ async function computeReturnableProducts(
       id: true,
       invoiceNumber: true,
       createdAt: true,
+      roundingAmount: true,
       stockLocationId: true,
       stockLocation: { select: { name: true } },
       lines: {
@@ -1898,6 +2077,21 @@ async function computeReturnableProducts(
 
   const grouped = new Map<string, ReturnableProduct>();
   for (const sale of sales) {
+    // Only for a sale that carries a rounding: lets the credit-note cart preview
+    // the share a return gives back (lib/credit-note-rounding.ts). Absent for every
+    // sale created before the rounding, so their payload is unchanged.
+    const saleRounding =
+      sale.roundingAmount.toNumber() !== 0
+        ? {
+            roundingAmount: sale.roundingAmount.toNumber(),
+            lines: sale.lines.map((saleLine) => ({
+              saleLineId: saleLine.id,
+              totalTTC: saleLine.totalTTC.toNumber(),
+              quantity: saleLine.quantity,
+              alreadyReturnedQuantity: saleLine.creditNoteLines.reduce((sum, item) => sum + item.quantity, 0),
+            })),
+          }
+        : undefined;
     for (const line of sale.lines) {
       const returned = line.creditNoteLines.reduce((sum, item) => sum + item.quantity, 0);
       const remaining = line.quantity - returned;
@@ -1937,6 +2131,7 @@ async function computeReturnableProducts(
         discountPercent: line.discountRate.toNumber(),
         taxRate: line.taxRate.toNumber(),
         originalTotalTTC: line.totalTTC.toNumber(),
+        ...(saleRounding ? { saleRounding } : {}),
       });
       current.invoicesCount = new Set(current.origins.map((origin) => origin.saleId)).size;
       grouped.set(line.productId, current);

@@ -11,6 +11,7 @@ import {
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
 import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
+import { formatSignedCurrency } from "@/lib/currency";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
 
@@ -98,6 +99,9 @@ export function InvoiceDetailInline({ listItem, sale }: InvoiceDetailInlineProps
       <div className="ml-auto max-w-xs space-y-2 rounded-xl border border-border bg-background p-3">
         <TotalRow label="Total HT" value={formatCurrency(sale.subtotalHT)} />
         <TotalRow label="TVA" value={formatCurrency(sale.taxAmount)} />
+        {(sale.roundingAmount ?? 0) !== 0 ? (
+          <TotalRow label="Arrondi" value={formatSignedCurrency(sale.roundingAmount ?? 0)} />
+        ) : null}
         <TotalRow label="Total TTC" value={formatCurrency(sale.totalTTC)} strong />
         {listItem.net !== undefined && listItem.net !== sale.totalTTC ? (
           <TotalRow label="Net (après avoirs)" value={formatCurrency(listItem.net)} />

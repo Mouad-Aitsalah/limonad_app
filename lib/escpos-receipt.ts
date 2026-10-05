@@ -397,6 +397,19 @@ export function buildReceiptLines(sale: SaleDto, options: ReceiptOptions = {}): 
 
   lines.push({ kind: "text", text: RULE_A, font: "A" });
 
+  // Commercial rounding of the final total (lib/sale-rounding.ts), only when the
+  // sale has one: "Arrondi" LEFT, the signed amount RIGHT. The lines above stay at
+  // the cent, TOTAL TTC below is the rounded amount actually due.
+  const rounding = sale.roundingAmount ?? 0;
+  if (rounding !== 0) {
+    lines.push({
+      kind: "text",
+      text: leftRight("Arrondi", `${rounding > 0 ? "+" : "-"}${money(Math.abs(rounding))}`, COLUMNS_FONT_A),
+      font: "A",
+      codePage,
+    });
+  }
+
   // Total: "TOTAL TTC" LEFT, the amount RIGHT (aligned with the Montant column),
   // same line, bold, and the biggest line of the ticket: double width AND height
   // when both fit on the half-width grid (24 columns), otherwise (a very large

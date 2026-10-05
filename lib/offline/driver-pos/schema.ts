@@ -354,6 +354,15 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `ALTER TABLE sync_outbox ADD COLUMN payloadJson TEXT`,
     ],
   },
+  {
+    // Commercial rounding of the sale total to 0.50 DH (lib/sale-rounding.ts).
+    // Nullable and additive: NULL on every sale saved before the rounding existed,
+    // which is how the sync keeps their cent total (it sends no roundingAmount for them).
+    version: 7,
+    statements: [
+      `ALTER TABLE offline_sales ADD COLUMN roundingAmount REAL`,
+    ],
+  },
 ];
 
 /** Highest version defined above - passed to the plugin's own

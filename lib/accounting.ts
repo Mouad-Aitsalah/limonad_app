@@ -63,6 +63,32 @@ export const defaultAccountingAccounts: Array<{
   { code: "34552", name: "Etat - TVA recuperable sur charges", type: "TAX" },
 ];
 
+/**
+ * Accounts of the commercial rounding of sales (Sale.roundingAmount, see
+ * lib/sale-rounding.ts): a rounding LOSS (the customer pays less than HT + VAT)
+ * is debited on `loss`, a rounding GAIN (the customer pays more) is credited on
+ * `gain`. The same pair is used, inverted, by customer credit notes.
+ *
+ * PROVISIONAL CODES - TO BE CONFIRMED BY THE ACCOUNTANT. This is the ONLY place
+ * the codes, labels and types are written: changing them here changes every
+ * entry and every test. To use a single account for both directions, give both
+ * roles the same code (the resolver then returns the same account).
+ *
+ * Deliberately NOT in defaultAccountingAccounts: the accounts are not created at
+ * accounting bootstrap. lib/server/accounting.ts (requireSalesRoundingAccountId)
+ * creates one on first use - only when a sale / credit note really carries a
+ * non-zero rounding of that direction - and refuses to reuse an existing account
+ * of the same code whose type is not the expected one (code 6588, for example,
+ * already exists as "Frais de timbre" in the live chart).
+ */
+export const salesRoundingAccounts: Record<
+  "loss" | "gain",
+  { code: string; name: string; type: AccountingAccountType }
+> = {
+  loss: { code: "6188", name: "Ecarts d'arrondi sur ventes (charge)", type: "EXPENSE" },
+  gain: { code: "7188", name: "Ecarts d'arrondi sur ventes (produit)", type: "REVENUE" },
+};
+
 export const defaultAccountingSettingsByCode: Record<AccountingAccountSettingsKey, string> = {
   employeePayrollExpenseAccountId: "6171",
   salesAccountId: "7111",

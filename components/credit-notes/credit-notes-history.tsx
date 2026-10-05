@@ -153,7 +153,9 @@ export function CreditNotesHistory({
   const totals = React.useMemo(() => {
     return filteredCreditNotes.reduce(
       (acc, note) => {
-        const total = note.lines.reduce((sum, line) => sum + (line.totalTTC ?? 0), 0);
+        // The stored final amount (lines + rounding share) when the DTO carries it.
+        const total =
+          note.totalTTC ?? note.lines.reduce((sum, line) => sum + (line.totalTTC ?? 0), 0);
         acc.totalAmount += total;
         if (note.status === "BROUILLON") acc.draftCount += 1;
         if (note.status === "VALIDE") acc.validatedCount += 1;
@@ -383,10 +385,9 @@ export function CreditNotesHistory({
                       (sum, line) => sum + line.quantityReturned,
                       0,
                     );
-                    const totalTTC = creditNote.lines.reduce(
-                      (sum, line) => sum + (line.totalTTC ?? 0),
-                      0,
-                    );
+                    const totalTTC =
+                      creditNote.totalTTC ??
+                      creditNote.lines.reduce((sum, line) => sum + (line.totalTTC ?? 0), 0);
                     const partnerName =
                       partyType === "client"
                         ? creditNote.customerName ?? creditNote.customerId ?? "-"

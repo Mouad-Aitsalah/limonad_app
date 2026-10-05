@@ -1,5 +1,6 @@
 import { Separator } from "@/components/ui/separator";
 import { formatCurrency } from "@/lib/utils";
+import { formatSignedCurrency } from "@/lib/currency";
 import type { CartTotals } from "@/components/pos/pos-layout";
 import type { PosOperationType } from "@/types/pos";
 
@@ -43,8 +44,24 @@ export function CartSummary({ totals, operationType }: CartSummaryProps) {
     );
   }
 
+  const roundingAmount = totals.roundingAmount ?? 0;
+
   return (
     <div className="rounded-2xl border border-border bg-muted/40 p-4">
+      {roundingAmount !== 0 ? (
+        <div className="mb-3 space-y-1 text-sm text-muted-foreground">
+          <div className="flex items-center justify-between">
+            <span>Total avant arrondi</span>
+            <span className="tabular-nums">
+              {formatCurrency(totals.totalBeforeRounding ?? totals.totalTTC - roundingAmount)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span>Arrondi</span>
+            <span className="tabular-nums">{formatSignedCurrency(roundingAmount)}</span>
+          </div>
+        </div>
+      ) : null}
       <div className="flex items-center justify-between">
         <span className="text-base font-semibold text-foreground">Total à payer</span>
         <span className="text-2xl font-bold text-emerald-700 tabular-nums">

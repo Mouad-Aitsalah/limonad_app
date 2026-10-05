@@ -56,7 +56,7 @@ export type CounterSyncPayload = {
   reference: string | null;
   bankAccountingAccountId: string | null;
   payments: Array<{ method: string; amount: number; reference: string | null }>;
-  totals: { totalTTC: number; paidAmount: number; creditAmount: number };
+  totals: { totalTTC: number; paidAmount: number; creditAmount: number; roundingAmount?: number };
   lines: Array<{
     productId: string;
     quantity: number;
@@ -89,6 +89,9 @@ export function buildCounterSyncPayload(sale: OfflineSaleWithDetails): CounterSy
       totalTTC: sale.totalTTC,
       paidAmount: sale.paidAmount,
       creditAmount: sale.creditAmount,
+      // Only a sale made with the rounding carries one (even 0): the server applies
+      // the rounding to it. A legacy row has none and is synchronised at its cent total.
+      ...(sale.roundingAmount !== undefined ? { roundingAmount: sale.roundingAmount } : {}),
     },
     lines: sale.lines.map((line) => ({
       productId: line.productId,

@@ -117,6 +117,12 @@ export type OfflineSaleInput = {
     discountAmount: number;
     taxAmount: number;
     totalTTC: number;
+    /**
+     * Commercial rounding of the final total (lib/sale-rounding.ts), signed:
+     * totalTTC = subtotalHT + taxAmount + roundingAmount. Present (even 0) on every
+     * sale made by this version; absent on a legacy input, which stays a cent total.
+     */
+    roundingAmount?: number;
     paidAmount: number;
     creditAmount: number;
   };
@@ -271,8 +277,17 @@ export function validateOfflineSaleInput(input: OfflineSaleInput): string[] {
   if (!sameMoney(sumMoney(input.lines.map((l) => l.discountAmount)), totals.discountAmount)) {
     issues.push("La remise ne correspond pas aux lignes.");
   }
-  if (!sameMoney(addMoney(totals.subtotalHT, totals.taxAmount), totals.totalTTC)) {
-    issues.push("Le total TTC ne correspond pas a HT + TVA.");
+  const roundingAmount = totals.roundingAmount ?? 0;
+  if (
+    typeof roundingAmount !== "number" ||
+    !Number.isFinite(roundingAmount) ||
+    Math.abs(roundingAmount) > 1
+  ) {
+    issues.push("Total invalide: roundingAmount.");
+    return issues;
+  }
+  if (!sameMoney(addMoney(totals.subtotalHT, totals.taxAmount, roundingAmount), totals.totalTTC)) {
+    issues.push("Le total TTC ne correspond pas a HT + TVA + arrondi.");
   }
   if (!sameMoney(addMoney(totals.paidAmount, totals.creditAmount), totals.totalTTC)) {
     issues.push("Paye + credit ne correspond pas au total TTC.");
@@ -443,6 +458,11 @@ export function createOfflineSale(
           discountAmount: roundMoney(input.totals.discountAmount),
           taxAmount: roundMoney(input.totals.taxAmount),
           totalTTC: roundMoney(input.totals.totalTTC),
+          // Stored only when the input carries one: a row without it is a legacy
+          // (pre-rounding) sale, synchronised without roundingAmount.
+          ...(input.totals.roundingAmount !== undefined
+            ? { roundingAmount: roundMoney(input.totals.roundingAmount) }
+            : {}),
           paidAmount: roundMoney(input.totals.paidAmount),
           creditAmount: roundMoney(input.totals.creditAmount),
           idempotencyKey,

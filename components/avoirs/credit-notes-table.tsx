@@ -78,7 +78,7 @@ export function CreditNotesTable({
                 {totals.itemCount}
               </TableCell>
               <TableCell className="text-right font-medium tabular-nums">
-                {formatCurrency(totals.totalTTC)}
+                {formatCurrency(creditNote.totalTTC ?? totals.totalTTC)}
               </TableCell>
               <TableCell>
                 <CreditNoteStatusBadge status={creditNote.status} />

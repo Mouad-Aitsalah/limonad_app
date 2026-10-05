@@ -8,6 +8,7 @@ import { computeDriverLineTotals } from "@/lib/driver-line-totals";
 import { addMoney, MONEY_RANGE_MAX_NUMBER, subtractMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
+import { computeSaleTotals, type SaleRoundingMode } from "@/lib/sale-rounding";
 import {
   computeCashSaleStampAmount,
   listActiveBankAccountOptions,
@@ -292,6 +293,13 @@ export async function createDriverSale(
     // instead of a client-facing "pricingMode" field.
     verifiedUnitPriceTTCByProductId?: Map<string, number>;
     soldAtOverride?: Date;
+    /**
+     * Commercial rounding of the final total to 0.50 DH (lib/sale-rounding.ts).
+     * INTERNAL ONLY, like the two fields above: "COMMERCIAL" (default, every
+     * online sale) except for an offline sale queued BEFORE the rounding existed
+     * (its sync body carries no roundingAmount), which keeps its cent total.
+     */
+    rounding?: SaleRoundingMode;
   } = {},
 ): Promise<SaleDto> {
   const user = await requireOrganizationUser(["driver"]);
@@ -494,17 +502,24 @@ export async function createDriverSale(
           totalTTC,
         };
       });
-      const subtotalHT = roundMoney(computedLines.reduce((sum, line) => sum + line.totalHT, 0));
-      const discountAmount = roundMoney(
-        computedLines.reduce((sum, line) => sum + line.discountAmount, 0),
-      );
-      const taxAmount = roundMoney(computedLines.reduce((sum, line) => sum + line.taxAmount, 0));
-      const totalTTC = roundMoney(subtotalHT + taxAmount);
+      // HT, VAT and the lines keep their real cent values; only the FINAL total
+      // (totalTTC = what is due, collected, put on credit and printed) is rounded
+      // to 0.50 DH and the difference is recorded as roundingAmount.
+      const {
+        subtotalHT,
+        discountAmount,
+        taxAmount,
+        totalBeforeRounding,
+        roundingAmount,
+        totalTTC,
+      } = computeSaleTotals(computedLines, opts.rounding ?? "COMMERCIAL");
       // F8-D: aggregate totals, checked before any write in this
       // transaction (stock decrement is the first one, further below).
       assertMoneyRange(subtotalHT, "subtotalHT");
       assertMoneyRange(discountAmount, "discountAmount");
       assertMoneyRange(taxAmount, "taxAmount");
+      assertMoneyRange(totalBeforeRounding, "totalBeforeRounding");
+      assertMoneyRange(roundingAmount, "roundingAmount");
       assertMoneyRange(totalTTC, "totalTTC");
       const stampAmount = await computeCashSaleStampAmount(tx, {
         organizationId: user.organizationId,
@@ -623,6 +638,7 @@ export async function createDriverSale(
           discountAmount,
           taxAmount,
           totalTTC,
+          roundingAmount,
           stampAmount: collectNow ? stampAmount : 0,
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
@@ -688,6 +704,7 @@ export async function createDriverSale(
           subtotalHT,
           taxAmount,
           totalTTC,
+          roundingAmount,
           stampAmount,
           paidAmount: payment.paidAmount,
           creditAmount: payment.creditAmount,
@@ -799,6 +816,11 @@ const offlineSaleSyncSchema = z.object({
   // never used to price or reject the sale. Absent for a client that
   // predates this field.
   expectedTotalTTC: z.coerce.number().finite().min(0).nullable().optional(),
+  // Commercial rounding of the ticket the driver showed (lib/sale-rounding.ts).
+  // PRESENT (even 0) = a sale made with the rounding: the server applies it.
+  // ABSENT = a sale queued before the rounding existed: it keeps its cent total
+  // (createDriverSale rounding "NONE"), never re-rounded here.
+  roundingAmount: z.coerce.number().finite().nullable().optional(),
   lines: z
     .array(
       z.object({
@@ -1068,6 +1090,7 @@ export async function syncOfflineDriverSale(
       collectNow: true,
       verifiedUnitPriceTTCByProductId,
       soldAtOverride: soldAtDate,
+      rounding: data.roundingAmount == null ? "NONE" : "COMMERCIAL",
     });
   } catch (error) {
     // A session that expired between this function's own auth check and

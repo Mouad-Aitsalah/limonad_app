@@ -19,3 +19,15 @@ export function formatCurrency(value: number | string): string {
     .replace(APP_CURRENCY_CODE, APP_CURRENCY_DISPLAY)
     .trim();
 }
+
+/**
+ * An amount with its explicit sign ("+0,25 DH" / "-0,24 DH"), for the commercial
+ * rounding line of the carts and documents. ASCII signs only: the same text goes
+ * to the thermal printer.
+ */
+export function formatSignedCurrency(value: number): string {
+  const formatted = formatCurrency(Math.abs(value));
+  if (value > 0) return `+${formatted}`;
+  if (value < 0) return `-${formatted}`;
+  return formatted;
+}
