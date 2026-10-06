@@ -148,6 +148,9 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
 
   return (
     <>
+      {/* @container: lets the expanded detail measure the visible width of the
+          (horizontally scrollable) list - see the sticky div below. */}
+      <div className="@container">
       <Table>
         <TableHeader>
           <TableRow>
@@ -267,7 +270,11 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
                 </TableRow>
                 {expanded ? (
                   <TableRow>
-                    <TableCell colSpan={dailyLayout ? 10 : 11} className="bg-muted/10 p-3 sm:p-4">
+                    <TableCell colSpan={dailyLayout ? 10 : 11} className="bg-muted/10 p-0">
+                      {/* The list is wider than the screen (it scrolls horizontally):
+                          the detail keeps the VISIBLE width (100cqw) and stays in view
+                          (sticky) instead of spreading over the whole scrolled row. */}
+                      <div className="sticky left-0 w-[100cqw] p-3 whitespace-normal sm:p-4">
                       {expandedLoading ? (
                         <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
                           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -280,6 +287,7 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
                       ) : expandedDetail && "sale" in expandedDetail ? (
                         <InvoiceDetailInline listItem={invoice} sale={expandedDetail.sale} />
                       ) : null}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ) : null}
@@ -288,6 +296,7 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
           })}
         </TableBody>
       </Table>
+      </div>
 
       <InvoiceDetailDialog
         listItem={viewingInvoice}

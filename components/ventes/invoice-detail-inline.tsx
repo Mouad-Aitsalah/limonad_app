@@ -1,16 +1,8 @@
 "use client";
 
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { InvoiceLinesTable } from "@/components/ventes/invoice-lines-table";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
-import { reconstructDiscountUnitAmount } from "@/lib/pos-discount";
 import { formatSignedCurrency } from "@/lib/currency";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
@@ -57,43 +49,9 @@ export function InvoiceDetailInline({ listItem, sale }: InvoiceDetailInlineProps
         ) : null}
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border bg-background">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Produit</TableHead>
-              <TableHead className="text-right">Quantité</TableHead>
-              <TableHead className="text-right">Prix</TableHead>
-              <TableHead className="text-right">Remise</TableHead>
-              <TableHead className="text-right">Total</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sale.lines.map((line) => {
-              const discountUnitAmount = reconstructDiscountUnitAmount({
-                unitPriceHT: line.unitPriceHT,
-                taxRate: line.taxRate,
-                quantity: line.quantity,
-                totalTTC: line.totalTTC,
-              });
-              return (
-                <TableRow key={line.id}>
-                  <TableCell className="font-medium text-foreground">{line.productName}</TableCell>
-                  <TableCell className="text-right tabular-nums">{line.quantity}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatCurrency(line.unitPriceHT)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {discountUnitAmount > 0 ? `${formatCurrency(discountUnitAmount)}/u` : "-"}
-                  </TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {formatCurrency(line.totalTTC)}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+      {/* Compact on a wide screen: the products are not spread over the whole row. */}
+      <div className="mx-auto w-full max-w-3xl overflow-hidden rounded-xl border border-border bg-background">
+        <InvoiceLinesTable lines={sale.lines} />
       </div>
 
       <div className="mx-auto w-full max-w-xs space-y-2 rounded-xl border border-border bg-background p-3">
