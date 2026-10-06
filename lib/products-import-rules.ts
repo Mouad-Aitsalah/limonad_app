@@ -90,8 +90,12 @@ export type ClassifiedProductRow = ProductImportRow & {
    * as the product form + /achats: computePriceHTFromTTC). */
   purchasePriceHT: number;
   salePriceHT: number;
+  /** Resolved existing supplier id, or null when it will be created (supplierCreate). */
   supplierId: string | null;
   supplierName: string | null;
+  /** No supplier with this code in the organisation: the import creates it
+   * (code = name = ref_fournisseur), once, and links the product to it. */
+  supplierCreate: boolean;
   /** Resolved existing category id, or null when it will be created. */
   categoryId: string | null;
   categoryCreate: boolean;
@@ -144,7 +148,8 @@ const money2 = (value: number) => roundMoney(value);
 /**
  * A pure in-memory compare (no database, no N+1):
  *   - reference used twice in the file          -> CONFLICT (both rows)
- *   - supplier code unknown / inactive          -> ERROR
+ *   - supplier code inactive                    -> ERROR
+ *   - supplier code unknown                     -> supplierCreate (created at import)
  *   - no product with that reference            -> NEW
  *   - product exists, every compared field same -> EXISTING_UNCHANGED
  *   - product exists, something differs         -> EXISTING_UPDATE (+changes)
@@ -179,6 +184,7 @@ export function classifyPreloadedRows(
       salePriceHT,
       supplierId: supplier?.id ?? null,
       supplierName: supplier?.name ?? null,
+      supplierCreate: !supplier,
       categoryId: category?.id ?? null,
       categoryCreate: !category,
       currentStock: null as number | null,
@@ -189,10 +195,10 @@ export function classifyPreloadedRows(
     if ((referenceCounts.get(row.reference) ?? 0) > 1) {
       return { ...base, status: "CONFLICT", message: "Référence en double dans le fichier." };
     }
-    if (!supplier) {
-      return { ...base, status: "ERROR", message: `Fournisseur introuvable : ${row.supplierCode}` };
-    }
-    if (!supplier.active) {
+    // An unknown supplier code is no longer an error: the import creates that
+    // supplier (see lib/products-import-writer.ts). An existing but INACTIVE
+    // supplier is still refused, exactly as before.
+    if (supplier && !supplier.active) {
       return { ...base, status: "ERROR", message: `Fournisseur inactif : ${row.supplierCode}` };
     }
 
@@ -207,8 +213,8 @@ export function classifyPreloadedRows(
     if (existing.name !== row.name) {
       changes.name = { old: existing.name, new: row.name };
     }
-    if (existing.defaultSupplierId !== supplier.id) {
-      changes.supplier = { old: existing.defaultSupplierName ?? null, new: supplier.name };
+    if (!supplier || existing.defaultSupplierId !== supplier.id) {
+      changes.supplier = { old: existing.defaultSupplierName ?? null, new: supplier?.name ?? row.supplierCode };
     }
     const sameCategory = category ? category.id === existing.categoryId : false;
     if (!sameCategory) {

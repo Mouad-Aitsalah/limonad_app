@@ -45,6 +45,7 @@ export async function POST(request: Request) {
       rows: rows.map((row) => ({
         excelRow: row.excelRow,
         supplierName: row.supplierName,
+        supplierCreate: row.supplierCreate,
         categoryCreate: row.categoryCreate,
         currentStock: row.currentStock,
         status: row.status,

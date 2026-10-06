@@ -36,7 +36,8 @@ export function ProductsImportReport({ report, problemRows }: ProductsImportRepo
         ) : null}
       </ul>
       <p className="text-muted-foreground">
-        Catégories créées : {formatImportCount(report.categoriesCreated)} · Stock — mouvements créés :{" "}
+        Fournisseurs créés : {formatImportCount(report.suppliersCreated)} · Catégories créées :{" "}
+        {formatImportCount(report.categoriesCreated)} · Stock — mouvements créés :{" "}
         {formatImportCount(report.stockMovementsCreated)}
       </p>
 

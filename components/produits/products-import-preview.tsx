@@ -342,6 +342,12 @@ export function ProductsImportPreview() {
   );
   const canImport = countsReady && importableRows.length > 0 && !importing;
 
+  // Distinct ref_fournisseur the import will create (each one once, whatever the number of lines).
+  const suppliersToCreate = React.useMemo(
+    () => new Set(importableRows.filter((row) => serverRows.get(row.line)?.supplierCreate).map((row) => row.supplierCode)).size,
+    [importableRows, serverRows],
+  );
+
   async function runImport() {
     if (!canImport) return;
     // What the preview already set aside (not sent): the final report adds it up.
@@ -399,7 +405,7 @@ export function ProductsImportPreview() {
           Feuille <code>produits</code> — colonnes ref_produit, ref_fournisseur, designation, type, prixAchatTTC, prixGros, taux_tva, QuantiteStock.
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Le fournisseur (<code>ref_fournisseur</code>) doit déjà exister. La catégorie (<code>type</code>) est créée si absente.
+          Le fournisseur (<code>ref_fournisseur</code>) et la catégorie (<code>type</code>) sont créés s&apos;ils sont absents.
           <code className="ml-1">QuantiteStock</code> est le stock <span className="font-medium text-foreground">cible</span> du dépôt (pas un ajout).
           Jusqu&apos;à {formatImportCount(PRODUCT_IMPORT_MAX_ROWS)} lignes par fichier.
         </p>
@@ -505,6 +511,7 @@ export function ProductsImportPreview() {
                       <td className="p-2">
                         {row.supplierCode}
                         {server?.supplierName ? <span className="text-muted-foreground"> · {server.supplierName}</span> : null}
+                        {server?.supplierCreate ? <span className="text-muted-foreground"> (nouveau)</span> : null}
                       </td>
                       <td className="p-2">
                         {row.categoryName}
@@ -544,6 +551,7 @@ export function ProductsImportPreview() {
                 {importableRows.length > 0
                   ? `${formatImportCount(importableRows.length)} ligne(s) à importer`
                   : "Rien à importer"}
+                {suppliersToCreate > 0 ? ` · ${formatImportCount(suppliersToCreate)} fournisseur(s) à créer` : ""}
               </span>
             )}
           </div>

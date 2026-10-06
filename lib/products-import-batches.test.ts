@@ -101,6 +101,21 @@ test("the counters follow the server's answers: created / updated / unchanged / 
   assert.deepEqual(outcome.problemRows.map((row) => row.status), ["CONFLICT", "ERROR"]);
 });
 
+test("suppliers created: one global count for the whole file - the sum of the batches, never repeated per line", async () => {
+  // 3 batches of 200: the server created ACYL and BETA in the first one, GAMMA in the third
+  const createdPerBatch = [2, 0, 1];
+  const outcome = await runBatchedImport({
+    rows: lines(600),
+    sendBatch: async (batch, { batch: number }) => ({ ...answerAll(batch), suppliersCreated: createdPerBatch[number - 1] }),
+  });
+  assert.equal(outcome.suppliersCreated, 3);
+  const report = buildImportReport(outcome, { unchanged: 0, conflicts: 0, errors: 0 });
+  assert.equal(report.suppliersCreated, 3);
+  // an older server answer without the field counts as 0, never as NaN
+  const legacy = await runBatchedImport({ rows: lines(5), sendBatch: async (batch) => answerAll(batch) });
+  assert.equal(legacy.suppliersCreated, 0);
+});
+
 test("nothing to import: no request at all", async () => {
   let calls = 0;
   const outcome = await runBatchedImport({ rows: [] as Line[], sendBatch: async () => { calls += 1; return { rows: [] }; } });

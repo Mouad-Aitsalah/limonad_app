@@ -2,59 +2,29 @@ import "server-only";
 
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import type { ClassifiedProductRow } from "@/lib/products-import-rules";
 import {
-  normalizeCategoryKey,
-  type ClassifiedProductRow,
-} from "@/lib/products-import-rules";
-import {
-  PRODUCT_IMPORT_BATCH_TIME_BUDGET_MS,
-  processUntilBudget,
-} from "@/lib/products-import-shared";
+  writeImportBatch,
+  type ImportLineTx,
+  type ImportWriteStore,
+  type ProductImportBatchOutcome,
+} from "@/lib/products-import-writer";
 import { nextCategoryCode } from "@/lib/server/categories";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { nextMovementNumber } from "@/lib/server/sales-shared";
 
+export type { ImportRowResult, ImportRowStatus, ProductImportBatchOutcome } from "@/lib/products-import-writer";
+
 /**
- * The real write of the products import, for ONE batch of already classified
- * lines. The per-line behaviour (applyRow and everything under it) is the one
- * the import always had, moved here unchanged from app/api/produits/import/
- * route.ts: each importable line is applied in its OWN Serializable
- * transaction - Product (+ a Category created on the fly) + StockLevel +
- * StockMovement commit or roll back together (§15). A failing line is reported
- * as ERROR/CONFLICT without rolling back the lines already done (§10). Stock is
- * a TARGET, not an addition: a re-import of the same file finds delta 0 and
- * writes no extra movement (§14, idempotent).
+ * The real write of the products import, for ONE batch of already classified lines:
+ * the Prisma implementation of the store lib/products-import-writer.ts writes
+ * through (that module holds the per-line rules and is unit tested).
  *
- * What is new is only the batch frame: lines are applied one after the other
- * (never in parallel) and, past the time budget, the lines not yet started are
- * handed back as `deferred` for the browser to send again, so one request can
- * never be killed half-way by the 60 s limit.
+ * Here: each line runs in its OWN Serializable transaction (retried on serialization
+ * failures only), and every query is scoped to the caller's organisation and depot
+ * StockLocation - never to a value of the file. The queries are the ones the import
+ * always ran (moved here unchanged); the supplier lookup / creation is the new part.
  */
-
-export type ImportRowStatus = "CREATED" | "UPDATED" | "UNCHANGED" | "CONFLICT" | "ERROR";
-
-export type ImportRowResult = {
-  excelRow: number;
-  reference: string;
-  name: string;
-  status: ImportRowStatus;
-  message: string;
-};
-
-type RowOutcome = {
-  result: ImportRowResult;
-  categoryCreated: boolean;
-  stockMovementCreated: boolean;
-};
-
-export type ProductImportBatchOutcome = {
-  results: ImportRowResult[];
-  /** Excel line numbers the server did not start (time budget spent). */
-  deferred: number[];
-  categoriesCreated: number;
-  stockMovementsCreated: number;
-};
-
 export async function applyProductImportBatch(args: {
   organizationId: string;
   userId: string;
@@ -62,134 +32,68 @@ export async function applyProductImportBatch(args: {
   rows: ClassifiedProductRow[];
   budgetMs?: number;
 }): Promise<ProductImportBatchOutcome> {
-  // Categories auto-created during this batch, keyed by normalizeCategoryKey,
-  // so "Jus" and "JUS" in the same batch create exactly one Category (§4).
-  // Updated only after a line's transaction actually commits. Across batches
-  // resolveCategory re-checks inside every transaction (case-insensitive), and
-  // the next batch's classification preloads the categories created before.
-  const createdCategoryIds = new Map<string, string>();
-  let categoriesCreated = 0;
-  let stockMovementsCreated = 0;
+  return writeImportBatch(prismaImportStore(args.organizationId, args.userId, args.locationId), args.rows, {
+    budgetMs: args.budgetMs,
+  });
+}
 
-  const { results: outcomes, deferred } = await processUntilBudget(
-    args.rows,
-    (row) =>
-      applyRow(args.organizationId, args.userId, args.locationId, row, createdCategoryIds),
-    { budgetMs: args.budgetMs ?? PRODUCT_IMPORT_BATCH_TIME_BUDGET_MS },
-  );
-
-  for (const outcome of outcomes) {
-    categoriesCreated += outcome.categoryCreated ? 1 : 0;
-    stockMovementsCreated += outcome.stockMovementCreated ? 1 : 0;
-  }
-
+function prismaImportStore(organizationId: string, userId: string, locationId: string): ImportWriteStore {
   return {
-    results: outcomes.map((outcome) => outcome.result),
-    deferred: deferred.map((row) => row.excelRow),
-    categoriesCreated,
-    stockMovementsCreated,
+    runLine: (work) =>
+      withSerializableRetry(() =>
+        prisma.$transaction((tx) => work(lineTx(tx, organizationId, userId, locationId)), {
+          isolationLevel: "Serializable",
+        }),
+      ),
+    describeError: (error) =>
+      error instanceof OperationsServiceError ? { status: error.status, message: error.message } : null,
   };
 }
 
-async function applyRow(
+function lineTx(
+  tx: Prisma.TransactionClient,
   organizationId: string,
   userId: string,
   locationId: string,
-  row: ClassifiedProductRow,
-  createdCategoryIds: Map<string, string>,
-): Promise<RowOutcome> {
-  const meta = { excelRow: row.excelRow, reference: row.reference, name: row.name };
-  const idle = { categoryCreated: false, stockMovementCreated: false };
+): ImportLineTx {
+  return {
+    findSupplierByCode: (code) =>
+      tx.supplier.findFirst({
+        where: { organizationId, code },
+        select: { id: true, active: true },
+      }),
 
-  if (row.status === "CONFLICT") {
-    return { result: { ...meta, status: "CONFLICT", message: row.message }, ...idle };
-  }
-  if (row.status === "ERROR") {
-    return { result: { ...meta, status: "ERROR", message: row.message }, ...idle };
-  }
-  if (row.status === "EXISTING_UNCHANGED") {
-    return { result: { ...meta, status: "UNCHANGED", message: "Produit inchangé." }, ...idle };
-  }
-  if (!row.supplierId) {
-    return { result: { ...meta, status: "ERROR", message: `Fournisseur introuvable : ${row.supplierCode}` }, ...idle };
-  }
-  if (row.status === "EXISTING_UPDATE" && !row.existingId) {
-    return { result: { ...meta, status: "ERROR", message: "Produit introuvable au moment de la mise à jour." }, ...idle };
-  }
+    // Same fields as the other places that create a supplier (the "Comptes" form and
+    // the accounts import): organisation, code, name, active, created by. Its
+    // auxiliary ledger account is NOT created here - accounting creates it, as for
+    // any supplier, on its first posted purchase (lib/server/accounting.ts).
+    createSupplier: ({ code, name }) =>
+      tx.supplier.create({
+        data: { organizationId, code, name, active: true, createdByUserId: userId },
+        select: { id: true },
+      }),
 
-  const supplierId = row.supplierId;
-  const categoryKey = normalizeCategoryKey(row.categoryName);
+    findCategoryByName: (name) =>
+      tx.category.findFirst({
+        where: { organizationId, name: { equals: name, mode: "insensitive" } },
+        select: { id: true },
+      }),
 
-  try {
-    const applied = await withSerializableRetry(() =>
-      prisma.$transaction(
-        async (tx) => {
-          const category = await resolveCategory(
-            tx,
-            organizationId,
-            row,
-            createdCategoryIds.get(categoryKey) ?? row.categoryId,
-          );
+    createCategory: async (name) => {
+      const code = await nextCategoryCode(tx, organizationId);
+      return tx.category.create({
+        data: { organizationId, code, name, active: true },
+        select: { id: true },
+      });
+    },
 
-          const productId =
-            row.status === "NEW"
-              ? await createProductRow(tx, organizationId, row, category.id, supplierId)
-              : await updateProductRow(tx, organizationId, row.existingId!, row, category.id, supplierId);
+    createProduct: (row, categoryId, supplierId) => createProductRow(tx, organizationId, row, categoryId, supplierId),
 
-          const stockMovementCreated = await syncStock(
-            tx,
-            organizationId,
-            userId,
-            locationId,
-            productId,
-            row.targetStock,
-          );
+    updateProduct: (productId, row, categoryId, supplierId) =>
+      updateProductRow(tx, organizationId, productId, row, categoryId, supplierId),
 
-          return { categoryId: category.id, categoryCreated: category.created, stockMovementCreated };
-        },
-        { isolationLevel: "Serializable" },
-      ),
-    );
-
-    if (applied.categoryCreated) createdCategoryIds.set(categoryKey, applied.categoryId);
-
-    return {
-      result: {
-        ...meta,
-        status: row.status === "NEW" ? "CREATED" : "UPDATED",
-        message: row.status === "NEW" ? "Produit créé." : "Produit mis à jour.",
-      },
-      categoryCreated: applied.categoryCreated,
-      stockMovementCreated: applied.stockMovementCreated,
-    };
-  } catch (error) {
-    return { result: mapRowError(meta, error), ...idle };
-  }
-}
-
-async function resolveCategory(
-  tx: Prisma.TransactionClient,
-  organizationId: string,
-  row: ClassifiedProductRow,
-  knownId: string | null,
-): Promise<{ id: string; created: boolean }> {
-  if (knownId) return { id: knownId, created: false };
-
-  // Re-check inside the transaction: a category with this name may exist now
-  // (created since the preload, or by an earlier line). Case-insensitive so
-  // "JUS" reuses an existing "Jus".
-  const existing = await tx.category.findFirst({
-    where: { organizationId, name: { equals: row.categoryName.trim(), mode: "insensitive" } },
-    select: { id: true },
-  });
-  if (existing) return { id: existing.id, created: false };
-
-  const code = await nextCategoryCode(tx, organizationId);
-  const created = await tx.category.create({
-    data: { organizationId, code, name: row.categoryName.trim(), active: true },
-    select: { id: true },
-  });
-  return { id: created.id, created: true };
+    syncStock: (productId, targetStock) => syncStock(tx, organizationId, userId, locationId, productId, targetStock),
+  };
 }
 
 async function createProductRow(
@@ -301,33 +205,6 @@ async function syncStock(
   });
 
   return true;
-}
-
-function mapRowError(
-  meta: Omit<ImportRowResult, "status" | "message">,
-  error: unknown,
-): ImportRowResult {
-  const prismaError = error as { code?: string; meta?: { target?: string[] | string } };
-
-  if (prismaError.code === "P2002") {
-    const target = Array.isArray(prismaError.meta?.target)
-      ? prismaError.meta.target.join(",")
-      : String(prismaError.meta?.target ?? "");
-    if (target.includes("reference") || target.includes("barcode")) {
-      return { ...meta, status: "UNCHANGED", message: "Produit déjà présent." };
-    }
-    return { ...meta, status: "CONFLICT", message: "Conflit d'unicité sur cette ligne." };
-  }
-
-  if (error instanceof OperationsServiceError) {
-    return {
-      ...meta,
-      status: error.status === 409 ? "CONFLICT" : "ERROR",
-      message: error.message,
-    };
-  }
-
-  return { ...meta, status: "ERROR", message: "Import impossible pour cette ligne." };
 }
 
 // Same shape as stock-movements.ts / categories.ts / counter-sales.ts etc.:

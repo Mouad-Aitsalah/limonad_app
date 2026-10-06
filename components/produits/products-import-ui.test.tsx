@@ -96,6 +96,7 @@ const report = (over: Partial<ImportReportView> = {}): ImportReportView => ({
   failures: [],
   notProcessedRows: 0,
   categoriesCreated: 3,
+  suppliersCreated: 2,
   stockMovementsCreated: 8000,
   ...over,
 });
@@ -177,8 +178,9 @@ test("the batches are strictly sequential: an awaited loop, no parallel request 
   assert.match(runner, /while \(queue\.length > 0\)/);
   assert.match(runner, /response = await options\.sendBatch\(batch, \{ batch: batchNumber \}\);/);
   const apply = read("../../lib/server/products-import-apply.ts");
+  const writer = read("../../lib/products-import-writer.ts");
   const client = read("../../lib/products-import-client.ts");
-  for (const [name, source] of [["runner", runner], ["apply", apply], ["client", client]] as const) {
+  for (const [name, source] of [["runner", runner], ["apply", apply], ["writer", writer], ["client", client]] as const) {
     assert.equal(/Promise\.all|Promise\.allSettled|Promise\.race/.test(source), false, `${name}: no parallel work`);
   }
 });
@@ -216,7 +218,6 @@ test("business rules unchanged: same statuses and messages, same per-line transa
   const rules = read("../../lib/products-import-rules.ts");
   for (const message of [
     "Référence en double dans le fichier.",
-    "Fournisseur introuvable : ${row.supplierCode}",
     "Fournisseur inactif : ${row.supplierCode}",
     "Nouveau produit.",
     "Mise à jour détectée.",
@@ -224,13 +225,29 @@ test("business rules unchanged: same statuses and messages, same per-line transa
   ]) {
     assert.ok(rules.includes(message), message);
   }
+  // an unknown supplier is created at import, no longer refused by the classification
+  assert.equal(rules.includes("Fournisseur introuvable"), false);
+  assert.match(rules, /supplierCreate: !supplier,/);
+
+  // the per-line rules (now in the store-agnostic writer) ...
+  const writer = read("../../lib/products-import-writer.ts");
+  assert.match(writer, /message: "Produit déjà présent\."/);
+  assert.match(writer, /processUntilBudget\(/);
+  assert.match(writer, /createdSupplierIds\.set\(row\.supplierCode, applied\.supplierId\)/);
+  // ... and the Prisma store: same transaction, same stock target and movement
   const apply = read("../../lib/server/products-import-apply.ts");
-  assert.match(apply, /\{ isolationLevel: "Serializable" \}/);
+  assert.match(apply, /isolationLevel: "Serializable",/);
   assert.match(apply, /referenceType: "PRODUCT_IMPORT"/);
   assert.match(apply, /reason: "Import Excel produits"/);
   assert.match(apply, /if \(delta === 0\) return false;/);
-  assert.match(apply, /message: "Produit déjà présent\."/);
-  assert.match(apply, /processUntilBudget\(/);
   // no Prisma schema / migration touched for this feature
   assert.equal(/prisma\.\$executeRaw|\$queryRaw/.test(apply), false);
+});
+
+test("the report shows how many suppliers were created for the whole file", () => {
+  const rendered = text(renderToStaticMarkup(<ProductsImportReport report={report({ suppliersCreated: 3 })} problemRows={[]} />));
+  assert.match(rendered, /Fournisseurs créés : 3/);
+  const page = read("./products-import-preview.tsx");
+  assert.match(page, /\(nouveau\)/, "a supplier to create is flagged in the preview table");
+  assert.match(page, /fournisseur\(s\) à créer/);
 });

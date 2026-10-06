@@ -26,6 +26,8 @@ export type ServerChange = { old: string | null; new: string | null };
 export type ServerPreviewRow = {
   excelRow: number;
   supplierName: string | null;
+  /** ref_fournisseur matches no supplier yet: the import will create it. */
+  supplierCreate: boolean;
   categoryCreate: boolean;
   currentStock: number | null;
   status: ServerStatus;

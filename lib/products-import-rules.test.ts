@@ -99,32 +99,39 @@ function stored(row: ProductImportRow, overrides: Partial<ProductImportPreload["
   };
 }
 
+// An existing but inactive supplier: its lines stay in ERROR (unknown codes are created instead).
+const INACTIVE_SUPPLIER = { id: "sup-off", code: "FOUR-OFF", name: "Off", active: false };
+
 function preloadOf(products: ReturnType<typeof stored>[], stock = 125): ProductImportPreload {
   return {
     products,
-    suppliers: [SUPPLIER],
+    suppliers: [SUPPLIER, INACTIVE_SUPPLIER],
     categories: [CATEGORY],
     stockByProduct: new Map(products.map((product) => [product.id, stock])),
   };
 }
 
-test("classification: NEW / UPDATE / UNCHANGED / CONFLICT / ERROR, each by its existing rule", () => {
+test("classification: NEW / UPDATE / UNCHANGED / CONFLICT / ERROR, each by its rule; an unknown supplier is created, not an error", () => {
   const fresh = fileRow(1);
   const changedPrice = fileRow(2);
   const same = fileRow(3);
   const dupA = fileRow(4, { reference: "DUP" });
   const dupB = fileRow(5, { reference: "DUP" });
-  const noSupplier = fileRow(6, { supplierCode: "FOUR-9999" });
+  const inactiveSupplier = fileRow(6, { supplierCode: "FOUR-OFF" });
+  const unknownSupplier = fileRow(7, { supplierCode: "ACYL" });
   const preload = preloadOf([stored(changedPrice, { purchasePrice: 1 }), stored(same)]);
+  preload.suppliers = [SUPPLIER, { id: "sup-off", code: "FOUR-OFF", name: "Off", active: false }];
 
-  const { rows, summary } = classifyPreloadedRows([fresh, changedPrice, same, dupA, dupB, noSupplier], preload);
+  const { rows, summary } = classifyPreloadedRows([fresh, changedPrice, same, dupA, dupB, inactiveSupplier, unknownSupplier], preload);
   assert.deepEqual(
     rows.map((row) => row.status),
-    ["NEW", "EXISTING_UPDATE", "EXISTING_UNCHANGED", "CONFLICT", "CONFLICT", "ERROR"],
+    ["NEW", "EXISTING_UPDATE", "EXISTING_UNCHANGED", "CONFLICT", "CONFLICT", "ERROR", "NEW"],
   );
-  assert.deepEqual(summary, { total: 6, new: 1, update: 1, unchanged: 1, conflicts: 2, errors: 1 });
+  assert.deepEqual(summary, { total: 7, new: 2, update: 1, unchanged: 1, conflicts: 2, errors: 1 });
   assert.deepEqual(Object.keys(rows[1].changes), ["purchasePriceHT"]);
-  assert.equal(rows[5].message, "Fournisseur introuvable : FOUR-9999");
+  assert.equal(rows[5].message, "Fournisseur inactif : FOUR-OFF");
+  assert.deepEqual([rows[6].supplierCreate, rows[6].supplierId], [true, null], "ACYL will be created at import");
+  assert.deepEqual([rows[0].supplierCreate, rows[0].supplierId], [false, SUPPLIER.id], "an existing supplier is reused");
   assert.equal(rows[1].existingId, "prod-PRD-000002");
   assert.equal(rows[0].categoryCreate, false);
 });
@@ -169,7 +176,7 @@ function scenarioFile() {
     const reference = `DUP-${pad(i)}`;
     file.push(next({ reference }), next({ reference })); // CONFLICT: the same reference twice
   }
-  for (let i = 0; i < 500; i += 1) file.push(next({ supplierCode: "FOUR-9999" })); // ERROR: unknown supplier
+  for (let i = 0; i < 500; i += 1) file.push(next({ supplierCode: "FOUR-OFF" })); // ERROR: inactive supplier
   return { file, products };
 }
 

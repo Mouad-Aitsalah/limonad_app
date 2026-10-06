@@ -33,6 +33,8 @@ export type BatchResponse = {
   /** Excel lines the server did not start (its time budget was spent). */
   deferred?: number[];
   categoriesCreated?: number;
+  /** Suppliers created by this batch (a new ref_fournisseur, once). */
+  suppliersCreated?: number;
   stockMovementsCreated?: number;
 };
 
@@ -65,6 +67,8 @@ export type ImportProgress = {
 export type BatchedImportResult = {
   progress: ImportProgress;
   categoriesCreated: number;
+  /** For the WHOLE file: the sum of the batches, each new supplier being created once. */
+  suppliersCreated: number;
   stockMovementsCreated: number;
   failures: BatchFailure[];
   /** CONFLICT / ERROR lines the server reported, for the report. */
@@ -108,6 +112,7 @@ export async function runBatchedImport<T extends { excelRow: number }>(
   const failures: BatchFailure[] = [];
   const problemRows: BatchRowResult[] = [];
   let categoriesCreated = 0;
+  let suppliersCreated = 0;
   let stockMovementsCreated = 0;
   let consecutiveFailures = 0;
   let stopped: BatchedImportResult["stopped"] = "completed";
@@ -165,6 +170,7 @@ export async function runBatchedImport<T extends { excelRow: number }>(
       if (row.status === "CONFLICT" || row.status === "ERROR") problemRows.push(row);
     }
     categoriesCreated += response.categoriesCreated ?? 0;
+    suppliersCreated += response.suppliersCreated ?? 0;
     stockMovementsCreated += response.stockMovementsCreated ?? 0;
 
     // Lines the server handed back (time budget): send them again, first, and
@@ -196,6 +202,7 @@ export async function runBatchedImport<T extends { excelRow: number }>(
   return {
     progress: { ...progress },
     categoriesCreated,
+    suppliersCreated,
     stockMovementsCreated,
     failures,
     problemRows,
@@ -221,6 +228,7 @@ export type ImportReportView = {
   failures: BatchFailure[];
   notProcessedRows: number;
   categoriesCreated: number;
+  suppliersCreated: number;
   stockMovementsCreated: number;
 };
 
@@ -250,6 +258,7 @@ export function buildImportReport(result: BatchedImportResult, leftovers: Previe
     failures: result.failures,
     notProcessedRows,
     categoriesCreated: result.categoriesCreated,
+    suppliersCreated: result.suppliersCreated,
     stockMovementsCreated: result.stockMovementsCreated,
   };
 }

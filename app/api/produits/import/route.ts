@@ -77,6 +77,8 @@ export async function POST(request: Request) {
         errors: countStatus("ERROR"),
       },
       categoriesCreated: outcome.categoriesCreated,
+      // Suppliers created by this batch (each new ref_fournisseur once).
+      suppliersCreated: outcome.suppliersCreated,
       stockMovementsCreated: outcome.stockMovementsCreated,
       depot: { name: depot.depotName, code: depot.depotCode },
       rows: outcome.results,
