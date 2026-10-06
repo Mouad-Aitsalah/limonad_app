@@ -5,6 +5,8 @@ import {
   splitGpsRouteIntoSegments,
 } from "@/lib/gps/gps-utils";
 import { roundMoney as roundMoneyDecimal } from "@/lib/money";
+import { computeCommercialStops, firstSalesByCustomer } from "@/lib/truck-routes/commercial-stops";
+import { formatRouteTime } from "@/lib/truck-routes/route-format";
 import { prisma } from "@/lib/prisma";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type {
@@ -246,9 +248,14 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
           id: true,
           invoiceNumber: true,
           createdAt: true,
+          soldAt: true,
+          status: true,
+          tourId: true,
           customerId: true,
           totalTTC: true,
         },
+        // Explicit order: nothing below may depend on the database's row order.
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       },
     },
   });
@@ -268,12 +275,27 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
   }));
 
   const sanitizedPoints = sanitizeGpsPoints(rawPoints);
+
+  // Commercial stops: customers with at least one REAL sale (REAL_SALE_STATUSES,
+  // no DRAFT / CANCELLED), numbered 1..N by their first real sale (soldAt ??
+  // createdAt, then createdAt, then id) - computed in memory from the sales
+  // already loaded above, no query per customer.
+  const commercialStops = computeCommercialStops(tour.sales, { tourId: tour.id });
+  // First sale of ANY non-cancelled status (a prepared invoice included): only
+  // used to place a customer that has no GPS visit and no real sale yet, the way
+  // it was placed before (same rule, no longer dependent on the row order).
+  const firstRecordedSaleAtByCustomerId = new Map(
+    firstSalesByCustomer(tour.sales, () => true, { tourId: tour.id }).map((first) => [
+      first.customerId,
+      first.firstSaleAt,
+    ]),
+  );
+
   const salesByCustomerId = new Map<
     string,
     {
       saleCount: number;
       saleAmount: number;
-      firstSaleAt: string | null;
       saleLabel: string | null;
     }
   >();
@@ -286,13 +308,11 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
     const current = salesByCustomerId.get(sale.customerId) ?? {
       saleCount: 0,
       saleAmount: 0,
-      firstSaleAt: null,
       saleLabel: null,
     };
 
     current.saleCount += 1;
     current.saleAmount += sale.totalTTC.toNumber();
-    current.firstSaleAt = current.firstSaleAt ?? sale.createdAt.toISOString();
     current.saleLabel =
       current.saleCount === 1
         ? sale.invoiceNumber
@@ -307,6 +327,7 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
   for (const visit of tour.customerVisits) {
     visitIds.add(visit.customerId);
     const salesInfo = salesByCustomerId.get(visit.customerId);
+    const commercialStop = commercialStops.get(visit.customerId);
     visits.push({
       customerId: visit.customerId,
       customerCode: visit.customer.code,
@@ -324,6 +345,8 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
       saleCount: salesInfo?.saleCount ?? 0,
       saleAmount: roundMoney(salesInfo?.saleAmount ?? 0),
       saleLabel: salesInfo?.saleLabel ?? null,
+      commercialStopNumber: commercialStop?.commercialStopNumber ?? null,
+      firstSaleAt: commercialStop?.firstSaleAt ?? null,
     });
   }
 
@@ -352,6 +375,7 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
         if (!salesInfo) {
           continue;
         }
+        const commercialStop = commercialStops.get(customer.id);
 
         visits.push({
           customerId: customer.id,
@@ -365,11 +389,16 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
           status: "DELIVERED",
           firstDetectedAt: null,
           arrivedAt: null,
-          completedAt: salesInfo.firstSaleAt,
+          completedAt:
+            commercialStop?.firstSaleAt ??
+            firstRecordedSaleAtByCustomerId.get(customer.id) ??
+            null,
           noSaleReason: null,
           saleCount: salesInfo.saleCount,
           saleAmount: roundMoney(salesInfo.saleAmount),
           saleLabel: salesInfo.saleLabel,
+          commercialStopNumber: commercialStop?.commercialStopNumber ?? null,
+          firstSaleAt: commercialStop?.firstSaleAt ?? null,
         });
       }
     }
@@ -398,6 +427,7 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
       startedAt: tour.startedAt?.toISOString() ?? pointsStart?.recordedAt ?? null,
       returnedAt: tour.returnedAt?.toISOString() ?? pointsEnd?.recordedAt ?? null,
       closedAt: tour.closedAt?.toISOString() ?? null,
+      hasReturned: tour.returnedAt !== null,
     },
     truck: {
       id: tour.truck.id,
@@ -426,6 +456,7 @@ export async function getTourGpsHistory(tourId: string): Promise<TruckRouteDto |
       salesAmount: roundMoney(
         tour.sales.reduce((sum, sale) => sum + sale.totalTTC.toNumber(), 0),
       ),
+      customersWithSaleCount: commercialStops.size,
       startedAt: tour.startedAt?.toISOString() ?? pointsStart?.recordedAt ?? null,
       returnedAt: tour.returnedAt?.toISOString() ?? pointsEnd?.recordedAt ?? null,
       status: tour.status as TruckRouteStatus,
@@ -521,6 +552,7 @@ function buildTimeline(
       subtitle: resolveVisitSubtitle(visit),
       status: visit.status,
       amount: visit.saleAmount > 0 ? visit.saleAmount : null,
+      commercialStopNumber: visit.commercialStopNumber,
     });
   }
 
@@ -539,6 +571,11 @@ function buildTimeline(
 }
 
 function resolveVisitSubtitle(visit: TruckRouteVisitDto) {
+  // A commercial stop shows the time of its first real sale ("Vente · 09:52").
+  if (visit.commercialStopNumber !== null && visit.firstSaleAt) {
+    return `Vente · ${formatRouteTime(visit.firstSaleAt)}`;
+  }
+
   switch (visit.status) {
     case "DELIVERED":
       return "Livre";

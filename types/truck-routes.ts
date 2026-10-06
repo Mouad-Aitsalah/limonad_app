@@ -60,6 +60,14 @@ export type TruckRouteVisitDto = {
   saleCount: number;
   saleAmount: number;
   saleLabel: string | null;
+  /**
+   * Commercial stop number (1..N) when the customer had at least one REAL sale
+   * during the tour, in the order of its first real sale; null otherwise
+   * (lib/truck-routes/commercial-stops.ts).
+   */
+  commercialStopNumber: number | null;
+  /** First REAL sale of the customer during the tour (soldAt ?? createdAt), null without one. */
+  firstSaleAt: string | null;
 };
 
 export type TruckRouteTimelineEventDto = {
@@ -70,6 +78,8 @@ export type TruckRouteTimelineEventDto = {
   subtitle: string;
   status?: TruckRouteVisitStatus | TruckRouteStatus | null;
   amount?: number | null;
+  /** VISIT events only: the commercial stop number of the customer, when it has one. */
+  commercialStopNumber?: number | null;
 };
 
 export type TruckRouteSummaryDto = {
@@ -82,6 +92,8 @@ export type TruckRouteSummaryDto = {
   deliveredCount: number;
   salesCount: number;
   salesAmount: number;
+  /** DISTINCT customers with at least one REAL sale during the tour (not a count of sales). */
+  customersWithSaleCount: number;
   startedAt: string | null;
   returnedAt: string | null;
   status: TruckRouteStatus;
@@ -96,6 +108,8 @@ export type TruckRouteDto = {
     startedAt: string | null;
     returnedAt: string | null;
     closedAt: string | null;
+    /** True when Tour.returnedAt is really recorded (returnedAt above may be the GPS fallback). */
+    hasReturned: boolean;
   };
   truck: {
     id: string;

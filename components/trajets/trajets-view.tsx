@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Route,
   ShoppingCart,
+  Store,
   Truck,
   Users,
 } from "lucide-react";
@@ -28,6 +29,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { LiveFleetView } from "@/components/trajets/live-fleet-view";
+import { resolveRouteEndpoints } from "@/lib/truck-routes/route-endpoints";
+import {
+  formatRouteDateTime,
+  formatRouteDay,
+  formatRouteTime,
+} from "@/lib/truck-routes/route-format";
 import { formatCurrency } from "@/lib/utils";
 import type {
   TruckRoutesPageData,
@@ -69,6 +76,7 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
     router.replace(`${pathname}?${params.toString()}`);
   }
 
+  const endpoints = route ? resolveRouteEndpoints(route) : null;
   const selectedDriverName = route?.driver.name ?? resolveSelectedDriverName(data);
   const selectedTruckLabel = route
     ? `${route.truck.code} - ${route.truck.registration}`
@@ -275,6 +283,11 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
                   value={String(route.summary.deliveredCount)}
                 />
                 <MetricCard
+                  icon={Store}
+                  label="Magasins avec vente"
+                  value={String(route.summary.customersWithSaleCount)}
+                />
+                <MetricCard
                   icon={ShoppingCart}
                   label="CA"
                   value={formatCurrency(route.summary.salesAmount)}
@@ -293,21 +306,34 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
             {route ? (
               <div className="space-y-3 text-sm">
                 <InfoLine label="Tournee" value={route.tour.code} />
-                <InfoLine label="Date" value={formatDate(route.tour.date)} />
+                <InfoLine label="Date" value={formatRouteDay(route.tour.date)} />
                 <InfoLine
-                  label="Depart"
-                  value={route.summary.startedAt ? formatDateTime(route.summary.startedAt) : "-"}
+                  label={<DotLabel color="bg-emerald-600" text="Départ" />}
+                  value={formatRouteDateTime(route.summary.startedAt)}
                 />
                 <InfoLine
-                  label="Retour"
-                  value={
-                    route.summary.returnedAt
-                      ? formatDateTime(route.summary.returnedAt)
-                      : route.tour.status === "IN_PROGRESS"
-                        ? "Tournee en cours"
-                        : "-"
-                  }
+                  label={<DotLabel icon={Store} text="Magasins" />}
+                  value={`${route.summary.customersWithSaleCount} avec vente`}
                 />
+                {endpoints?.isFinished ? (
+                  <InfoLine
+                    label={<DotLabel color="bg-red-600" text="Arrivée" />}
+                    value={formatRouteDateTime(endpoints.arrivalAt)}
+                  />
+                ) : (
+                  <>
+                    <InfoLine
+                      label={<DotLabel color="bg-red-600" text="Arrivée" />}
+                      value={route.tour.status === "IN_PROGRESS" ? "Tournée en cours" : "-"}
+                    />
+                    {endpoints?.lastPosition ? (
+                      <InfoLine
+                        label={<DotLabel color="bg-blue-600" text="Dernière position" />}
+                        value={formatRouteDateTime(endpoints.lastPosition.recordedAt)}
+                      />
+                    ) : null}
+                  </>
+                )}
                 <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-[var(--surface-muted)]/70 px-4 py-3">
                   <span className="text-muted-foreground">Statut</span>
                   <Badge variant={route.tour.status === "IN_PROGRESS" ? "default" : "outline"}>
@@ -331,9 +357,14 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
                     <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-foreground">{event.title}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {formatTime(event.timestamp)}
+                        <p className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
+                          {typeof event.commercialStopNumber === "number" ? (
+                            <CommercialStopBadge value={event.commercialStopNumber} />
+                          ) : null}
+                          <span className="truncate">{event.title}</span>
+                        </p>
+                        <p className="shrink-0 text-xs text-muted-foreground">
+                          {formatRouteTime(event.timestamp)}
                         </p>
                       </div>
                       <p className="text-sm text-muted-foreground">{event.subtitle}</p>
@@ -361,9 +392,11 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-14 text-right">N°</TableHead>
                 <TableHead>Client</TableHead>
                 <TableHead>Heure</TableHead>
                 <TableHead>Statut</TableHead>
+                <TableHead>Première vente</TableHead>
                 <TableHead>Vente</TableHead>
                 <TableHead className="text-right">Montant</TableHead>
               </TableRow>
@@ -371,6 +404,13 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
             <TableBody>
               {route.visits.map((visit) => (
                 <TableRow key={visit.customerId}>
+                  <TableCell className="text-right">
+                    {visit.commercialStopNumber !== null ? (
+                      <CommercialStopBadge value={visit.commercialStopNumber} />
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
                   <TableCell className="whitespace-normal">
                     <div className="font-medium text-foreground">{visit.customerName}</div>
                     <div className="text-xs text-muted-foreground">
@@ -384,6 +424,7 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
                       {statusLabel(visit.status)}
                     </Badge>
                   </TableCell>
+                  <TableCell>{visit.firstSaleAt ? formatRouteTime(visit.firstSaleAt) : "-"}</TableCell>
                   <TableCell>{visit.saleLabel ?? "-"}</TableCell>
                   <TableCell className="text-right">
                     {visit.saleAmount > 0 ? formatCurrency(visit.saleAmount) : "-"}
@@ -459,7 +500,40 @@ function MetricCard({
   );
 }
 
-function InfoLine({ label, value }: { label: string; value: string }) {
+/** The commercial stop number of a customer, as a small round badge. */
+function CommercialStopBadge({ value }: { value: number }) {
+  return (
+    <span
+      className="inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-emerald-600 px-1.5 text-xs font-bold tabular-nums text-white"
+      aria-label={`Arret commercial n°${value}`}
+    >
+      {value}
+    </span>
+  );
+}
+
+function DotLabel({
+  text,
+  color,
+  icon: Icon,
+}: {
+  text: string;
+  color?: string;
+  icon?: React.ComponentType<{ className?: string }>;
+}) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      {Icon ? (
+        <Icon className="h-3.5 w-3.5" />
+      ) : (
+        <span className={`h-2.5 w-2.5 rounded-full ${color ?? "bg-muted-foreground"}`} aria-hidden="true" />
+      )}
+      {text}
+    </span>
+  );
+}
+
+function InfoLine({ label, value }: { label: React.ReactNode; value: string }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-[var(--surface-muted)]/70 px-4 py-3">
       <span className="text-muted-foreground">{label}</span>
@@ -531,30 +605,9 @@ function formatDuration(value: number | null) {
   return `${hours}h ${String(minutes).padStart(2, "0")}min`;
 }
 
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("fr-FR");
-}
-
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("fr-FR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString("fr-FR", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function formatOptionalVisitTime(visit: TruckRouteVisitDto) {
   const value = visit.arrivedAt ?? visit.completedAt ?? visit.firstDetectedAt;
-  return value ? formatTime(value) : "-";
+  return value ? formatRouteTime(value) : "-";
 }
 
 function statusLabel(status: TruckRouteVisitDto["status"]) {
