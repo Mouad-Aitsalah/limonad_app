@@ -8,6 +8,7 @@ import { Prisma } from "@/lib/generated/prisma/client";
 import type { InventoryGetPayload } from "@/lib/generated/prisma/models/Inventory";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
+import { nextMovementNumbers } from "@/lib/server/sales-shared";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { UserRole } from "@/types/auth";
 import type {
@@ -452,12 +453,13 @@ export async function saveInventoryLine(
  * small number of round trips regardless of N:
  *   1. one findMany batch-reads every StockLevel this inventory touches
  *      (replaces N sequential findUnique calls);
- *   2. the movementNumber sequence base is read ONCE (not once per line)
- *      and every subsequent number is computed in memory - safe under the
- *      Serializable isolation already in place: a genuinely concurrent
- *      writer racing for the same numbers aborts with P2034/P2002, and
- *      withInventorySerializableRetry (already used above) retries with a
- *      freshly re-read base, exactly as before this rewrite;
+ *   2. the movementNumbers of the whole inventory are reserved in ONE atomic
+ *      step on the SAME DocumentSequence counter the sales use (STOCK_MOVEMENT,
+ *      scopeKey ""): nextMovementNumbers(tx, org, N) advances the counter by N
+ *      inside this transaction and returns N consecutive numbers. It used to be
+ *      `stockMovement.count() + 1 + index`, which never advanced that counter:
+ *      the next sale reserved the very number the inventory had just written
+ *      (MV-000170), failed on P2002 and was retried 40 times;
  *   3. StockLevel writes are split into a createMany (products with no
  *      existing row) and a single parameterized bulk UPDATE ... FROM
  *      (VALUES ...) statement (products being corrected) - Prisma has no
@@ -469,9 +471,7 @@ export async function saveInventoryLine(
  * The @@unique([organizationId, movementNumber]) constraint and the
  * Serializable/retry wrapper are untouched - they remain the actual
  * correctness guarantee, this rewrite only removes the redundant
- * round-trips around them. A real DB sequence would remove the retry
- * dependency entirely for numbering, but that is a bigger, separate
- * migration deliberately left out of this chantier.
+ * round-trips around them.
  */
 export async function finalizeInventory(id: string): Promise<InventoryDto> {
   const user = await requireOrganizationUser(managerRoles);
@@ -551,11 +551,14 @@ export async function finalizeInventory(id: string): Promise<InventoryDto> {
       }
 
       if (deltaLines.length > 0) {
-        // 2. Movement numbering base read ONCE, not once per delta line -
-        // see the function doc comment above for the concurrency argument.
-        const baseMovementCount = await tx.stockMovement.count({
-          where: { organizationId: user.organizationId },
-        });
+        // 2. The whole block of movement numbers, reserved atomically on the
+        // shared STOCK_MOVEMENT counter, inside this transaction (a rollback
+        // gives the block back; two concurrent callers get disjoint blocks).
+        const movementNumbers = await nextMovementNumbers(
+          tx,
+          user.organizationId,
+          deltaLines.length,
+        );
 
         const toCreate = deltaLines.filter((line) => !line.hasExistingLevel);
         const toUpdate = deltaLines.filter((line) => line.hasExistingLevel);
@@ -606,7 +609,7 @@ export async function finalizeInventory(id: string): Promise<InventoryDto> {
         // sequential creates.
         const movements = deltaLines.map((line, index) => ({
           organizationId: user.organizationId,
-          movementNumber: `MV-${String(baseMovementCount + 1 + index).padStart(6, "0")}`,
+          movementNumber: movementNumbers[index],
           type: "INVENTORY_ADJUSTMENT" as const,
           productId: line.productId,
           quantity: Math.abs(line.delta),

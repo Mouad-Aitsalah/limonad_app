@@ -6,7 +6,12 @@ import type { SaleGetPayload } from "@/lib/generated/prisma/models/Sale";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
-import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
+import {
+  DocumentType,
+  reserveDocumentSequence,
+  reserveDocumentSequenceBlock,
+} from "@/lib/server/document-sequence";
+import { formatMovementNumber, movementNumbersOfBlock } from "@/lib/stock-movement-number";
 import type { SaleDto } from "@/types/operations-dto";
 
 export const saleInclude = {
@@ -420,7 +425,32 @@ export async function nextMovementNumber(
     scopedOrganizationId,
     DocumentType.StockMovement,
   );
-  return `MV-${String(number).padStart(6, "0")}`;
+  return formatMovementNumber(number);
+}
+
+/**
+ * `count` consecutive StockMovement numbers reserved in ONE atomic step on the
+ * SAME counter as nextMovementNumber (DocumentSequence STOCK_MOVEMENT, scopeKey
+ * ""), inside the caller's transaction: the counter advances by `count`
+ * (counter 10, count 2 -> MV-000011, MV-000012, counter 12) and a rollback gives
+ * the whole block back. For a document that creates several movements at once
+ * (inventory validation). The next nextMovementNumber() then continues at
+ * counter + 1 (MV-000013), so an inventory and a sale can never take the same
+ * number. An empty request reserves nothing.
+ */
+export async function nextMovementNumbers(
+  tx: Pick<typeof prisma, "$queryRaw">,
+  organizationId: string,
+  count: number,
+): Promise<string[]> {
+  if (count === 0) return [];
+  const first = await reserveDocumentSequenceBlock(
+    tx,
+    organizationId,
+    DocumentType.StockMovement,
+    count,
+  );
+  return movementNumbersOfBlock(first, count);
 }
 
 // F8-B: delegates to the shared decimal-based engine (lib/money.ts) instead

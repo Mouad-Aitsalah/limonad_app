@@ -78,6 +78,38 @@ export async function reserveDocumentSequence(
   return Number(rows[0].currentValue);
 }
 
+/**
+ * Reserves `size` consecutive numbers in ONE atomic statement and returns the
+ * FIRST of the block (the block is first .. first + size - 1). Same counter row,
+ * same single upsert and same transaction behaviour as reserveDocumentSequence:
+ * the counter moves by `size` atomically (the row lock serialises concurrent
+ * callers, so two blocks never overlap), and when the caller's `tx` rolls back
+ * the whole block is given back. Used when one transaction needs many numbers at
+ * once (inventory validation: one StockMovement per adjusted product) so they
+ * come from the very counter the sales use - never from `count() + 1`.
+ *
+ *   counter 10, size 2  ->  counter 12, returns 11  (numbers 11 and 12)
+ */
+export async function reserveDocumentSequenceBlock(
+  tx: Pick<typeof prisma, "$queryRaw">,
+  organizationId: string,
+  documentType: string,
+  size: number,
+  scopeKey: string = "",
+): Promise<number> {
+  if (!Number.isInteger(size) || size < 1) {
+    throw new Error("La taille du bloc de numeros doit etre un entier strictement positif.");
+  }
+  const rows = await tx.$queryRaw<{ currentValue: number }[]>(Prisma.sql`
+    INSERT INTO "DocumentSequence" ("id", "organizationId", "documentType", "scopeKey", "currentValue", "updatedAt")
+    VALUES (md5(random()::text || clock_timestamp()::text), ${organizationId}, ${documentType}, ${scopeKey}, ${size}, NOW())
+    ON CONFLICT ("organizationId", "documentType", "scopeKey")
+    DO UPDATE SET "currentValue" = "DocumentSequence"."currentValue" + ${size}, "updatedAt" = NOW()
+    RETURNING "currentValue"
+  `);
+  return Number(rows[0].currentValue) - size + 1;
+}
+
 /** Canonical documentType keys - keep in sync with the backfill script and the report's generator inventory. */
 export const DocumentType = {
   StockMovement: "STOCK_MOVEMENT", // sales-shared.ts nextMovementNumber (MV-000123, global per org)
@@ -103,7 +135,7 @@ export const DocumentType = {
   LoadingSequence: "LOADING_SEQUENCE", // truck-loadings.ts nextLoadingSequence (per year)
   LoadingNumber: "LOADING_NUMBER", // truck-loadings.ts nextLoadingNumber (CHG-000001, global per org)
   DriverEmployeeCode: "DRIVER_EMPLOYEE_CODE", // users.ts nextDriverEmployeeCode (DRV-0001, global per org)
-  Inventory: "INVENTORY", // inventories.ts inline count()+1 (INV-0001, global per org)
+  Inventory: "INVENTORY", // inventories.ts nextInventoryNumber (INV-0001, global per org)
   DepotCode: "DEPOT_CODE", // depots.ts provisionDepot (DEP-001, global per org; the linked StockLocation reuses it as SL-DEP-001)
   // BI Phase 2A. NOTE: "CHG-" was NOT reused for Expense - it already means
   // two different things in this codebase (ExpenseAccountCode's CHG-0001

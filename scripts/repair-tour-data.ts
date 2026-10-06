@@ -1,7 +1,7 @@
 import { loadEnvConfig } from "@next/env";
 import { PrismaPg } from "@prisma/adapter-pg";
 
-import { PrismaClient } from "../lib/generated/prisma/client";
+import { Prisma, PrismaClient } from "../lib/generated/prisma/client";
 
 loadEnvConfig(process.cwd());
 
@@ -531,12 +531,23 @@ function summarizeTour(tour: Awaited<ReturnType<typeof findTour>>) {
   };
 }
 
+// Same numbering as the application (lib/server/sales-shared.ts nextMovementNumber):
+// the atomic DocumentSequence counter STOCK_MOVEMENT, scopeKey "" - never
+// `count() + 1`, which does not advance that counter and makes the next sale of
+// the organisation collide with the number written here. (A script cannot import
+// the "server-only" module, so the same single upsert is repeated.)
 async function nextMovementNumber(
-  tx: Pick<typeof prisma, "stockMovement">,
+  tx: Pick<typeof prisma, "$queryRaw">,
   organizationId: string,
 ) {
-  const count = await tx.stockMovement.count({ where: { organizationId } });
-  return `MV-${String(count + 1).padStart(6, "0")}`;
+  const rows = await tx.$queryRaw<{ currentValue: number }[]>(Prisma.sql`
+    INSERT INTO "DocumentSequence" ("id", "organizationId", "documentType", "scopeKey", "currentValue", "updatedAt")
+    VALUES (md5(random()::text || clock_timestamp()::text), ${organizationId}, 'STOCK_MOVEMENT', '', 1, NOW())
+    ON CONFLICT ("organizationId", "documentType", "scopeKey")
+    DO UPDATE SET "currentValue" = "DocumentSequence"."currentValue" + 1, "updatedAt" = NOW()
+    RETURNING "currentValue"
+  `);
+  return `MV-${String(Number(rows[0].currentValue)).padStart(6, "0")}`;
 }
 
 function normalizeDate(value: string) {
