@@ -3,10 +3,33 @@
 import * as React from "react";
 import * as XLSX from "xlsx";
 
+import { ProductsImportPager } from "@/components/produits/products-import-pager";
+import { ProductsImportProgress } from "@/components/produits/products-import-progress";
+import { ProductsImportReport } from "@/components/produits/products-import-report";
 import { Button } from "@/components/ui/button";
+import {
+  buildImportReport,
+  runBatchedImport,
+  type BatchRowResult,
+  type ImportProgress,
+  type ImportReportView,
+} from "@/lib/products-import-batches";
+import {
+  postProductImportBatch,
+  postProductImportPreview,
+  type ImportLineInput,
+  type ServerPreviewRow,
+  type ServerSummary,
+} from "@/lib/products-import-client";
+import {
+  PRODUCT_IMPORT_MAX_ROWS,
+  formatImportCount,
+  importRowLimitMessage,
+  isImportableStatus,
+  paginateRows,
+} from "@/lib/products-import-shared";
 
 type LocalStatus = "VALID" | "ERROR";
-type ServerStatus = "NEW" | "EXISTING_UNCHANGED" | "EXISTING_UPDATE" | "CONFLICT" | "ERROR";
 type FilterKey = "ALL" | "NEW" | "UPDATE" | "UNCHANGED" | "ERROR" | "CONFLICT";
 
 type Row = {
@@ -21,35 +44,6 @@ type Row = {
   targetStock: number;
   status: LocalStatus;
   message: string;
-};
-
-type Change = { old: string | null; new: string | null };
-type ServerRow = {
-  excelRow: number;
-  reference: string;
-  name: string;
-  supplierCode: string;
-  supplierName: string | null;
-  categoryName: string;
-  categoryCreate: boolean;
-  purchasePriceTTC: number;
-  salePriceTTC: number;
-  taxRate: number;
-  currentStock: number | null;
-  targetStock: number;
-  status: ServerStatus;
-  message: string;
-  changes: Record<string, Change>;
-};
-type ServerSummary = { total: number; new: number; unchanged: number; update: number; conflicts: number; errors: number };
-type ServerPreview = { depot: { name: string; code: string }; summary: ServerSummary; rows: ServerRow[] };
-
-type ImportReport = {
-  summary: { created: number; updated: number; unchanged: number; conflicts: number; errors: number };
-  categoriesCreated: number;
-  stockMovementsCreated: number;
-  depot: { name: string; code: string };
-  rows: { excelRow: number; reference: string; name: string; status: "CREATED" | "UPDATED" | "UNCHANGED" | "CONFLICT" | "ERROR"; message: string }[];
 };
 
 const FILE_ACCEPT =
@@ -122,7 +116,7 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "CONFLICT", label: "Conflits" },
 ];
 
-function effectiveFilter(row: Row, server?: ServerRow): Exclude<FilterKey, "ALL"> | "PENDING" {
+function effectiveFilter(row: Row, server?: ServerPreviewRow): Exclude<FilterKey, "ALL"> | "PENDING" {
   if (row.status === "ERROR") return "ERROR";
   if (!server) return "PENDING";
   switch (server.status) {
@@ -139,36 +133,57 @@ function effectiveFilter(row: Row, server?: ServerRow): Exclude<FilterKey, "ALL"
   }
 }
 
+function toLine(row: Row): ImportLineInput {
+  return {
+    excelRow: row.line,
+    reference: row.reference,
+    supplierCode: row.supplierCode,
+    name: row.name,
+    categoryName: row.categoryName,
+    purchasePriceTTC: row.purchasePriceTTC,
+    salePriceTTC: row.salePriceTTC,
+    taxRate: row.taxRate,
+    targetStock: row.targetStock,
+  };
+}
+
 export function ProductsImportPreview() {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const stopRequestedRef = React.useRef(false);
   const [fileName, setFileName] = React.useState("");
   const [fileSize, setFileSize] = React.useState<number | null>(null);
   const [rows, setRows] = React.useState<Row[]>([]);
   const [error, setError] = React.useState("");
-  const [serverRows, setServerRows] = React.useState<Map<number, ServerRow>>(new Map());
+  const [serverRows, setServerRows] = React.useState<Map<number, ServerPreviewRow>>(new Map());
   const [serverLoading, setServerLoading] = React.useState(false);
   const [serverError, setServerError] = React.useState("");
   const [serverSummary, setServerSummary] = React.useState<ServerSummary | null>(null);
   const [depot, setDepot] = React.useState<{ name: string; code: string } | null>(null);
   const [filter, setFilter] = React.useState<FilterKey>("ALL");
+  const [page, setPage] = React.useState(1);
   const [importing, setImporting] = React.useState(false);
+  const [stopping, setStopping] = React.useState(false);
   const [importError, setImportError] = React.useState("");
-  const [importReport, setImportReport] = React.useState<ImportReport | null>(null);
+  const [importProgress, setImportProgress] = React.useState<ImportProgress | null>(null);
+  const [importResult, setImportResult] = React.useState<{
+    report: ImportReportView;
+    problemRows: BatchRowResult[];
+  } | null>(null);
 
+  // Never leave (or reload) the page by accident in the middle of an import.
+  React.useEffect(() => {
+    if (!importing) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [importing]);
+
+  /** The whole file, in ONE read-only request, so a reference used twice is a conflict file-wide. */
   async function checkWithDatabase(localRows: Row[]) {
-    const validRows = localRows
-      .filter((row) => row.status !== "ERROR")
-      .map((row) => ({
-        excelRow: row.line,
-        reference: row.reference,
-        supplierCode: row.supplierCode,
-        name: row.name,
-        categoryName: row.categoryName,
-        purchasePriceTTC: row.purchasePriceTTC,
-        salePriceTTC: row.salePriceTTC,
-        taxRate: row.taxRate,
-        targetStock: row.targetStock,
-      }));
+    const validRows = localRows.filter((row) => row.status !== "ERROR").map(toLine);
     if (!validRows.length) {
       setServerRows(new Map());
       setServerSummary(null);
@@ -177,17 +192,14 @@ export function ProductsImportPreview() {
     setServerLoading(true);
     setServerError("");
     try {
-      const response = await fetch("/api/produits/import/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: validRows }),
-      });
-      const body = (await response.json()) as ServerPreview & { message?: string };
-      if (!response.ok) throw new Error(body.message);
+      const body = await postProductImportPreview(validRows);
       setServerRows(new Map(body.rows.map((row) => [row.excelRow, row])));
       setServerSummary(body.summary);
       setDepot(body.depot);
     } catch (caught) {
+      // No server answer: no counters (they would be zeros that mean nothing).
+      setServerRows(new Map());
+      setServerSummary(null);
       setServerError(
         caught instanceof Error && caught.message
           ? caught.message
@@ -210,7 +222,8 @@ export function ProductsImportPreview() {
     setFileName(file.name);
     setFileSize(file.size);
     setError("");
-    setImportReport(null);
+    setServerError("");
+    setImportResult(null);
     setImportError("");
     try {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", raw: true });
@@ -276,12 +289,23 @@ export function ProductsImportPreview() {
         });
       }
 
+      // A file over the limit is refused here, with the real numbers, before
+      // anything is sent: never a bare "Lignes import invalides.".
+      if (parsed.length > PRODUCT_IMPORT_MAX_ROWS) {
+        setRows([]);
+        setServerRows(new Map());
+        setServerSummary(null);
+        setError(importRowLimitMessage(parsed.length));
+        return;
+      }
+
       // In-file duplicate references are left for the server, which returns
       // them as CONFLICT (never imported) so the "Conflits" filter is real.
       setRows(parsed);
       setServerRows(new Map());
       setServerSummary(null);
       setFilter("ALL");
+      setPage(1);
       void checkWithDatabase(parsed);
     } catch {
       setRows([]);
@@ -289,39 +313,67 @@ export function ProductsImportPreview() {
     }
   }
 
-  const importableRows = rows.filter((row) => {
-    if (row.status === "ERROR") return false;
-    const status = serverRows.get(row.line)?.status;
-    return status === "NEW" || status === "EXISTING_UPDATE";
-  });
-  const canImport =
-    !serverLoading && !serverError && serverSummary != null && importableRows.length > 0 && !importing;
+  // One pass over the file lines, only when the file or the server answer changes.
+  const counts = React.useMemo(() => {
+    const totals: Record<FilterKey, number> = { ALL: rows.length, NEW: 0, UPDATE: 0, UNCHANGED: 0, ERROR: 0, CONFLICT: 0 };
+    for (const row of rows) {
+      const key = effectiveFilter(row, serverRows.get(row.line));
+      if (key !== "PENDING") totals[key] += 1;
+    }
+    return totals;
+  }, [rows, serverRows]);
+
+  // The global counters are only real once the server has classified the file.
+  // Before that (or if the check failed) they show "…" / "—", never a false 0.
+  const countsReady = serverSummary != null && !serverError && !serverLoading;
+  function countLabel(key: FilterKey) {
+    if (key === "ALL") return formatImportCount(counts.ALL);
+    if (serverLoading) return "…";
+    return countsReady ? formatImportCount(counts[key]) : "—";
+  }
+
+  const importableRows = React.useMemo(
+    () =>
+      rows.filter((row) => {
+        if (row.status === "ERROR") return false;
+        return isImportableStatus(serverRows.get(row.line)?.status);
+      }),
+    [rows, serverRows],
+  );
+  const canImport = countsReady && importableRows.length > 0 && !importing;
 
   async function runImport() {
     if (!canImport) return;
+    // What the preview already set aside (not sent): the final report adds it up.
+    const leftovers = { unchanged: counts.UNCHANGED, conflicts: counts.CONFLICT, errors: counts.ERROR };
+    const lines = importableRows.map(toLine);
+    stopRequestedRef.current = false;
+    setStopping(false);
     setImporting(true);
     setImportError("");
-    setImportReport(null);
+    setImportResult(null);
+    setImportProgress({
+      total: lines.length,
+      processed: 0,
+      failedRows: 0,
+      created: 0,
+      updated: 0,
+      unchanged: 0,
+      conflicts: 0,
+      errors: 0,
+      batchesDone: 0,
+      batchesTotal: 0,
+    });
     try {
-      const payload = importableRows.map((row) => ({
-        excelRow: row.line,
-        reference: row.reference,
-        supplierCode: row.supplierCode,
-        name: row.name,
-        categoryName: row.categoryName,
-        purchasePriceTTC: row.purchasePriceTTC,
-        salePriceTTC: row.salePriceTTC,
-        taxRate: row.taxRate,
-        targetStock: row.targetStock,
-      }));
-      const response = await fetch("/api/produits/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: payload }),
+      // Batches of 200 lines, sent strictly one after the other.
+      const result = await runBatchedImport({
+        rows: lines,
+        sendBatch: (batch) => postProductImportBatch(batch),
+        onProgress: setImportProgress,
+        shouldStop: () => stopRequestedRef.current,
       });
-      const body = (await response.json()) as ImportReport & { message?: string };
-      if (!response.ok) throw new Error(body.message);
-      setImportReport(body);
+      setImportResult({ report: buildImportReport(result, leftovers), problemRows: result.problemRows });
+      // The database changed: classify the file again so the counters are current.
       await checkWithDatabase(rows);
     } catch (caught) {
       setImportError(
@@ -329,19 +381,15 @@ export function ProductsImportPreview() {
       );
     } finally {
       setImporting(false);
+      setImportProgress(null);
     }
   }
 
-  const counts: Record<FilterKey, number> = { ALL: rows.length, NEW: 0, UPDATE: 0, UNCHANGED: 0, ERROR: 0, CONFLICT: 0 };
-  rows.forEach((row) => {
-    const key = effectiveFilter(row, serverRows.get(row.line));
-    if (key !== "PENDING") counts[key] += 1;
-  });
-
-  const visibleRows =
-    filter === "ALL" ? rows : rows.filter((row) => effectiveFilter(row, serverRows.get(row.line)) === filter);
-
-  const problemRows = importReport?.rows.filter((row) => row.status === "CONFLICT" || row.status === "ERROR") ?? [];
+  const filteredRows = React.useMemo(
+    () => (filter === "ALL" ? rows : rows.filter((row) => effectiveFilter(row, serverRows.get(row.line)) === filter)),
+    [rows, serverRows, filter],
+  );
+  const pageData = paginateRows(filteredRows, page);
 
   return (
     <div className="space-y-6">
@@ -353,6 +401,7 @@ export function ProductsImportPreview() {
         <p className="mt-1 text-sm text-muted-foreground">
           Le fournisseur (<code>ref_fournisseur</code>) doit déjà exister. La catégorie (<code>type</code>) est créée si absente.
           <code className="ml-1">QuantiteStock</code> est le stock <span className="font-medium text-foreground">cible</span> du dépôt (pas un ajout).
+          Jusqu&apos;à {formatImportCount(PRODUCT_IMPORT_MAX_ROWS)} lignes par fichier.
         </p>
         {depot && (
           <p className="mt-1 text-sm">
@@ -362,7 +411,7 @@ export function ProductsImportPreview() {
       </div>
 
       <div>
-        <Button type="button" onClick={() => fileInputRef.current?.click()}>
+        <Button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing}>
           Choisir un fichier Excel
         </Button>
         <input ref={fileInputRef} type="file" accept={FILE_ACCEPT} className="hidden" onChange={handleFileChange} />
@@ -375,7 +424,14 @@ export function ProductsImportPreview() {
       )}
 
       {serverLoading && <p className="text-sm text-muted-foreground">Vérification avec la base de données...</p>}
-      {serverError && <p className="text-sm text-destructive">{serverError}</p>}
+      {serverError && (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-sm text-destructive">{serverError}</p>
+          <Button type="button" variant="outline" size="sm" disabled={serverLoading} onClick={() => void checkWithDatabase(rows)}>
+            Réessayer la vérification
+          </Button>
+        </div>
+      )}
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {rows.length > 0 && (
@@ -385,15 +441,27 @@ export function ProductsImportPreview() {
               <button
                 key={key}
                 type="button"
-                onClick={() => setFilter(key)}
+                onClick={() => {
+                  setFilter(key);
+                  setPage(1);
+                }}
                 className={`rounded-full border px-3 py-1 text-sm ${
                   filter === key ? "border-foreground bg-foreground text-background" : "border-border text-muted-foreground"
                 }`}
               >
-                {label} ({counts[key]})
+                {label} ({countLabel(key)})
               </button>
             ))}
           </div>
+
+          <ProductsImportPager
+            page={pageData.page}
+            pageCount={pageData.pageCount}
+            from={pageData.from}
+            to={pageData.to}
+            totalRows={filteredRows.length}
+            onPageChange={setPage}
+          />
 
           <div className="overflow-x-auto rounded-xl border">
             <table className="w-full text-sm">
@@ -414,7 +482,7 @@ export function ProductsImportPreview() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((row) => {
+                {pageData.rows.map((row) => {
                   const server = serverRows.get(row.line);
                   const changes = server
                     ? Object.entries(server.changes)
@@ -426,7 +494,9 @@ export function ProductsImportPreview() {
                       ? "Erreur"
                       : server
                         ? { NEW: "Nouveau", EXISTING_UNCHANGED: "Inchangé", EXISTING_UPDATE: "À mettre à jour", CONFLICT: "Conflit", ERROR: "Erreur" }[server.status]
-                        : "…";
+                        : serverError
+                          ? "Non vérifié"
+                          : "…";
                   return (
                     <tr key={row.line} className="border-t align-top">
                       <td className="p-2">{row.line}</td>
@@ -456,37 +526,41 @@ export function ProductsImportPreview() {
             </table>
           </div>
 
+          <ProductsImportPager
+            page={pageData.page}
+            pageCount={pageData.pageCount}
+            from={pageData.from}
+            to={pageData.to}
+            totalRows={filteredRows.length}
+            onPageChange={setPage}
+          />
+
           <div className="flex items-center gap-3">
             <Button type="button" onClick={runImport} disabled={!canImport}>
               {importing ? "Importation en cours..." : "Importer les produits"}
             </Button>
-            {!importing && serverSummary != null && !serverError && (
+            {!importing && countsReady && (
               <span className="text-sm text-muted-foreground">
-                {importableRows.length > 0 ? `${importableRows.length} ligne(s) à importer` : "Rien à importer"}
+                {importableRows.length > 0
+                  ? `${formatImportCount(importableRows.length)} ligne(s) à importer`
+                  : "Rien à importer"}
               </span>
             )}
           </div>
           {importError && <p className="text-sm text-destructive">{importError}</p>}
 
-          {importReport && (
-            <div className="space-y-1 rounded-xl border bg-muted/20 p-4 text-sm">
-              <p className="font-medium">Rapport d&apos;import</p>
-              <p>
-                Produits — créés : {importReport.summary.created} · mis à jour : {importReport.summary.updated} · inchangés : {importReport.summary.unchanged} · erreurs : {importReport.summary.errors}
-              </p>
-              <p>Catégories créées : {importReport.categoriesCreated}</p>
-              <p>Stock — mouvements créés : {importReport.stockMovementsCreated}</p>
-              {problemRows.length > 0 && (
-                <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground">
-                  {problemRows.map((row) => (
-                    <li key={row.excelRow}>
-                      Ligne {row.excelRow} — {row.reference} — {row.message}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+          {importProgress && (
+            <ProductsImportProgress
+              progress={importProgress}
+              stopping={stopping}
+              onStop={() => {
+                stopRequestedRef.current = true;
+                setStopping(true);
+              }}
+            />
           )}
+
+          {importResult && <ProductsImportReport report={importResult.report} problemRows={importResult.problemRows} />}
         </>
       )}
     </div>
