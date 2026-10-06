@@ -14,7 +14,7 @@ type InvoiceDetailInlineProps = {
 
 export function InvoiceDetailInline({ listItem, sale }: InvoiceDetailInlineProps) {
   return (
-    <div className="space-y-4 rounded-2xl border border-border bg-muted/20 p-4 sm:p-5">
+    <div className="space-y-4 rounded-2xl border border-border bg-muted/20 p-3 sm:p-5">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="font-heading text-base font-semibold text-foreground">
           Détail de la commande {sale.displayNumber}

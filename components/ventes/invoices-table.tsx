@@ -274,7 +274,7 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
                       {/* The list is wider than the screen (it scrolls horizontally):
                           the detail keeps the VISIBLE width (100cqw) and stays in view
                           (sticky) instead of spreading over the whole scrolled row. */}
-                      <div className="sticky left-0 w-[100cqw] p-3 whitespace-normal sm:p-4">
+                      <div className="sticky left-0 w-[100cqw] p-2 whitespace-normal sm:p-4">
                       {expandedLoading ? (
                         <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
                           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
