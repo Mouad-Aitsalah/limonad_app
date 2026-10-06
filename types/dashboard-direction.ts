@@ -10,7 +10,7 @@ export type DirectionTrend = {
 export type DirectionKpi = {
   id: string;
   label: string;
-  /** Pre-formatted for direct display (formatCurrency or a plain count). */
+  /** Pre-formatted for direct display (formatDashboardAmount - whole dirhams - or a plain count). */
   value: string;
   trend?: DirectionTrend;
   /** Small caption under the value, e.g. "Solde actuel" or the

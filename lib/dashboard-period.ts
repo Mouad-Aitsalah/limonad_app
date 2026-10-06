@@ -23,7 +23,7 @@ export const DIRECTION_PERIOD_PRESETS: Array<{ key: DirectionPeriodPresetKey; la
   { key: "7d", label: "7 jours" },
   { key: "30d", label: "30 jours" },
   { key: "month", label: "Ce mois" },
-  { key: "prev_month", label: "Mois precedent" },
+  { key: "prev_month", label: "Mois précédent" },
 ];
 
 export const DEFAULT_DIRECTION_PERIOD_KEY: DirectionPeriodKey = "30d";
@@ -103,7 +103,7 @@ export function resolveDirectionPeriod(
     const from = startOfDay(customFrom);
     // "date debut + date fin" - inclusive of the end date.
     const to = addDays(startOfDay(customTo), 1);
-    return withPreviousWindow("custom", "Personnalise", from, to);
+    return withPreviousWindow("custom", "Personnalisé", from, to);
   }
 
   const today = startOfDay(new Date());
@@ -132,7 +132,7 @@ export function resolveDirectionPeriod(
     case "prev_month": {
       const from = new Date(today.getFullYear(), today.getMonth() - 1, 1);
       const to = new Date(today.getFullYear(), today.getMonth(), 1);
-      return withPreviousWindow("prev_month", "Mois precedent", from, to);
+      return withPreviousWindow("prev_month", "Mois précédent", from, to);
     }
     case "30d":
     default: {

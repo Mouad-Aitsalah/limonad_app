@@ -3,7 +3,7 @@ import { AlertTriangle, BarChart3, Info, Sparkles } from "lucide-react";
 import { DirectionKpiCard } from "@/components/dashboard/direction-kpi-card";
 import { ForecastDailyChart } from "@/components/dashboard/forecast/forecast-daily-chart";
 import { ForecastProductsList } from "@/components/dashboard/forecast/forecast-products-list";
-import { SectionCard } from "@/components/ui/section-card";
+import { Card } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/currency";
 import { formatBusinessDay, formatComputedAt, QUALITY_MESSAGE } from "@/lib/forecasting/forecast-format";
 import { cn } from "@/lib/utils";
@@ -22,10 +22,37 @@ const QUALITY_BANNER_CLASS = {
   insufficient: "border-amber-300 bg-amber-50 text-amber-900",
 } as const;
 
+/**
+ * The frame of the section, in the look of the KPI cards: white card, soft shadow,
+ * a thin violet-to-green accent line along the top and a tinted icon circle by the
+ * title. Appearance only - the title, the description and everything inside are
+ * unchanged.
+ */
+function ForecastSectionFrame({ children }: { children: React.ReactNode }) {
+  return (
+    <Card className="relative gap-0 rounded-[22px] border-slate-200/70 bg-white py-0 shadow-[0_1px_2px_rgb(16_32_56/0.04),0_12px_28px_-14px_rgb(16_32_56/0.14)]">
+      <span
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-violet-400/80 via-blue-400/70 to-emerald-400/80"
+      />
+      <div className="flex items-start gap-3.5 px-5 pt-6 pb-4 sm:px-6">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-violet-50 ring-1 ring-violet-100">
+          <Sparkles aria-hidden="true" className="size-5 text-violet-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="font-heading text-lg leading-snug font-semibold tracking-[-0.02em]">{FORECAST_SECTION_TITLE}</h2>
+          <p className="mt-0.5 text-sm leading-6 text-muted-foreground">{SECTION_DESCRIPTION}</p>
+        </div>
+      </div>
+      <div className="space-y-4 px-5 pb-5 sm:px-6">{children}</div>
+    </Card>
+  );
+}
+
 /** Loading placeholder shown while the section streams in. */
 export function ForecastSectionSkeleton() {
   return (
-    <SectionCard title={FORECAST_SECTION_TITLE} description={SECTION_DESCRIPTION} contentClassName="space-y-4">
+    <ForecastSectionFrame>
       <div role="status" aria-live="polite" className="space-y-4" data-testid="forecast-loading">
         <span className="sr-only">Chargement des prévisions…</span>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -34,7 +61,7 @@ export function ForecastSectionSkeleton() {
         </div>
         <div className="h-48 animate-pulse rounded-2xl bg-muted/60" />
       </div>
-    </SectionCard>
+    </ForecastSectionFrame>
   );
 }
 
@@ -122,7 +149,7 @@ function ReadyContent({ data }: { data: DashboardForecastReady }) {
         />
       </div>
 
-      <div className="rounded-[22px] border border-border/70 bg-white/82 p-4">
+      <div className="rounded-[22px] border border-slate-200/70 bg-white p-4">
         <div className="mb-2 flex items-center gap-2">
           <BarChart3 aria-hidden="true" className="h-4 w-4 text-emerald-700" />
           <h3 className="font-heading text-sm font-semibold text-foreground">Ventes prévues par jour</h3>
@@ -146,7 +173,7 @@ function ReadyContent({ data }: { data: DashboardForecastReady }) {
             ? ` ${data.negativeStockCount} ${plural(data.negativeStockCount, "produit", "produits")} en stock négatif à régulariser avant tout achat.`
             : ""}
         </p>
-        <div className="overflow-hidden rounded-[22px] border border-border/70 bg-white/82 max-xl:overflow-visible max-xl:rounded-none max-xl:border-0 max-xl:bg-transparent">
+        <div className="overflow-hidden rounded-[22px] border border-slate-200/70 bg-white max-xl:overflow-visible max-xl:rounded-none max-xl:border-0 max-xl:bg-transparent">
           <ForecastProductsList rows={data.rows} />
         </div>
         {data.hiddenRowCount > 0 ? (
@@ -174,7 +201,7 @@ function ReadyContent({ data }: { data: DashboardForecastReady }) {
 /** Presentational: renders every state of the section from its DTO. */
 export function ForecastSectionView({ data }: { data: DashboardForecastDto }) {
   return (
-    <SectionCard title={FORECAST_SECTION_TITLE} description={SECTION_DESCRIPTION} contentClassName="space-y-4">
+    <ForecastSectionFrame>
       {data.status === "error" ? (
         <Notice tone="error">{data.message}</Notice>
       ) : data.status === "empty" ? (
@@ -186,6 +213,6 @@ export function ForecastSectionView({ data }: { data: DashboardForecastDto }) {
       ) : (
         <ReadyContent data={data} />
       )}
-    </SectionCard>
+    </ForecastSectionFrame>
   );
 }

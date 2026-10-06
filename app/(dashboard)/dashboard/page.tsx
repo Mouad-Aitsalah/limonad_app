@@ -22,6 +22,12 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
+// Two balanced rows of five KPI cards from xl; two columns on a tablet, one on a
+// phone (never a horizontal overflow). In two columns the odd card of a row of five
+// takes the full width instead of leaving a hole.
+const KPI_ROW_CLASS =
+  "grid grid-cols-1 gap-5 sm:grid-cols-2 sm:[&>*:last-child:nth-child(odd)]:col-span-2 xl:grid-cols-5 xl:[&>*:last-child:nth-child(odd)]:col-span-1";
+
 type DashboardPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -41,12 +47,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       <AppPageHeader
         eyebrow="Direction"
         title="Dashboard Direction"
-        description="Vue synthetique des ventes, marges, charges, creances et stocks."
+        description="Vue synthétique des ventes, marges, charges, créances et stocks."
       />
 
       <DirectionPeriodBar activeKey={data.period.key} />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className={KPI_ROW_CLASS}>
         <DirectionKpiCard kpi={kpis.revenue} emphasis />
         <DirectionKpiCard kpi={kpis.grossMargin} emphasis />
         <DirectionKpiCard kpi={kpis.estimatedResult} emphasis />
@@ -56,10 +62,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
       <p className="text-xs text-muted-foreground italic">
         {data.marginNote ? `Marge brute - ${data.marginNote} ` : ""}
-        Resultat estime : indicateur de gestion, hors elements comptables non integres.
+        Résultat estimé : indicateur de gestion, hors éléments comptables non intégrés.
       </p>
 
-      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+      <div className={KPI_ROW_CLASS}>
         <DirectionKpiCard kpi={kpis.salesCount} />
         <DirectionKpiCard kpi={kpis.avgBasket} />
         <DirectionKpiCard kpi={kpis.purchasesHT} />

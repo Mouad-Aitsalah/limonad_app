@@ -1,6 +1,7 @@
 import "server-only";
 
 import { formatCurrency } from "@/lib/currency";
+import { formatDashboardAmount } from "@/lib/dashboard-format";
 import { resolveDirectionPeriod } from "@/lib/dashboard-period";
 import { roundMoney } from "@/lib/money";
 import {
@@ -55,8 +56,11 @@ function buildTrend(current: number, previous: number): DirectionTrend {
   };
 }
 
+// The KPI cards show whole dirhams (formatDashboardAmount: display rounding only);
+// the underlying numbers, the trends and every other block of the page keep their
+// cents (formatCurrency).
 function moneyKpi(id: string, label: string, current: number, previous: number): DirectionKpi {
-  return { id, label, value: formatCurrency(current), trend: buildTrend(current, previous) };
+  return { id, label, value: formatDashboardAmount(current), trend: buildTrend(current, previous) };
 }
 
 function countKpi(id: string, label: string, current: number, previous: number): DirectionKpi {
@@ -255,20 +259,20 @@ export async function getDirectionDashboardData(
     kpis: {
       revenue: moneyKpi("revenue", "Chiffre d'affaires", currentRevenue.ttc, previousRevenue.ttc),
       grossMargin: moneyKpi("gross-margin", "Marge brute", currentMargin, previousMargin),
-      estimatedResult: moneyKpi("estimated-result", "Resultat estime", currentResult, previousResult),
+      estimatedResult: moneyKpi("estimated-result", "Résultat estimé", currentResult, previousResult),
       customerReceivables: {
         id: "customer-receivables",
-        label: "Creances clients",
-        value: formatCurrency(receivables),
+        label: "Créances clients",
+        value: formatDashboardAmount(receivables),
         helper: "Solde actuel",
       },
       stockValue: {
         id: "stock-value",
         label: "Valeur du stock",
-        value: formatCurrency(stockValue.value),
+        value: formatDashboardAmount(stockValue.value),
         helper:
           stockValue.negativeProductCount > 0
-            ? `${stockValue.negativeProductCount} produit${stockValue.negativeProductCount > 1 ? "s" : ""} en stock negatif`
+            ? `${stockValue.negativeProductCount} produit${stockValue.negativeProductCount > 1 ? "s" : ""} en stock négatif`
             : undefined,
       },
       salesCount: countKpi("sales-count", "Nombre de ventes", currentSalesCount, previousSalesCount),

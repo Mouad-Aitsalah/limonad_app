@@ -14,6 +14,9 @@ import {
   type DirectionPeriodPresetKey,
 } from "@/lib/dashboard-period";
 
+const periodButtonClass = "h-8 rounded-xl px-3.5 text-[0.82rem]";
+const periodIdleClass = "text-[var(--text-secondary)] hover:bg-slate-50 hover:text-[var(--text-primary)]";
+
 export function DirectionPeriodBar({ activeKey }: { activeKey: DirectionPeriodKey }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -33,34 +36,48 @@ export function DirectionPeriodBar({ activeKey }: { activeKey: DirectionPeriodKe
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {DIRECTION_PERIOD_PRESETS.map((preset) => (
+    <div className="flex flex-wrap items-center gap-3">
+      {/* One white segmented control: the active period is filled, the others are quiet. */}
+      <div
+        role="group"
+        aria-label="Période"
+        className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-2xl border border-slate-200/70 bg-white p-1 shadow-[0_1px_2px_rgb(16_32_56/0.04),0_8px_20px_-14px_rgb(16_32_56/0.14)]"
+      >
+        {DIRECTION_PERIOD_PRESETS.map((preset) => {
+          const active = activeKey === preset.key;
+          return (
+            <Button
+              key={preset.key}
+              type="button"
+              size="sm"
+              variant={active ? "default" : "ghost"}
+              aria-pressed={active}
+              className={cn(periodButtonClass, active ? "shadow-sm" : periodIdleClass)}
+              onClick={() => {
+                setCustomOpen(false);
+                goToPreset(preset.key);
+              }}
+            >
+              {preset.label}
+            </Button>
+          );
+        })}
         <Button
-          key={preset.key}
           type="button"
           size="sm"
-          variant={activeKey === preset.key ? "default" : "outline"}
-          onClick={() => {
-            setCustomOpen(false);
-            goToPreset(preset.key);
-          }}
+          variant={activeKey === "custom" ? "default" : "ghost"}
+          aria-pressed={activeKey === "custom"}
+          className={cn(periodButtonClass, activeKey === "custom" ? "shadow-sm" : periodIdleClass)}
+          onClick={() => setCustomOpen((open) => !open)}
         >
-          {preset.label}
+          Personnalisé
         </Button>
-      ))}
-      <Button
-        type="button"
-        size="sm"
-        variant={activeKey === "custom" ? "default" : "outline"}
-        onClick={() => setCustomOpen((open) => !open)}
-      >
-        Personnalise
-      </Button>
+      </div>
 
       {customOpen ? (
         <div
           className={cn(
-            "flex flex-wrap items-end gap-3 rounded-2xl border border-border/70 bg-white/82 px-3 py-2.5",
+            "flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200/70 bg-white px-3 py-2.5 shadow-[0_1px_2px_rgb(16_32_56/0.04)]",
           )}
         >
           <div className="space-y-1">
