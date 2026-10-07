@@ -110,3 +110,24 @@ test("plain text without Markdown is unchanged", async () => {
   const html = await render("Bonjour ! Je suis l’assistant IA de COMDIS.");
   assert.equal(textOf(html), "Bonjour ! Je suis l’assistant IA de COMDIS.");
 });
+
+test("the « Ouvrir le panier » link of an AI-prepared cart opens the POS in the SAME tab, as a button", async () => {
+  const html = await render(
+    "✅ **Vente préparée**\n\n**Client :** Autre\n\n- Coca-Cola × 2\n\n[🛒 Ouvrir le panier](/pos?aiDraft=cmdraft123)\n\nVoir aussi [la doc](https://example.com).",
+  );
+  const draftLink = html.match(/<a[^>]*data-ai-pos-draft="cmdraft123"[^>]*>[\s\S]*?<\/a>/)?.[0] ?? "";
+  assert.ok(draftLink, "the draft link is rendered");
+  assert.match(draftLink, /href="\/pos\?aiDraft=cmdraft123"/);
+  assert.equal(/target=/.test(draftLink), false, "no _blank: same tab");
+  assert.match(textOf(draftLink), /Ouvrir le panier/);
+  // every other link keeps opening in a new tab
+  assert.match(html, /<a[^>]*href="https:\/\/example.com"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/);
+});
+
+test("only a strict /pos?aiDraft=<id> link becomes the POS button (no external or extra-parameter look-alike)", async () => {
+  for (const href of ["https://evil.example/pos?aiDraft=x", "/pos?aiDraft=x&next=/admin"]) {
+    const html = await render(`[🛒 Ouvrir le panier](${href})`);
+    assert.equal(html.includes("data-ai-pos-draft"), false, href);
+    assert.match(html, /target="_blank"/, href);
+  }
+});

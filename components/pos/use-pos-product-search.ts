@@ -66,9 +66,16 @@ export function usePosProductSearch(
     locationId: string | null | undefined;
     normalize: (value: string) => string;
     searchRemote?: PosProductRemoteSearch;
+    /**
+     * Products loaded explicitly by id (a cart line whose product was not
+     * preloaded - e.g. an AI-prepared cart or a restored cart). Merged into
+     * `allKnownProducts` only, so the cart can always resolve them; they
+     * never change what the search/grid shows.
+     */
+    extraProducts?: DriverPosProductDto[];
   },
 ) {
-  const { truncated, locationId, normalize, searchRemote = defaultSearchRemote } = options;
+  const { truncated, locationId, normalize, searchRemote = defaultSearchRemote, extraProducts } = options;
   // Keyed by the exact search term it answers, so a stale result from a
   // previous term is never shown as if it matched the current one - avoids
   // needing to synchronously reset state in the effect below when the
@@ -130,13 +137,13 @@ export function usePosProductSearch(
   // search - use this (not `products`) to build any id -> product lookup
   // that the cart resolves against.
   const allKnownProducts = React.useMemo(() => {
-    if (discovered.size === 0) return products;
+    if (discovered.size === 0 && !extraProducts?.length) return products;
     const known = new Map(products.map((product) => [product.id, product]));
-    for (const product of discovered.values()) {
+    for (const product of [...discovered.values(), ...(extraProducts ?? [])]) {
       if (!known.has(product.id)) known.set(product.id, product);
     }
     return Array.from(known.values());
-  }, [products, discovered]);
+  }, [products, discovered, extraProducts]);
 
   // Derived, not tracked state: true exactly while a remote search is
   // relevant but its result hasn't arrived for the current search term yet.

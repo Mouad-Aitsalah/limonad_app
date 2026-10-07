@@ -44,8 +44,7 @@ test("French keeps working exactly as before: every existing rule and tool instr
     "list_top_customer_receivables",
     "check_stock",
     "multipleMatches à true",
-    "build_invoice_preview",
-    "create_invoice",
+    "${POS_DRAFT_TOOL_INSTRUCTIONS}",
     "cette capacité sera ajoutée dans une prochaine étape",
   ]) {
     assert.ok(base.includes(rule), rule);
@@ -73,6 +72,30 @@ const PHRASES: Array<{ phrase: string; needs: string[] }> = [
   { phrase: "ch7al d les ventes dial had simana", needs: ["had simana", "d = de", "aucune fonction", "sans deviner"] },
   { phrase: "coca stock ?", needs: ["coca stock ?", "Questions courtes ou implicites", "sans exiger une phrase complète"] },
 ];
+
+// POS cart preparation (AI -> POS draft): the eight sentences of the acceptance list.
+PHRASES.push(
+  { phrase: "dir lia factura fiha 2 coca 2 hawai 2 poms l client autre", needs: ["dir lia factura fiha 2 coca 2 hawai 2 poms l client autre", "factura", "fiha = contenant", "l client X", "NOUVEAU panier"] },
+  { phrase: "sawb lia vente dyal 2 coca w 2 hawai", needs: ["sawb lia vente dyal 2 coca w 2 hawai", "sawb lia", "w = et", "sans client cité"] },
+  { phrase: "3mer lia panier b 2 coca w 3 poms", needs: ["3mer lia panier b 2 coca w 3 poms", "3mer lia", "b = avec"] },
+  { phrase: "zid 2 coca", needs: ["« zid 2 coca »", "zid = ajoute", "panier en cours"] },
+  { phrase: "na9es wa7ed coca", needs: ["« na9es wa7ed coca »", "na9es", "wa7ed = 1"] },
+  { phrase: "7yed poms", needs: ["« 7yed poms »", "7yed", "retire complètement"] },
+  { phrase: "bdel client Karim", needs: ["« bdel client Karim »", "bdel = change"] },
+  { phrase: "bghit 3 hawai l client autre", needs: ["« bghit 3 hawai l client autre »", "bghit = je veux"] },
+);
+
+test("POS cart: darija words are never product or customer names, French commands keep working, quantities are never guessed", () => {
+  for (const expected of [
+    "ne font jamais partie du nom d'un produit ou d'un client",
+    "« coca », « hawai », « poms », « autre », « Karim » sont transmis tels quels",
+    "Les commandes en français",
+    "demande-la au lieu de la deviner",
+    "en ne transmettant que le changement demandé",
+  ]) {
+    assert.ok(DARIJA_UNDERSTANDING_SECTION.includes(expected), expected);
+  }
+});
 
 for (const { phrase, needs } of PHRASES) {
   test(`understanding of « ${phrase} » is covered by the prompt`, () => {

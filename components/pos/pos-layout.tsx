@@ -8,7 +8,12 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
 import { roundCurrency } from "@/lib/utils";
-import type { CounterPosContextDto, CustomerDto, SaleDto } from "@/types/operations-dto";
+import type {
+  CounterPosContextDto,
+  CustomerDto,
+  DriverPosProductDto,
+  SaleDto,
+} from "@/types/operations-dto";
 import {
   defaultPaymentMethod,
   posPaymentMethods,
@@ -44,6 +49,9 @@ import { computeSaleTotals } from "@/lib/sale-rounding";
 import { purchasePriceTTC } from "@/lib/pos-margin";
 import { OfflineStatusBar } from "@/components/pos/offline-status-bar";
 import { useCounterPosOffline } from "@/components/pos/use-counter-pos-offline";
+import { AiDraftReplaceDialog } from "@/components/pos/ai-draft-replace-dialog";
+import { useAiPosDraft } from "@/components/pos/use-ai-pos-draft";
+import { useMissingCartProducts } from "@/components/pos/use-missing-cart-products";
 import {
   createOfflineSale,
   DEFAULT_CART_SLOT,
@@ -173,6 +181,8 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   const router = useRouter();
   const searchParams = useSearchParams();
   const editSaleId = searchParams.get("editSaleId");
+  // A cart prepared by the AI assistant (see useAiPosDraft below).
+  const aiDraftId = searchParams.get("aiDraft");
   const { currentUser } = useAuth();
   // Manual per-line price editing in the cart is ADMIN ONLY (client + server).
   const canEditLinePrice = currentUser?.role === "admin";
@@ -287,6 +297,17 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   // the (possibly incomplete) preloaded list. allKnownProducts accumulates
   // every product ever found this way so a remotely-found item stays
   // resolvable in the cart even after the search term changes.
+  // Products loaded explicitly by id for cart lines outside the 500-product
+  // preload (AI-prepared cart, restored cart) - see useMissingCartProducts.
+  const [extraProducts, setExtraProducts] = React.useState<DriverPosProductDto[]>([]);
+  const registerProducts = React.useCallback((products: DriverPosProductDto[]) => {
+    if (products.length === 0) return;
+    setExtraProducts((current) => {
+      const byId = new Map(current.map((product) => [product.id, product]));
+      for (const product of products) byId.set(product.id, product);
+      return Array.from(byId.values());
+    });
+  }, []);
   const { products: matchedProducts, allKnownProducts } = usePosProductSearch(
     context.products,
     search,
@@ -294,6 +315,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
       truncated: context.productsTruncated,
       locationId: context.stockLocation.id,
       normalize: normalizeSearch,
+      extraProducts,
     },
   );
   const sellableProducts = React.useMemo(
@@ -1129,6 +1151,57 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
     return () => window.removeEventListener("beforeunload", handler);
   }, [editSale]);
 
+  // Cart lines whose product is not in the 500-product preload are loaded
+  // explicitly, never silently dropped by cartLines (online only: offline the
+  // local mirror already holds the whole catalogue).
+  useMissingCartProducts({
+    cartProductIds: cart.map((line) => line.productId),
+    isKnown: (productId) => productById.has(productId) || editLineInfoById.has(productId),
+    locationId: context.stockLocation.id,
+    enabled: !offline.isOffline && !openPendingSale,
+    onLoaded: registerProducts,
+    onUnavailable: (count) =>
+      toast.warning(
+        count > 1
+          ? `${count} produits du panier ne sont plus disponibles et ont été ignorés.`
+          : "Un produit du panier n'est plus disponible et a été ignoré.",
+      ),
+  });
+
+  // Cart prepared by the AI assistant (/pos?aiDraft=<id>): loaded into THIS
+  // cart (no second cart), only after the locally saved cart was restored so
+  // an existing cart is never overwritten without asking. Prices, VAT,
+  // discounts and rounding stay the POS's own (cartLines); the draft only
+  // brings product ids + quantities + customer. No sale is created here.
+  const aiDraft = useAiPosDraft({
+    draftId: aiDraftId,
+    // Edit mode never restores a local cart (cartRestored stays false): it is
+    // "ready" at once so the blockedReason below is shown.
+    ready: cartRestored || Boolean(editSaleId),
+    blockedReason: editSaleId
+      ? "Termine d'abord la modification de la facture avant d'ouvrir un panier préparé."
+      : offline.isOffline
+        ? "Le panier préparé ne peut être ouvert qu'avec une connexion au serveur."
+        : null,
+    hasCartContent: () => cart.length > 0 || openPendingSale !== null,
+    registerProducts,
+    fillCart: (draft) => {
+      setCheckoutOpen(false);
+      setLastSale(null);
+      setOpenPendingSale(null);
+      // Fresh operation: new idempotency key, default customer and payment.
+      resetOperation();
+      setCart(draft.lines.map((line) => ({ ...line, discountUnitAmount: 0 })));
+      if (draft.customer) setSelectedCustomer(draft.customer);
+    },
+    clearDraftParam: () => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("aiDraft");
+      const query = params.toString();
+      router.replace(query ? `/pos?${query}` : "/pos");
+    },
+  });
+
   async function syncPendingSalesState() {
     try {
       await Promise.all([refreshContext(), refreshPending()]);
@@ -1877,6 +1950,12 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         submitting={submitting || collecting}
         mixedAmounts={mixedAmounts}
         onConfirm={confirmOperation}
+      />
+      <AiDraftReplaceDialog
+        open={aiDraft.confirmOpen}
+        busy={aiDraft.busy}
+        onReplace={aiDraft.confirmReplace}
+        onCancel={aiDraft.cancelReplace}
       />
       <ReceiptPrint
         ruled

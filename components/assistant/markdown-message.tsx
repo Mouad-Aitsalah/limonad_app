@@ -1,9 +1,12 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { ShoppingCart } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { parseAiPosDraftHref } from "@/lib/assistant-pos-draft-rules";
 import { cn } from "@/lib/utils";
 
 /**
@@ -13,7 +16,9 @@ import { cn } from "@/lib/utils";
  * Safety: react-markdown does NOT interpret raw HTML (no rehype-raw here), so a
  * "<script>" or "<img onerror=...>" in the answer is shown as plain text, and its
  * default URL filter drops javascript: links. Links open in a new tab with
- * noopener.
+ * noopener - except the "Ouvrir le panier" link of a cart prepared by the
+ * assistant (/pos?aiDraft=<id>, nothing else), rendered as a button that opens
+ * the POS in the SAME tab. The POS re-validates that draft server-side anyway.
  *
  * Look: it inherits the bubble's size/colour (text-sm, leading-6). Blocks are
  * separated by a small gap, single line breaks of a paragraph are kept
@@ -72,8 +77,22 @@ const components: Components = {
     void node;
     return <li className={cn("whitespace-pre-line", bidi)} {...props} />;
   },
-  a: ({ node, href, ...props }) => {
+  a: ({ node, href, children, ...props }) => {
     void node;
+    const draftId = parseAiPosDraftHref(href);
+    if (draftId) {
+      return (
+        <Link
+          href={`/pos?aiDraft=${encodeURIComponent(draftId)}`}
+          data-ai-pos-draft={draftId}
+          className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 font-semibold text-white no-underline shadow-sm transition-colors hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+        >
+          <ShoppingCart className="size-4" aria-hidden />
+          {/* The label is fixed: the cart emoji of the Markdown text is replaced by the icon. */}
+          Ouvrir le panier
+        </Link>
+      );
+    }
     return (
       <a
         href={href}
@@ -81,7 +100,9 @@ const components: Components = {
         rel="noopener noreferrer"
         className="font-medium text-emerald-700 underline underline-offset-2"
         {...props}
-      />
+      >
+        {children}
+      </a>
     );
   },
   blockquote: ({ node, ...props }) => {

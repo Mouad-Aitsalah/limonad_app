@@ -26,6 +26,12 @@ enum AiConversationMessageRole {
   ASSISTANT
 }
 
+enum AiPosDraftStatus {
+  OPEN
+  APPLIED
+  EXPIRED
+}
+
 enum OrganizationStatus {
   ACTIVE
   INACTIVE
@@ -368,6 +374,7 @@ model User {
   createdCustomerSettlements   CustomerSettlement[]  @relation("CustomerSettlementCreatedBy")
   cancelledCustomerSettlements CustomerSettlement[]  @relation("CustomerSettlementCancelledBy")
   aiConversations              AiConversation[]      @relation("AiConversationCreatedBy")
+  aiPosDrafts                  AiPosDraft[]
   createdAt                    DateTime              @default(now())
   updatedAt                    DateTime              @updatedAt
 
@@ -462,6 +469,7 @@ model Organization {
   expenses                  Expense[]
   customerSettlements       CustomerSettlement[]
   aiConversations           AiConversation[]
+  aiPosDrafts               AiPosDraft[]
   purchaseForecastSnapshots PurchaseForecastSnapshot[]
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
@@ -475,10 +483,46 @@ model AiConversation {
   createdByUser   User                    @relation("AiConversationCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   title           String?
   messages        AiConversationMessage[]
+  posDrafts       AiPosDraft[]
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
 
   @@index([organizationId, createdByUserId, updatedAt(sort: Desc)])
+}
+
+/**
+ * A POS cart PREPARED by the AI assistant, never a sale. It only carries
+ * which products and how many (lines = [{ productId, quantity }]) plus an
+ * optional customer: no price, total, VAT, discount, payment or stock data -
+ * the POS re-resolves every product and recomputes every amount itself when
+ * the draft is opened, and the sale is only ever created by the POS's normal
+ * validation (createCounterSale). Creating/editing/opening a draft never
+ * touches Sale, Payment, StockMovement or AccountingEntry.
+ * At most one OPEN draft per conversation (enforced by the service in a
+ * serializable transaction): follow-up commands ("zid 2 coca") edit it.
+ * OPEN -> APPLIED once loaded into the POS cart (a second open of the same
+ * link is refused), OPEN -> EXPIRED once expiresAt has passed.
+ */
+model AiPosDraft {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   AiConversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  customerId     String?
+  customer       Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  // [{ productId: string, quantity: number }] - ids resolved server-side only.
+  lines          Json
+  status         AiPosDraftStatus @default(OPEN)
+  expiresAt      DateTime
+  appliedAt      DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([conversationId, status])
+  @@index([organizationId, userId, status])
 }
 
 model AiConversationMessage {
@@ -935,6 +979,7 @@ model Customer {
   creditNotes        CreditNote[]
   tourVisits         TourCustomerVisit[]
   settlements        CustomerSettlement[]
+  aiPosDrafts        AiPosDraft[]
   createdAt          DateTime               @default(now())
   updatedAt          DateTime               @updatedAt
 

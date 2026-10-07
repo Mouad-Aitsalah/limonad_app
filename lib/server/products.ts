@@ -467,6 +467,85 @@ export async function getProductPickerPreload(params?: {
 }
 
 /**
+ * The POS product shape (DriverPosProductDto) for a set of product rows, with
+ * the available stock at `locationId` (0 when there is no stock row). Shared by
+ * searchPosProducts and getPosProductsByIds so both return exactly the same
+ * fields - the purchase price is only ever selected for an admin session.
+ */
+function posProductLoader(organizationId: string, isAdmin: boolean, locationId: string) {
+  const productSelect = {
+    id: true,
+    reference: true,
+    barcode: true,
+    name: true,
+    imageUrl: true,
+    updatedAt: true,
+    salePrice: true,
+    // Admin-only below-cost alert in the counter POS cart; other roles never
+    // select the purchase price.
+    purchasePrice: isAdmin,
+    taxRate: true,
+    defaultSupplierId: true,
+    defaultSupplier: { select: { name: true, logoUrl: true } },
+  } as const;
+
+  type ProductRow = {
+    id: string;
+    reference: string;
+    barcode: string | null;
+    name: string;
+    imageUrl: string | null;
+    updatedAt: Date;
+    salePrice: Prisma.Decimal;
+    purchasePrice?: Prisma.Decimal;
+    taxRate: Prisma.Decimal;
+    defaultSupplierId: string | null;
+    defaultSupplier: { name: string; logoUrl: string | null } | null;
+  };
+
+  async function withLevels(products: ProductRow[]): Promise<DriverPosProductDto[]> {
+    if (products.length === 0) return [];
+    const levels = await prisma.stockLevel.findMany({
+      where: {
+        organizationId,
+        locationId: locationId,
+        productId: { in: products.map((product) => product.id) },
+      },
+      select: { productId: true, quantity: true, reservedQuantity: true },
+    });
+    const byId = new Map(levels.map((level) => [level.productId, level]));
+    return products.map((product) => {
+      const salePriceHT = product.salePrice.toNumber();
+      const taxRate = product.taxRate.toNumber();
+      const level = byId.get(product.id);
+      return {
+        id: product.id,
+        reference: product.reference,
+        barcode: product.barcode,
+        name: product.name,
+        imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
+        salePriceHT,
+        salePriceTTC: computePriceTTC(salePriceHT, taxRate),
+        ...(isAdmin && product.purchasePrice
+          ? { purchasePriceHT: product.purchasePrice.toNumber() }
+          : {}),
+        taxRate,
+        availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
+        supplierId: product.defaultSupplierId,
+        supplierName: product.defaultSupplier?.name ?? null,
+        // ÉTAPE PERF POS 1 scope is Product.imageUrl only - see
+        // lib/server/product-image-url.ts's own doc comment. supplierLogoUrl
+        // has the identical base64-in-a-text-column shape and is a known,
+        // separate follow-up (flagged in the perf audit), left untouched here.
+        supplierLogoUrl: product.defaultSupplier?.logoUrl ?? null,
+      };
+    });
+  }
+
+  return { productSelect, withLevels };
+}
+
+/**
  * POS search fallback (comptoir + chauffeur), called when the context's
  * preloaded `products` list was truncated (see POS_PRODUCT_LIST_LIMIT in
  * counter-sales.ts / driver-sales.ts) and the operator has typed a query.
@@ -494,74 +573,11 @@ export async function searchPosProducts(params: {
       ? Math.min(requestedLimit, PRODUCT_SEARCH_MAX_LIMIT)
       : PRODUCT_SEARCH_DEFAULT_LIMIT;
 
-  const productSelect = {
-    id: true,
-    reference: true,
-    barcode: true,
-    name: true,
-    imageUrl: true,
-    updatedAt: true,
-    salePrice: true,
-    // Admin-only below-cost alert in the counter POS cart; other roles never
-    // select the purchase price.
-    purchasePrice: currentUser.role === "admin",
-    taxRate: true,
-    defaultSupplierId: true,
-    defaultSupplier: { select: { name: true, logoUrl: true } },
-  } as const;
-
-  type ProductRow = {
-    id: string;
-    reference: string;
-    barcode: string | null;
-    name: string;
-    imageUrl: string | null;
-    updatedAt: Date;
-    salePrice: Prisma.Decimal;
-    purchasePrice?: Prisma.Decimal;
-    taxRate: Prisma.Decimal;
-    defaultSupplierId: string | null;
-    defaultSupplier: { name: string; logoUrl: string | null } | null;
-  };
-
-  async function withLevels(products: ProductRow[]): Promise<DriverPosProductDto[]> {
-    if (products.length === 0) return [];
-    const levels = await prisma.stockLevel.findMany({
-      where: {
-        organizationId,
-        locationId: params.locationId,
-        productId: { in: products.map((product) => product.id) },
-      },
-      select: { productId: true, quantity: true, reservedQuantity: true },
-    });
-    const byId = new Map(levels.map((level) => [level.productId, level]));
-    return products.map((product) => {
-      const salePriceHT = product.salePrice.toNumber();
-      const taxRate = product.taxRate.toNumber();
-      const level = byId.get(product.id);
-      return {
-        id: product.id,
-        reference: product.reference,
-        barcode: product.barcode,
-        name: product.name,
-        imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
-        salePriceHT,
-        salePriceTTC: computePriceTTC(salePriceHT, taxRate),
-        ...(currentUser.role === "admin" && product.purchasePrice
-          ? { purchasePriceHT: product.purchasePrice.toNumber() }
-          : {}),
-        taxRate,
-        availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
-        supplierId: product.defaultSupplierId,
-        supplierName: product.defaultSupplier?.name ?? null,
-        // ÉTAPE PERF POS 1 scope is Product.imageUrl only - see
-        // lib/server/product-image-url.ts's own doc comment. supplierLogoUrl
-        // has the identical base64-in-a-text-column shape and is a known,
-        // separate follow-up (flagged in the perf audit), left untouched here.
-        supplierLogoUrl: product.defaultSupplier?.logoUrl ?? null,
-      };
-    });
-  }
+  const { productSelect, withLevels } = posProductLoader(
+    organizationId,
+    currentUser.role === "admin",
+    params.locationId,
+  );
 
   const exactBarcodeMatch = await prisma.product.findFirst({
     where: { organizationId, status: "ACTIVE", barcode: query },
@@ -587,6 +603,38 @@ export async function searchPosProducts(params: {
   });
 
   return withLevels(matches);
+}
+
+const POS_PRODUCTS_BY_IDS_MAX = 100;
+
+/**
+ * The POS products for explicit ids (same DriverPosProductDto shape and stock
+ * as searchPosProducts). Used when a cart line references a product the POS
+ * context did not preload (it only preloads POS_PRODUCT_LIST_LIMIT products)
+ * - e.g. a cart prepared by the AI assistant, or a restored cart - so the
+ * line can always be resolved instead of silently disappearing. Only ACTIVE
+ * products of the caller's organisation are returned; unknown, inactive or
+ * foreign ids are simply absent from the result.
+ */
+export async function getPosProductsByIds(params: {
+  locationId: string;
+  ids: string[];
+}): Promise<DriverPosProductDto[]> {
+  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier", "driver"]);
+  const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))].slice(0, POS_PRODUCTS_BY_IDS_MAX);
+  if (ids.length === 0) return [];
+
+  const { productSelect, withLevels } = posProductLoader(
+    currentUser.organizationId,
+    currentUser.role === "admin",
+    params.locationId,
+  );
+  const products = await prisma.product.findMany({
+    where: { organizationId: currentUser.organizationId, status: "ACTIVE", id: { in: ids } },
+    select: productSelect,
+    orderBy: { name: "asc" },
+  });
+  return withLevels(products);
 }
 
 async function getProductRecordById(id: string, organizationId: string) {
