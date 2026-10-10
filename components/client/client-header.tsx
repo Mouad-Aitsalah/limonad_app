@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { LogOut, ShoppingCart } from "lucide-react";
+import { ClipboardList, LogOut, ShoppingCart } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -25,7 +25,7 @@ type ClientHeaderProps = {
  */
 export function ClientHeader({ client, organization, subtitle }: ClientHeaderProps) {
   const router = useRouter();
-  const { cart } = useClientCart(cartStorageKey(client.organizationId, client.email));
+  const { cart } = useClientCart(cartStorageKey(client.organizationId, client.customerId));
   const cartCount = cart.reduce((sum, line) => sum + line.quantity, 0);
   const organizationName = organization.tradeName?.trim() || organization.name;
 
@@ -48,11 +48,17 @@ export function ClientHeader({ client, organization, subtitle }: ClientHeaderPro
           )}
           <div className="min-w-0">
             <p className="truncate font-heading text-lg font-semibold text-foreground">{organizationName}</p>
-            <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
+            <p className="truncate text-xs text-muted-foreground">
+              {subtitle} · {client.customerName} ({client.customerDisplayCode})
+            </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          <Link href="/client/orders" className={cn(buttonVariants({ variant: "ghost" }))}>
+            <ClipboardList aria-hidden="true" className="h-4 w-4" />
+            <span className="hidden sm:inline">Mes commandes</span>
+          </Link>
           <Link href="/client/cart" className={cn(buttonVariants({ variant: "outline" }), "relative")}>
             <ShoppingCart aria-hidden="true" className="h-4 w-4" />
             <span className="hidden sm:inline">Panier</span>

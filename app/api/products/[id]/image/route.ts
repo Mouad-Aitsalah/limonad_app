@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getCurrentClient } from "@/lib/server/client-auth";
+import { isClientCatalogProduct } from "@/lib/server/client-portal-core";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 
@@ -61,6 +62,12 @@ export async function GET(request: Request, context: ProductImageRouteContext) {
       if (!(staffError instanceof AuthServiceError)) throw staffError;
       const client = await getCurrentClient();
       if (!client) throw staffError;
+      // A client only ever sees photos of its own catalogue: ACTIVE product
+      // of its organisation with a valid (png/jpeg/webp/gif or http) photo -
+      // never an inactive product, nor any other stored data: content.
+      if (!(await isClientCatalogProduct(prisma, client.organizationId, id))) {
+        return withMobileCors(request, new NextResponse(null, { status: 404 }));
+      }
       organizationId = client.organizationId;
     }
 

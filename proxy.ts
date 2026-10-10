@@ -124,6 +124,9 @@ export default function proxy(request: NextRequest) {
   // versa. Still only an optimistic existence check, same as below: the real
   // authority is lib/server/client-auth.ts's getCurrentClient, re-verified
   // against the database on every request.
+  if (pathname === "/client") {
+    return NextResponse.redirect(new URL("/client/catalog", request.url));
+  }
   if (pathname.startsWith("/client/")) {
     if (!request.cookies.has(CLIENT_SESSION_COOKIE)) {
       return NextResponse.redirect(new URL("/client/login", request.url));

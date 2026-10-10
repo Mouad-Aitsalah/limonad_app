@@ -2,32 +2,28 @@ import "server-only";
 
 import { cookies } from "next/headers";
 
+import { CLIENT_LOGIN_FAILED_MESSAGE, CLIENT_LOGIN_THROTTLED_MESSAGE } from "@/lib/client-portal-rules";
 import { prisma } from "@/lib/prisma";
+import { authenticateClient, resolveClientIdentity } from "@/lib/server/client-portal-core";
 import { signClientSessionToken, verifyClientSessionToken } from "@/lib/server/client-session-token";
 import type { ClientSessionDto } from "@/types/client-portal";
 
 /**
- * CLIENT PLATFORM (branch `client-platform`) - authentication for the
- * external customer-facing catalog. Deliberately separate from
- * lib/server/auth.ts (the staff ERP session): see client-session-token.ts's
- * own doc comment for why a signed cookie, not the staff Session table, is
- * the right building block here.
+ * Espace Client - authentication, deliberately separate from
+ * lib/server/auth.ts (the staff ERP session): its own signed cookie
+ * (client-session-token.ts), never accepted by any staff route
+ * (requireOrganizationUser only ever reads the staff cookie).
  *
- * V1 LOGIN, DELIBERATELY WITHOUT A CUSTOMER: a visitor identifies with only
- * an email and an Organization.code, no password, and does NOT need to
- * already exist as a Customer row. The email is carried as-is in the
- * session (kept for later use - a future order, a future account) but is
- * NEVER looked up or matched against Customer.email: Customer is untouched
- * by this feature entirely (never read, never written) - the only real
- * identity check is that Organization.code resolves to a real, ACTIVE
- * organisation.
+ * Identification = organisation code + customer code (both mandatory), no
+ * password/PIN by business decision. These two codes are NOT secrets, so the
+ * session only opens the ordering space: catalogue + the customer's own
+ * orders, never any ERP data. The optional phone is contact info only.
  *
- * SECURITY (multi-tenant, the priority for this feature): organizationId is
- * NEVER accepted from the client as a parameter anywhere in this module or
- * its callers - it is always the one just resolved from Organization.code
- * (at login) or the one carried inside the verified, server-signed cookie
- * (on every later request). Every product/category read downstream
- * (lib/server/client-catalog.ts) takes ONLY that value.
+ * SECURITY: organizationId / customerId are NEVER accepted from the request:
+ * they come from authenticateClient at login, then from the verified cookie,
+ * re-checked against the database on every request (organisation and
+ * customer still ACTIVE and still linked) - a blocked customer or a
+ * deactivated organisation is logged out immediately.
  */
 
 const CLIENT_SESSION_COOKIE = "comdis.client-session";
@@ -41,31 +37,22 @@ export class ClientAuthError extends Error {
   }
 }
 
-/**
- * Resolves {email, organizationCode} to a real, ACTIVE Organization and sets
- * the signed session cookie. The email is validated only for shape (by the
- * route's own zod schema) and stored as given - never checked against any
- * table.
- */
-export async function loginClient(input: { email: string; organizationCode: string }): Promise<ClientSessionDto> {
-  const email = input.email.trim().toLowerCase();
-  const organizationCode = input.organizationCode.trim();
-  if (!email || !organizationCode) {
-    throw new ClientAuthError("Email et code organisation sont obligatoires.", 422);
+export async function loginClient(
+  input: { organizationCode: string; customerCode: string; contactPhone: string | null },
+  meta: { ip: string },
+): Promise<ClientSessionDto> {
+  const result = await authenticateClient(prisma, input, meta);
+  if (!result.ok) {
+    throw result.reason === "THROTTLED"
+      ? new ClientAuthError(CLIENT_LOGIN_THROTTLED_MESSAGE, 429)
+      : new ClientAuthError(CLIENT_LOGIN_FAILED_MESSAGE, 401);
   }
 
-  const organization = await prisma.organization.findUnique({
-    where: { code: organizationCode },
-    select: { id: true, code: true, status: true },
-  });
-  if (!organization || organization.status !== "ACTIVE") {
-    throw new ClientAuthError("Organisation introuvable.", 404);
-  }
-
+  const { identity } = result;
   const { token, maxAgeSeconds } = signClientSessionToken({
-    organizationId: organization.id,
-    organizationCode: organization.code,
-    email,
+    organizationId: identity.organizationId,
+    customerId: identity.customerId,
+    contactPhone: input.contactPhone,
   });
 
   const cookieStore = await cookies();
@@ -77,16 +64,10 @@ export async function loginClient(input: { email: string; organizationCode: stri
     maxAge: maxAgeSeconds,
   });
 
-  return { organizationId: organization.id, organizationCode: organization.code, email };
+  return { ...identity, contactPhone: input.contactPhone };
 }
 
-/**
- * The current client session, or null - re-checks the Organization it claims
- * fresh against the database on every call (never trusts the cookie's claim
- * alone), so a session for an organisation deactivated after the cookie was
- * issued stops working immediately, exactly like the staff session
- * (lib/server/auth.ts#getCurrentSessionUser). Never touches Customer.
- */
+/** The current client session, or null (no/invalid/expired cookie, or org/customer no longer ACTIVE). */
 export async function getCurrentClient(): Promise<ClientSessionDto | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(CLIENT_SESSION_COOKIE)?.value;
@@ -95,19 +76,15 @@ export async function getCurrentClient(): Promise<ClientSessionDto | null> {
   const claims = verifyClientSessionToken(token);
   if (!claims) return null;
 
-  const organization = await prisma.organization.findUnique({
-    where: { id: claims.organizationId },
-    select: { status: true },
-  });
-  if (!organization || organization.status !== "ACTIVE") return null;
-
-  return claims;
+  const identity = await resolveClientIdentity(prisma, claims);
+  if (!identity) return null;
+  return { ...identity, contactPhone: claims.contactPhone };
 }
 
-/** Same authority as getCurrentClient(), but throws for a route/page that requires a session. */
+/** Same authority as getCurrentClient(), but throws for a route that requires a session. */
 export async function requireClient(): Promise<ClientSessionDto> {
   const client = await getCurrentClient();
-  if (!client) throw new ClientAuthError("Session client introuvable.", 401);
+  if (!client) throw new ClientAuthError("Session client introuvable ou expirée.", 401);
   return client;
 }
 
