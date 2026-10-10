@@ -12,9 +12,19 @@ type ProductCardProps = {
   product: PosProduct;
   onAdd: (productId: string) => boolean | void;
   onAdded?: (product: PosProduct, sourceElement: HTMLElement) => void;
+  /** Counter POS custom display (see ProductGrid). Omitted = the card exactly as before. */
+  display?: { showPhotos: boolean };
 };
 
-export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
+/** Custom display: ONLY the product name follows the size variable - price, stock and the Ajouter pill keep their own classes. */
+const CUSTOM_NAME_STYLE: React.CSSProperties = {
+  fontSize: "var(--pos-name-size, 16px)",
+  lineHeight: 1.3,
+  minHeight: "2.6em",
+  overflowWrap: "anywhere",
+};
+
+export function ProductCard({ product, onAdd, onAdded, display }: ProductCardProps) {
   // Negative sales are allowed: stock <= 0 never disables "Ajouter", it is
   // only ever shown in red (see posStockTone).
   const tone = posStockTone(product.quantiteStock);
@@ -65,17 +75,39 @@ export function ProductCard({ product, onAdd, onAdded }: ProductCardProps) {
       )}
 
       {/* Wide photo on desktop; a small rounded-square icon on mobile
-          (placeholder uses the same footprint). */}
-      <ProductMedia
-        imageUrl={product.imageUrl}
-        alt={`Photo du produit ${product.designation}`}
-        fit="cover"
-        className="aspect-[30/23] w-full rounded-xl max-lg:aspect-auto max-lg:h-[78px] max-lg:w-[68px] max-lg:shrink-0 max-lg:rounded-[18px]"
-        imageClassName="transition-transform duration-200 group-hover:scale-[1.03]"
-      />
+          (placeholder uses the same footprint). Custom display: the photo is
+          as wide as the card and as tall as the setting says, or hidden. */}
+      {display ? (
+        display.showPhotos ? (
+          <div className="w-full shrink-0" style={{ height: "var(--pos-img-h, 100px)" }}>
+            <ProductMedia
+              imageUrl={product.imageUrl}
+              alt={`Photo du produit ${product.designation}`}
+              fit="cover"
+              className="h-full w-full rounded-xl"
+              imageClassName="transition-transform duration-200 group-hover:scale-[1.03]"
+            />
+          </div>
+        ) : null
+      ) : (
+        <ProductMedia
+          imageUrl={product.imageUrl}
+          alt={`Photo du produit ${product.designation}`}
+          fit="cover"
+          className="aspect-[30/23] w-full rounded-xl max-lg:aspect-auto max-lg:h-[78px] max-lg:w-[68px] max-lg:shrink-0 max-lg:rounded-[18px]"
+          imageClassName="transition-transform duration-200 group-hover:scale-[1.03]"
+        />
+      )}
 
       <div className="mt-1.5 flex flex-1 flex-col px-0.5 max-lg:mt-0.5 max-lg:w-full max-lg:flex-none max-lg:px-0">
-        <p className="line-clamp-2 min-h-[2.75em] pr-12 text-[21.84px] font-medium lg:font-bold leading-snug text-foreground max-lg:min-h-[34px] max-lg:pr-0 max-lg:text-center max-lg:text-[13px] max-lg:font-semibold max-lg:leading-[17px]">
+        <p
+          className={cn(
+            "line-clamp-2 min-h-[2.75em] pr-12 text-[21.84px] font-medium lg:font-bold leading-snug text-foreground max-lg:min-h-[34px] max-lg:pr-0 max-lg:text-center max-lg:text-[13px] max-lg:font-semibold max-lg:leading-[17px]",
+            // no photo: the stock badge (top right of the card) must not cover the name
+            display && !display.showPhotos && tone.alert && "max-lg:pr-10",
+          )}
+          style={display ? CUSTOM_NAME_STYLE : undefined}
+        >
           {product.designation}
         </p>
         {product.reference ? (

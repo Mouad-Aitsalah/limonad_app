@@ -22,7 +22,8 @@ import {
   type PosProduct,
 } from "@/types/pos";
 import { ProductSearch } from "@/components/pos/product-search";
-import { ProductGrid } from "@/components/pos/product-grid";
+import { PosCatalogScroller, PosProductGrid } from "@/components/pos/pos-catalog-display";
+import { PosDisplaySettingsPanel } from "@/components/pos/pos-display-settings-panel";
 import { type SupplierOption } from "@/components/pos/supplier-filter";
 import { MobileCustomerPicker } from "@/components/pos/mobile-customer-picker";
 import { MobileSupplierPicker } from "@/components/pos/mobile-supplier-picker";
@@ -1786,7 +1787,13 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
             product side by side, 30% / 70%) exactly like the driver POS. From lg
             this wrapper is a plain block around the search field: unchanged. */}
         <div className="max-lg:sticky max-lg:top-28 max-lg:z-20 max-lg:space-y-3 max-lg:bg-background">
-          <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <ProductSearch value={search} onChange={setSearch} inputRef={searchInputRef} />
+            </div>
+            {/* "Personnaliser l'affichage": visual settings of the catalogue only, saved per user in this browser. */}
+            <PosDisplaySettingsPanel scope={offline.scope} />
+          </div>
           <div className="flex items-stretch gap-2 lg:hidden">
             <MobileSupplierPicker
               className="min-w-0 flex-[3] lg:hidden [&>button]:h-[54px]"
@@ -1804,8 +1811,8 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
             </div>
           </div>
         </div>
-        <div className={`lg:flex-1 lg:overflow-y-auto lg:pr-1 ${PHONE_PRODUCT_TILE_NAME_CLASS}`}>
-        <ProductGrid
+        <PosCatalogScroller className={`lg:flex-1 lg:overflow-y-auto lg:pr-1 ${PHONE_PRODUCT_TILE_NAME_CLASS}`}>
+        <PosProductGrid
           products={filteredProducts}
           onAdd={
             openPendingSale && !editSale
@@ -1817,7 +1824,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
           }
           onAdded={openPendingSale && !editSale ? undefined : handleMobileProductAdded}
         />
-        </div>
+        </PosCatalogScroller>
       </div>
 
       {/* Desktop (>= lg) only: the cart card extends 20px into the page's right
