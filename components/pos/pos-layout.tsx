@@ -51,6 +51,9 @@ import { OfflineStatusBar } from "@/components/pos/offline-status-bar";
 import { useCounterPosOffline } from "@/components/pos/use-counter-pos-offline";
 import { AiDraftReplaceDialog } from "@/components/pos/ai-draft-replace-dialog";
 import { useAiPosDraft } from "@/components/pos/use-ai-pos-draft";
+import { useCustomerOrderPos } from "@/components/pos/use-customer-order-pos";
+import { useCustomerOrderLinkPersistence } from "@/components/pos/use-customer-order-link-persistence";
+import { CustomerOrderLinkBanner } from "@/components/pos/customer-order-link-banner";
 import { useMissingCartProducts } from "@/components/pos/use-missing-cart-products";
 import {
   createOfflineSale,
@@ -183,6 +186,8 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   const editSaleId = searchParams.get("editSaleId");
   // A cart prepared by the AI assistant (see useAiPosDraft below).
   const aiDraftId = searchParams.get("aiDraft");
+  // An ACCEPTED online customer order opened from "Commandes en ligne" (see useCustomerOrderPos).
+  const customerOrderParam = searchParams.get("customerOrder");
   const { currentUser } = useAuth();
   // Manual per-line price editing in the cart is ADMIN ONLY (client + server).
   const canEditLinePrice = currentUser?.role === "admin";
@@ -225,6 +230,11 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   // editLineInfoById), the primary action PATCHes instead of creating, and
   // the commercial number never changes.
   const [editSale, setEditSale] = React.useState<SaleDto | null>(null);
+  // The online customer order the current cart was opened from (if any): sent
+  // as customerOrderId with the sale, cleared by resetOperation().
+  const [linkedCustomerOrder, setLinkedCustomerOrder] = React.useState<
+    { id: string; orderNumber: string; customerId: string } | null
+  >(null);
   const [savingEdit, setSavingEdit] = React.useState(false);
   // Phase 3: the fully-resolved customer object, not just an id - kept as
   // its own state (not derived from context.customers.find(...)) because
@@ -743,6 +753,8 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   // (a fresh sale attempt starts here). It never touches a persisted DRAFT.
   function resetOperation() {
     setCart([]);
+    // A fresh operation is never linked to an online order any more.
+    setLinkedCustomerOrder(null);
     setLastAddedProductId(null);
     setSelectedCustomer(resolveDefaultCustomer(context.customers, context.defaultCustomerId));
     setPaymentMethod(defaultPaymentMethod);
@@ -860,6 +872,9 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
           }
         : {}),
       idempotencyKey: idempotencyKeyRef.current,
+      // The online order this cart came from: createCounterSale converts it in
+      // the same transaction as the sale (absent for every other sale).
+      ...(linkedCustomerOrder ? { customerOrderId: linkedCustomerOrder.id } : {}),
       ...extra,
     });
   }
@@ -1001,6 +1016,16 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   // Cart persistence: restored once per session start, then saved on every
   // change (debounced). Survives refresh, closing the window and restarting.
   const [cartRestored, setCartRestored] = React.useState(false);
+  // The cart <-> online order link survives a reload (restored with the cart,
+  // removed when the operation ends or the staff detaches it).
+  useCustomerOrderLinkPersistence({
+    scope: offline.scope,
+    linked: linkedCustomerOrder,
+    setLinked: setLinkedCustomerOrder,
+    cartRestored,
+    cartLineCount: cart.length,
+    selectedCustomerId: selectedCustomer?.id ?? null,
+  });
   React.useEffect(() => {
     const scope = offline.scope;
     // Edit mode never restores nor saves a local cart (see the save effect).
@@ -1202,6 +1227,36 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
     },
   });
 
+  // ACCEPTED online customer order (/pos?customerOrder=<id>): same loading
+  // rules as the AI cart above, and the cart stays LINKED to the order so the
+  // normal validation converts it (buildSaleBody -> customerOrderId).
+  const customerOrderPos = useCustomerOrderPos({
+    orderId: customerOrderParam,
+    ready: cartRestored || Boolean(editSaleId),
+    blockedReason: editSaleId
+      ? "Termine d'abord la modification de la facture avant d'ouvrir une commande en ligne."
+      : offline.isOffline
+        ? "Une commande en ligne ne peut être ouverte qu'avec une connexion au serveur."
+        : null,
+    hasCartContent: () => cart.length > 0 || openPendingSale !== null,
+    registerProducts,
+    fillCart: (order) => {
+      setCheckoutOpen(false);
+      setLastSale(null);
+      setOpenPendingSale(null);
+      resetOperation();
+      setCart(order.lines.map((line) => ({ ...line, discountUnitAmount: 0 })));
+      setSelectedCustomer(order.customer);
+      setLinkedCustomerOrder({ id: order.id, orderNumber: order.orderNumber, customerId: order.customer.id });
+    },
+    clearParam: () => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("customerOrder");
+      const query = params.toString();
+      router.replace(query ? `/pos?${query}` : "/pos");
+    },
+  });
+
   async function syncPendingSalesState() {
     try {
       await Promise.all([refreshContext(), refreshPending()]);
@@ -1236,6 +1291,16 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   // Phase 4: validates the current cart into a PENDING sale on THIS PC. It is
   // not sent anywhere: the server will only know it after synchronisation.
   async function saveOfflineSale(paidAmount?: number): Promise<boolean> {
+    // A cart linked to an online order is invoiced ONLY online: the offline
+    // sale would be sent later without the link and the order would stay
+    // ACCEPTED (and could be invoiced twice). Nothing is lost: the cart and
+    // its link stay as they are.
+    if (linkedCustomerOrder) {
+      toast.error(
+        `Ce panier est lié à la commande en ligne ${linkedCustomerOrder.orderNumber} : elle ne peut être facturée qu'avec une connexion au serveur. Le panier est conservé, rétablissez la connexion puis validez à nouveau.`,
+      );
+      return false;
+    }
     if (editSaleId || openPendingSale) {
       toast.error("Cette opération nécessite la connexion au serveur.");
       return false;
@@ -1585,6 +1650,13 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         />
         <InvoiceHeader userName={context.user.name} invoiceLabel={activeInvoiceLabel} />
       </div>
+      {linkedCustomerOrder && !openPendingSale ? (
+        <CustomerOrderLinkBanner
+          orderNumber={linkedCustomerOrder.orderNumber}
+          customerMismatch={selectedCustomer?.id !== linkedCustomerOrder.customerId}
+          onDetach={() => setLinkedCustomerOrder(null)}
+        />
+      ) : null}
       {offlineTicket && lastSale?.id === offlineTicket.localId ? (
         <div
           role="status"
@@ -1950,6 +2022,13 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         submitting={submitting || collecting}
         mixedAmounts={mixedAmounts}
         onConfirm={confirmOperation}
+      />
+      <AiDraftReplaceDialog
+        open={customerOrderPos.pendingOrder !== null}
+        onReplace={customerOrderPos.confirmReplace}
+        onCancel={customerOrderPos.cancelReplace}
+        title="Commande en ligne"
+        message={`Ton panier contient déjà des produits. Veux-tu le remplacer par la commande ${customerOrderPos.pendingOrder?.orderNumber ?? ""} ?`}
       />
       <AiDraftReplaceDialog
         open={aiDraft.confirmOpen}

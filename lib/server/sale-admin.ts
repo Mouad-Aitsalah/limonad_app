@@ -13,6 +13,7 @@ import {
   reverseAccountingEntryForSource,
 } from "@/lib/server/accounting";
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
+import { releaseCustomerOrderForCancelledSale } from "@/lib/server/customer-orders-core";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import {
@@ -299,6 +300,16 @@ export async function cancelSale(saleId: string, input: unknown): Promise<SaleDt
         await tx.sale.update({
           where: { id: sale.id },
           data: { status: "CANCELLED" },
+        });
+
+        // 5b. An online customer order converted into THIS sale goes back to
+        //     ACCEPTED (guarded on convertedSaleId = this sale; the sale above is
+        //     untouched) so the order is not left "Facturée" with no invoice.
+        await releaseCustomerOrderForCancelledSale(tx, {
+          organizationId: sessionUser.organizationId,
+          saleId: sale.id,
+          userId: sessionUser.id,
+          saleInvoiceNumber: sale.invoiceNumber,
         });
 
         // 6. Audit trail.
