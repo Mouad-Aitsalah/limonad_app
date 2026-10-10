@@ -31,6 +31,9 @@ export async function GET(request: Request) {
           locationId,
           q,
           limit: limitParam ? Number(limitParam) : undefined,
+          // Counter POS opt-in (?sort=sold): best sellers first. Any other
+          // caller (driver POS...) keeps the designation order.
+          rankBySales: url.searchParams.get("sort") === "sold",
         });
         return { products };
       }

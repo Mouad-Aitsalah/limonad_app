@@ -474,7 +474,8 @@ async function downloadFullCatalogue(
   let cursor: string | null = null;
   const seenCursors = new Set<string>();
   do {
-    const query = new URLSearchParams({ status: "ACTIVE", pageSize: String(pageSize) });
+    // withSales=1: each item also carries its total quantity sold (the grid's best-seller order).
+    const query = new URLSearchParams({ status: "ACTIVE", pageSize: String(pageSize), withSales: "1" });
     if (cursor) query.set("cursor", cursor);
     const page: z.infer<typeof productPageSchema> = await requestJson(
       `/api/products/list?${query.toString()}`,

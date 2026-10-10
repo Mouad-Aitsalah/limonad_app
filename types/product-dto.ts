@@ -23,6 +23,9 @@ export interface ProductDto {
     id: string;
     name: string;
   } | null;
+  /** Only when the page was requested with withSales (offline POS sync): total
+   *  quantity sold, a sort key - never displayed. */
+  soldQuantity?: number;
   createdAt: string;
   updatedAt: string;
 }

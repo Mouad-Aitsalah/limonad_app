@@ -325,6 +325,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
       truncated: context.productsTruncated,
       locationId: context.stockLocation.id,
       normalize: normalizeSearch,
+      rankBySales: true,
       extraProducts,
     },
   );

@@ -7,6 +7,7 @@ import { computePriceTTC } from "@/lib/product-pricing";
 import { prisma } from "@/lib/prisma";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { orderByIds, rankPosProducts, soldQuantitiesByProduct } from "@/lib/server/pos-product-ranking";
 import { toLightweightProductImageUrl } from "@/lib/server/product-image-url";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import type { DriverPosProductDto } from "@/types/operations-dto";
@@ -123,6 +124,10 @@ export type ProductsPageParams = {
   /** name / reference / barcode - same fields the old, fully-client-side
    * ProductsView search used to match against. */
   search?: string;
+  /** Opt-in (the offline POS catalogue sync): add each item's total quantity
+   *  sold (soldQuantity) - ONE aggregated query for the whole page. Omitted
+   *  (/produits and every other caller) = the page is exactly what it was. */
+  withSales?: boolean;
 };
 
 function clampProductsPageSize(pageSize: number | undefined): number {
@@ -198,8 +203,15 @@ export async function getProductsPage(params: ProductsPageParams = {}): Promise<
   const hasMore = rows.length > pageSize;
   const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
 
+  const soldById = params.withSales
+    ? await soldQuantitiesByProduct(prisma, { organizationId, productIds: pageRows.map((row) => row.id) })
+    : null;
+
   return {
-    items: pageRows.map(mapProductToDto),
+    items: pageRows.map((row) => {
+      const dto = mapProductToDto(row);
+      return soldById ? { ...dto, soldQuantity: soldById.get(row.id) ?? 0 } : dto;
+    }),
     nextCursor: hasMore ? pageRows[pageRows.length - 1].id : null,
     hasMore,
     totalCount,
@@ -561,6 +573,10 @@ export async function searchPosProducts(params: {
   locationId: string;
   q: string;
   limit?: number;
+  /** Counter POS only: rank the matches by total quantity sold (best sellers
+   *  first, never-sold after, ties by designation) instead of by designation.
+   *  Omitted (driver POS, every other caller) = the order is unchanged. */
+  rankBySales?: boolean;
 }): Promise<DriverPosProductDto[]> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier", "driver"]);
   const organizationId = currentUser.organizationId;
@@ -585,6 +601,21 @@ export async function searchPosProducts(params: {
   });
   if (exactBarcodeMatch) {
     return withLevels([exactBarcodeMatch]);
+  }
+
+  if (params.rankBySales) {
+    // One aggregated query ranks the matches (the limit applies AFTER the
+    // ranking, so the best-selling matches are never cut by a name-ordered
+    // page), then the rows are fetched by id and put back in that order.
+    const ranking = await rankPosProducts(prisma, { organizationId, search: query, limit });
+    const rankedIds = ranking.map((entry) => entry.id);
+    const soldById = new Map(ranking.map((entry) => [entry.id, entry.quantity]));
+    const ranked = await prisma.product.findMany({
+      where: { id: { in: rankedIds }, organizationId, status: "ACTIVE" },
+      select: productSelect,
+    });
+    const withStock = await withLevels(orderByIds(ranked, rankedIds));
+    return withStock.map((product) => ({ ...product, soldQuantity: soldById.get(product.id) ?? 0 }));
   }
 
   const matches = await prisma.product.findMany({

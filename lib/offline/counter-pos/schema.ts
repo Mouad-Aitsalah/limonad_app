@@ -124,6 +124,9 @@ export type ProductRecord = {
   /** Reserved for a future signed-price mechanism; the counter context does
    *  not issue one today, so this is null. */
   priceToken: string | null;
+  /** Total quantity sold (best-seller order of the grid) - a sort key only,
+   *  never displayed. Absent on records written before this field existed = 0. */
+  soldQuantity?: number;
   syncedAt: string;
 };
 

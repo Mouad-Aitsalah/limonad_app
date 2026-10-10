@@ -36,6 +36,16 @@ const defaultSearchRemote: PosProductRemoteSearch = async ({ query, locationId, 
   return body.products ?? [];
 };
 
+/** Counter POS: same request, asking the server to rank the matches by quantity sold
+ *  (best sellers first) - see searchPosProducts' `rankBySales`. */
+const rankedSearchRemote: PosProductRemoteSearch = async ({ query, locationId, limit }) => {
+  const params = new URLSearchParams({ q: query, locationId, limit: String(limit), sort: "sold" });
+  const response = await fetch(`/api/products/search?${params.toString()}`);
+  if (!response.ok) return [];
+  const body = (await response.json()) as { products?: DriverPosProductDto[] };
+  return body.products ?? [];
+};
+
 /**
  * Phase 3 follow-up: the POS product grid (comptoir + chauffeur) preloads a
  * bounded product list for instant, zero-round-trip local search - fine for
@@ -67,6 +77,12 @@ export function usePosProductSearch(
     normalize: (value: string) => string;
     searchRemote?: PosProductRemoteSearch;
     /**
+     * Counter POS: the default remote search asks for the best-seller order
+     * (the preloaded list already arrives in that order). Ignored when a
+     * `searchRemote` is injected; omitted (driver POS) = designation order.
+     */
+    rankBySales?: boolean;
+    /**
      * Products loaded explicitly by id (a cart line whose product was not
      * preloaded - e.g. an AI-prepared cart or a restored cart). Merged into
      * `allKnownProducts` only, so the cart can always resolve them; they
@@ -75,7 +91,8 @@ export function usePosProductSearch(
     extraProducts?: DriverPosProductDto[];
   },
 ) {
-  const { truncated, locationId, normalize, searchRemote = defaultSearchRemote, extraProducts } = options;
+  const { truncated, locationId, normalize, rankBySales, extraProducts } = options;
+  const searchRemote = options.searchRemote ?? (rankBySales ? rankedSearchRemote : defaultSearchRemote);
   // Keyed by the exact search term it answers, so a stale result from a
   // previous term is never shown as if it matched the current one - avoids
   // needing to synchronously reset state in the effect below when the

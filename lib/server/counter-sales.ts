@@ -17,6 +17,7 @@ import {
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { LINK_CUSTOMER_ORDER_MESSAGES, linkCustomerOrderToSale } from "@/lib/server/customer-orders-core";
 import { getPosCustomerPreload } from "@/lib/server/customers";
+import { orderByIds, rankPosProducts } from "@/lib/server/pos-product-ranking";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -215,16 +216,23 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
   });
   const defaultCustomer = resolveSmallestNumberedCustomer(eligibleCustomersForDefault);
 
-  const [productRows, customers, bankAccounts] = await Promise.all([
-    // Source of truth for POS visibility = every ACTIVE product of the
-    // organisation, NOT "what has a stock row at this depot". A product
-    // never received/loaded here (no StockLevel row) must still be sellable
-    // - the stock is only information, never a visibility filter, and
-    // negative sales are allowed. minimumStock is never a filter either.
-    // Still bounded (take LIMIT + 1 -> productsTruncated -> the search
-    // fallback), same as before.
-    prisma.product.findMany({
-      where: { organizationId: sessionUser.organizationId, status: "ACTIVE" },
+  // Best sellers first: the products are ranked by total quantity sold
+  // (never-sold products after, ties by designation) in ONE aggregated query
+  // (rankPosProducts) - the ranking decides the order AND which
+  // POS_PRODUCT_LIST_LIMIT products are preloaded - then the rows are fetched
+  // by id and put back in that order. Read only: nothing is written. The
+  // quantity sold travels with each product (soldQuantity) so the POS can keep
+  // the same order locally, also offline - it is never displayed.
+  const soldByProductId = new Map<string, number>();
+  const loadRankedPreloadProducts = async () => {
+    const ranked = await rankPosProducts(prisma, {
+      organizationId: sessionUser.organizationId,
+      limit: POS_PRODUCT_LIST_LIMIT + 1,
+    });
+    const rankedIds = ranked.map((entry) => entry.id);
+    for (const entry of ranked) soldByProductId.set(entry.id, entry.quantity);
+    const rows = await prisma.product.findMany({
+      where: { id: { in: rankedIds }, organizationId: sessionUser.organizationId, status: "ACTIVE" },
       select: {
         id: true,
         reference: true,
@@ -239,9 +247,19 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
         defaultSupplierId: true,
         defaultSupplier: { select: { name: true, logoUrl: true, updatedAt: true } },
       },
-      orderBy: { name: "asc" },
-      take: POS_PRODUCT_LIST_LIMIT + 1,
-    }),
+    });
+    return orderByIds(rows, rankedIds);
+  };
+
+  const [productRows, customers, bankAccounts] = await Promise.all([
+    // Source of truth for POS visibility = every ACTIVE product of the
+    // organisation, NOT "what has a stock row at this depot". A product
+    // never received/loaded here (no StockLevel row) must still be sellable
+    // - the stock is only information, never a visibility filter, and
+    // negative sales are allowed. minimumStock is never a filter either.
+    // Still bounded (take LIMIT + 1 -> productsTruncated -> the search
+    // fallback), same as before. Order: best sellers first.
+    loadRankedPreloadProducts(),
     // Phase 3: bounded preload (recent customers + the org's "COUNTER"/
     // walk-in customer, always guaranteed present since it's the default
     // pre-selected customer below) instead of every customer in the
@@ -293,6 +311,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       taxRate,
       // No stock row at this depot -> shown as 0 (still sellable).
       availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
+      soldQuantity: soldByProductId.get(product.id) ?? 0,
       supplierId: product.defaultSupplierId,
       supplierName: product.defaultSupplier?.name ?? null,
       supplierLogoUrl: product.defaultSupplier

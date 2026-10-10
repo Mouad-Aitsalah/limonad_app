@@ -89,6 +89,7 @@ export function productRecordFromDto(
     supplierName: dto.supplierName ?? null,
     supplierLogoUrl: dto.supplierLogoUrl ?? null,
     priceToken: dto.priceToken ?? null,
+    soldQuantity: dto.soldQuantity ?? 0,
     syncedAt,
   };
 }
@@ -110,6 +111,7 @@ export function productDtoFromRecord(
     supplierId: record.supplierId,
     supplierName: record.supplierName,
     supplierLogoUrl: record.supplierLogoUrl,
+    ...(record.soldQuantity ? { soldQuantity: record.soldQuantity } : {}),
     ...(record.priceToken ? { priceToken: record.priceToken } : {}),
   };
 }
@@ -397,6 +399,7 @@ function sameProduct(a: ProductRecord, b: ProductRecord): boolean {
     a.supplierId === b.supplierId &&
     a.supplierName === b.supplierName &&
     a.supplierLogoUrl === b.supplierLogoUrl &&
+    (a.soldQuantity ?? 0) === (b.soldQuantity ?? 0) &&
     a.priceToken === b.priceToken
   );
 }
@@ -461,8 +464,12 @@ export async function loadCachedCounterPosContext(
   const { contextRecord, productRecords, stockRecords, customerRecords } = read.value;
   // No stock row for a product = 0, the same rule getCounterPosContext applies.
   const stockByProduct = new Map(stockRecords.map((row) => [row.productId, row.availableQuantity]));
+  // Best sellers first (total quantity sold, descending), products without any
+  // sale after them, ties by designation - the same order the server ranks the
+  // POS context in, kept locally so it also holds offline and for the whole
+  // synced catalogue. Records written before soldQuantity existed count as 0.
   const products = productRecords
-    .sort((a, b) => a.name.localeCompare(b.name, "fr"))
+    .sort((a, b) => (b.soldQuantity ?? 0) - (a.soldQuantity ?? 0) || a.name.localeCompare(b.name, "fr"))
     .map((record) => productDtoFromRecord(record, stockByProduct.get(record.id) ?? 0));
   const customers = customerRecords
     .sort((a, b) => a.name.localeCompare(b.name, "fr"))

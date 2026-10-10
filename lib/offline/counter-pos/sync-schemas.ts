@@ -54,6 +54,7 @@ const contextProductSchema = z.object({
   supplierName: optionalString,
   supplierLogoUrl: optionalString,
   priceToken: z.string().optional(),
+  soldQuantity: z.number().min(0).optional(),
 });
 
 /** The customer fields the snapshot keeps - and nothing else. */
@@ -97,6 +98,7 @@ const listProductSchema = z.object({
   status: z.string(),
   imageUrl: optionalString,
   supplier: z.object({ id, name: z.string() }).nullish(),
+  soldQuantity: z.number().min(0).optional(),
 });
 
 export const productPageSchema = z.object({
@@ -151,6 +153,7 @@ export function posProductFromListProduct(
     supplierId: product.supplier?.id ?? null,
     supplierName: product.supplier?.name ?? null,
     supplierLogoUrl: null,
+    ...(product.soldQuantity !== undefined ? { soldQuantity: product.soldQuantity } : {}),
   };
 }
 

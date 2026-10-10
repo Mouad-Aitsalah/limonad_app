@@ -648,6 +648,10 @@ export interface DriverPosProductDto {
   salePriceTTC: number;
   taxRate: number;
   availableQuantity: number;
+  /** Total quantity sold of this product over the real sales (best-seller order
+   *  of the counter POS, kept locally so it also works offline). Sort key only -
+   *  never displayed, never used for stock or amounts. Absent = 0. */
+  soldQuantity?: number;
   /** Real business relation Product.defaultSupplier (never derived from an
    *  accounting account). Null when the product has no supplier. Display /
    *  mobile "Fournisseur" filter only - never affects visibility or stock. */

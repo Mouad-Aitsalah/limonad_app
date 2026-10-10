@@ -18,6 +18,8 @@ export async function GET(request: Request) {
       brandId: url.searchParams.get("brandId") || undefined,
       status: url.searchParams.get("status") || undefined,
       search: url.searchParams.get("search") || undefined,
+      // Offline POS catalogue sync only (?withSales=1): adds soldQuantity to each item.
+      withSales: url.searchParams.get("withSales") === "1",
     });
     return NextResponse.json(page);
   } catch {
