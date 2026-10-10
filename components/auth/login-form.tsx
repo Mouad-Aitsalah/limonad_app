@@ -12,6 +12,9 @@ import { LoginBrand } from "@/components/auth/login-brand";
 import { useAuth } from "@/hooks/use-auth";
 import { getBrowserHomeRoute } from "@/lib/auth/browser-home-route";
 
+/** Target of a native (pre-hydration) submission - the same route the hydrated form calls. */
+export const LOGIN_FORM_ACTION = "/api/auth/login";
+
 export function LoginForm() {
   const { currentUser, isLoading, login } = useAuth();
   const router = useRouter();
@@ -79,7 +82,19 @@ export function LoginForm() {
         <p className="mt-2 text-lg text-slate-500">Accédez à votre espace de travail</p>
       </div>
 
-      <form className="mt-9 space-y-6 [@media(max-height:850px)]:mt-5 [@media(max-height:850px)]:space-y-4" aria-label="Formulaire de connexion" onSubmit={handleSubmit}>
+      {/* method/action: a submit that happens BEFORE React has hydrated (slow
+          network, JS still loading) is a native browser submission - without
+          them that is a GET to /login with the email and password in the URL.
+          POST to the login route instead: it already accepts a form body and
+          answers with 303 redirects. Once hydrated, handleSubmit prevents the
+          native submission and keeps the JSON flow. */}
+      <form
+        method="post"
+        action={LOGIN_FORM_ACTION}
+        className="mt-9 space-y-6 [@media(max-height:850px)]:mt-5 [@media(max-height:850px)]:space-y-4"
+        aria-label="Formulaire de connexion"
+        onSubmit={handleSubmit}
+      >
         <div className="space-y-2">
           <Label htmlFor="email" className="text-base font-semibold text-[#102B4C]">
             Email

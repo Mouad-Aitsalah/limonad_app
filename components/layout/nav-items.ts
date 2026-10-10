@@ -56,6 +56,11 @@ export const navItems: NavItem[] = [
       { label: "Versements", href: "/pos/versements" },
       { label: "Archives des factures", href: "/ventes", exact: true },
       { label: "Factures journalières", href: "/ventes/journalieres" },
+      {
+        label: "Commandes en ligne",
+        href: "/ventes/commandes-en-ligne",
+        roles: ["admin", "depot_manager", "cashier"],
+      },
       { label: "Avoir client / fournisseur", href: "/avoirs", roles: ["admin", "cashier"] },
     ],
   },

@@ -15,6 +15,7 @@ import {
   resolveSaleTransferBankAccountId,
 } from "@/lib/server/accounting";
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
+import { LINK_CUSTOMER_ORDER_MESSAGES, linkCustomerOrderToSale } from "@/lib/server/customer-orders-core";
 import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
@@ -105,6 +106,11 @@ const counterSaleSchema = z.object({
   // "33/2026" in the database. Absent = reserve normally at creation.
   reservedSaleNumber: z.coerce.number().int().positive().optional(),
   reservedSaleYear: z.coerce.number().int().positive().optional(),
+  // Espace Client: the ACCEPTED online order this cart was opened from (POS
+  // "?customerOrder="). When present, the order is marked CONVERTED and
+  // linked to this sale IN THE SAME transaction (linkCustomerOrderToSale);
+  // absent (every other sale) = nothing changes.
+  customerOrderId: z.string().trim().min(1).max(64).optional(),
 });
 
 // Phase 3: the POS product grid preloads this many sellable products for
@@ -695,6 +701,23 @@ export async function createCounterSale(
         },
         select: { id: true, invoiceNumber: true },
       });
+
+      // Espace Client order -> this sale, atomically: if the order can't be
+      // converted (already invoiced, no longer ACCEPTED, other customer), the
+      // throw rolls the WHOLE sale back - an order is never invoiced twice.
+      if (parsed.data.customerOrderId) {
+        const link = await linkCustomerOrderToSale(tx, {
+          organizationId: sessionUser.organizationId,
+          customerOrderId: parsed.data.customerOrderId,
+          saleId: sale.id,
+          saleCustomerId: customer?.id ?? null,
+          userId: sessionUser.id,
+          saleInvoiceNumber: sale.invoiceNumber,
+        });
+        if (!link.ok) {
+          throw new OperationsServiceError(LINK_CUSTOMER_ORDER_MESSAGES[link.reason], 409);
+        }
+      }
 
       // Payment, customer-balance movement and the accounting entry only
       // ever happen for a collected sale. A pending DRAFT sale carries none

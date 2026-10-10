@@ -18,13 +18,24 @@ type AiDraftReplaceDialogProps = {
   busy?: boolean;
   onReplace: () => void;
   onCancel: () => void;
+  /** Defaults to the AI-assistant wording; the online-order flow passes its own. */
+  title?: string;
+  message?: string;
 };
 
 /**
- * Asked when an AI-prepared cart is opened while the POS cart already holds
- * products: the current cart is never overwritten (nor merged) silently.
+ * Asked when a prepared cart (AI assistant, online customer order) is opened
+ * while the POS cart already holds products: the current cart is never
+ * overwritten (nor merged) silently.
  */
-export function AiDraftReplaceDialog({ open, busy = false, onReplace, onCancel }: AiDraftReplaceDialogProps) {
+export function AiDraftReplaceDialog({
+  open,
+  busy = false,
+  onReplace,
+  onCancel,
+  title = "Panier préparé par l'Assistant IA",
+  message = AI_DRAFT_REPLACE_MESSAGE,
+}: AiDraftReplaceDialogProps) {
   return (
     <Dialog
       open={open}
@@ -34,8 +45,8 @@ export function AiDraftReplaceDialog({ open, busy = false, onReplace, onCancel }
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Panier préparé par l&apos;Assistant IA</DialogTitle>
-          <DialogDescription>{AI_DRAFT_REPLACE_MESSAGE}</DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{message}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>

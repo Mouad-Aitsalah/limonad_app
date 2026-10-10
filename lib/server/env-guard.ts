@@ -1,5 +1,7 @@
 import "server-only";
 
+import { connectionTargetsKnownProduction, KNOWN_PRODUCTION_ENDPOINT_SUBSTRING } from "@/lib/production-endpoint";
+
 /**
  * Phase 4B: reusable guard against ever running a seed/bench/fixture/
  * destructive script against the production database - two INDEPENDENT
@@ -20,11 +22,6 @@ import "server-only";
  * production endpoint's hostname fragment, which identifies a compute
  * endpoint but grants no access by itself.
  */
-const KNOWN_PRODUCTION_ENDPOINT_SUBSTRING = "ep-old-block-aebwqtri";
-
-function connectionTargetsKnownProduction(value: string | undefined): boolean {
-  return Boolean(value && value.includes(KNOWN_PRODUCTION_ENDPOINT_SUBSTRING));
-}
 
 /** True if either guard signal currently indicates production - see this
  * module's doc comment. Safe to call outside a script context too (e.g. to

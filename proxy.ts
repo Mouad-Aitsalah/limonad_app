@@ -102,13 +102,35 @@ import type { NextRequest } from "next/server";
  */
 
 const SESSION_COOKIE = "comdis.session"; // must stay in sync with lib/server/auth.ts's SESSION_COOKIE - duplicated deliberately rather than imported, see the "shared modules/globals" note above.
+// CLIENT PLATFORM (branch `client-platform`): the external customer-facing
+// catalog is a SEPARATE surface with its own session cookie (a Customer is
+// not a User - see lib/server/client-auth.ts's own doc comment). Must stay
+// in sync with CLIENT_SESSION_COOKIE there, duplicated for the same reason
+// as SESSION_COOKIE above.
+const CLIENT_SESSION_COOKIE = "comdis.client-session";
 
-const PUBLIC_PATHS = new Set<string>(["/login"]);
+const PUBLIC_PATHS = new Set<string>(["/login", "/client/login"]);
 
 export default function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (PUBLIC_PATHS.has(pathname)) {
+    return NextResponse.next();
+  }
+
+  // The client platform is entirely outside the staff ERP: checked against
+  // its OWN cookie only, never the staff one - a staff member being logged
+  // into the dashboard must never make /client/* pass this check, and vice
+  // versa. Still only an optimistic existence check, same as below: the real
+  // authority is lib/server/client-auth.ts's getCurrentClient, re-verified
+  // against the database on every request.
+  if (pathname === "/client") {
+    return NextResponse.redirect(new URL("/client/catalog", request.url));
+  }
+  if (pathname.startsWith("/client/")) {
+    if (!request.cookies.has(CLIENT_SESSION_COOKIE)) {
+      return NextResponse.redirect(new URL("/client/login", request.url));
+    }
     return NextResponse.next();
   }
 

@@ -142,5 +142,6 @@ export const DocumentType = {
   // above, and TruckLoading's CHG/N/YYYY / CHG-000001 numbering) - a third
   // meaning would make the same visible prefix ambiguous across screens.
   ExpenseNumber: "EXPENSE_NUMBER", // expenses.ts nextExpenseNumber (DPN-000001, global per org)
+  CustomerOrder: "CUSTOMER_ORDER", // client-portal-core.ts submitClientOrder (CMD-000001, global per org)
   CustomerSettlementNumber: "CUSTOMER_SETTLEMENT_NUMBER", // customer-settlements.ts nextSettlementNumber (REGL-000001, global per org)
 } as const;

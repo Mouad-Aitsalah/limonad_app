@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
-
+import { AuthServiceError } from "@/lib/server/auth";
 import { searchCustomers } from "@/lib/server/customers";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { handleStaffSearchRoute } from "@/lib/staff-search-route";
 
 /**
  * Phase 3: GET /api/customers/search?q=...&limit=20 - fast, organization-
@@ -22,21 +22,26 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
-  try {
-    const url = new URL(request.url);
-    const q = url.searchParams.get("q") ?? "";
-    const limitParam = url.searchParams.get("limit");
-    const activeOnlyParam = url.searchParams.get("activeOnly");
-    const customers = await searchCustomers({
-      q,
-      limit: limitParam ? Number(limitParam) : undefined,
-      activeOnly: activeOnlyParam === "false" ? false : true,
-    });
-    return withMobileCors(request, NextResponse.json({ customers }));
-  } catch {
-    return withMobileCors(
-      request,
-      NextResponse.json({ message: "Impossible de rechercher les clients." }, { status: 500 }),
-    );
-  }
+  // No staff session -> 401 (403 for a role not allowed); any other error
+  // stays a 500 - see handleStaffSearchRoute. Every response, errors
+  // included, keeps the mobile-shell CORS headers as before.
+  return handleStaffSearchRoute(
+    async () => {
+      const url = new URL(request.url);
+      const q = url.searchParams.get("q") ?? "";
+      const limitParam = url.searchParams.get("limit");
+      const activeOnlyParam = url.searchParams.get("activeOnly");
+      const customers = await searchCustomers({
+        q,
+        limit: limitParam ? Number(limitParam) : undefined,
+        activeOnly: activeOnlyParam === "false" ? false : true,
+      });
+      return { customers };
+    },
+    {
+      isAuthError: (error): error is AuthServiceError => error instanceof AuthServiceError,
+      failureMessage: "Impossible de rechercher les clients.",
+      wrap: (response) => withMobileCors(request, response),
+    },
+  );
 }

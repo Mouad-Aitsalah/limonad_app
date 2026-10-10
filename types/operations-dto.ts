@@ -917,6 +917,8 @@ export type CounterSaleInput = DriverSaleInput & {
   // when it passes the year/issued/uniqueness guards.
   reservedSaleNumber?: number;
   reservedSaleYear?: number;
+  /** Espace Client order this sale converts (linked + CONVERTED in the sale's transaction). */
+  customerOrderId?: string;
 };
 
 export interface InventoryLineDto {

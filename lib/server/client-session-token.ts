@@ -2,52 +2,47 @@ import "server-only";
 
 import { createHmac, timingSafeEqual } from "crypto";
 
+import { CLIENT_SESSION_MAX_AGE_SECONDS } from "@/lib/client-portal-rules";
+
 /**
- * CLIENT PLATFORM (branch `client-platform`) - the external customer-facing
- * catalog is a SEPARATE surface from the staff ERP: a Customer is not a
- * User, so it cannot use the staff Session table (lib/server/auth.ts),
- * which is keyed on User.id and would otherwise force creating a fake staff
- * account (with a role, ERP permissions) for every customer - exactly what
- * must never happen.
+ * Espace Client - the external customer-facing ordering space is a SEPARATE
+ * surface from the staff ERP: a Customer is not a User, so it cannot use the
+ * staff Session table (lib/server/auth.ts), which is keyed on User.id and
+ * would otherwise force creating a fake staff account (with a role, ERP
+ * permissions) for every customer - exactly what must never happen.
  *
  * Instead this reuses the project's OTHER established pattern for a
- * narrow-purpose signed bearer/cookie token (see lib/server/tracking-token.ts,
- * same HMAC-then-compare shape) - a stateless, dedicated, easily-revoked-by-
- * rotating-the-secret token, signed with its own secret
+ * narrow-purpose signed token (see lib/server/tracking-token.ts, same
+ * HMAC-then-compare shape), signed with its own secret
  * (CLIENT_SESSION_SECRET), never AUTH_SECRET or any other token's secret.
  *
- * The token is opaque to the browser (a cookie value) but self-describing to
- * the server: it carries {organizationId, organizationCode, email}. This is
- * safe ONLY because it is signed (never accepted unless the signature
- * matches) and because every read of it (getCurrentClient in client-auth.ts)
- * re-checks the Organization it claims against the database on every
- * request - a session for a since-deactivated organization stops working
- * the moment that happens, exactly like the staff session does.
- *
- * There is deliberately no Customer here: a visitor identifies only by
- * email + Organization.code, and the email is carried as-is, never looked
- * up against Customer (see client-auth.ts's own doc comment).
+ * The token carries {organizationId, customerId, contactPhone}. This is safe
+ * ONLY because it is signed (never accepted unless the signature matches) and
+ * because every read of it (getCurrentClient in client-auth.ts) re-checks the
+ * Organization AND the Customer against the database on every request - a
+ * session for a since-deactivated organisation or a blocked customer stops
+ * working the moment that happens. contactPhone is informative only.
  */
 export type ClientSessionClaims = {
   organizationId: string;
-  organizationCode: string;
-  email: string;
+  customerId: string;
+  contactPhone: string | null;
 };
 
-type ClientSessionPayload = ClientSessionClaims & { exp: number };
+type ClientSessionPayload = ClientSessionClaims & { exp: number; v: 2 };
 
-const CLIENT_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h - a shopping session, not a persistent login.
-
-export function signClientSessionToken(claims: ClientSessionClaims): { token: string; maxAgeSeconds: number } {
-  const exp = Date.now() + CLIENT_SESSION_MAX_AGE_MS;
-  const payload: ClientSessionPayload = { ...claims, exp };
+export function signClientSessionToken(
+  claims: ClientSessionClaims,
+  now: number = Date.now(),
+): { token: string; maxAgeSeconds: number } {
+  const payload: ClientSessionPayload = { ...claims, exp: now + CLIENT_SESSION_MAX_AGE_SECONDS * 1000, v: 2 };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return { token: `${body}.${sign(body)}`, maxAgeSeconds: Math.floor(CLIENT_SESSION_MAX_AGE_MS / 1000) };
+  return { token: `${body}.${sign(body)}`, maxAgeSeconds: CLIENT_SESSION_MAX_AGE_SECONDS };
 }
 
-export function verifyClientSessionToken(token: string): ClientSessionClaims | null {
-  const [body, sig] = token.split(".");
-  if (!body || !sig) return null;
+export function verifyClientSessionToken(token: string, now: number = Date.now()): ClientSessionClaims | null {
+  const [body, sig, extra] = token.split(".");
+  if (!body || !sig || extra !== undefined) return null;
 
   const expectedSig = sign(body);
   const actualBuffer = Buffer.from(sig);
@@ -59,15 +54,21 @@ export function verifyClientSessionToken(token: string): ClientSessionClaims | n
   try {
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Partial<ClientSessionPayload>;
     if (
+      payload.v !== 2 ||
       typeof payload.exp !== "number" ||
-      payload.exp < Date.now() ||
+      payload.exp < now ||
+      typeof payload.organizationId !== "string" ||
       !payload.organizationId ||
-      !payload.organizationCode ||
-      !payload.email
+      typeof payload.customerId !== "string" ||
+      !payload.customerId
     ) {
       return null;
     }
-    return { organizationId: payload.organizationId, organizationCode: payload.organizationCode, email: payload.email };
+    return {
+      organizationId: payload.organizationId,
+      customerId: payload.customerId,
+      contactPhone: typeof payload.contactPhone === "string" ? payload.contactPhone : null,
+    };
   } catch {
     return null;
   }
