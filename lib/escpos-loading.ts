@@ -76,7 +76,7 @@ export function buildLoadingReceiptLines(input: LoadingTicketInput, options: { c
 
   lines.push({ kind: "text", text: input.brandName ?? DEFAULT_BRAND, font: "A", bold: true, big: true, align: "center", codePage });
   lines.push({ kind: "feed", lines: 1 });
-  lines.push({ kind: "text", text: "CHARGEMENT", font: "A", bold: true, tall: true, align: "center", codePage });
+  lines.push({ kind: "text", text: "TRANSFERT DE STOCK", font: "A", bold: true, tall: true, align: "center", codePage });
   lines.push({ kind: "text", text: RULE_A, font: "A" });
   lines.push(textOrRaster(`Date : ${formatLoadingDate(input.date)}`));
   if (input.driverName?.trim()) lines.push(textOrRaster(`Chauffeur : ${input.driverName.trim()}`));

@@ -37,13 +37,16 @@ export function useProductPickerSearch(
   } | null>(null);
   const [discovered, setDiscovered] = React.useState<Map<string, ProductDto>>(new Map());
   const trimmedQuery = query.trim();
+  // The answer is keyed by term AND supplier, so changing the supplier filter
+  // never shows the previous supplier's results as if they matched.
+  const searchKey = trimmedQuery ? `${supplierId ?? ""}|${trimmedQuery}` : "";
 
   React.useEffect(() => {
     if (!trimmedQuery) return;
     let cancelled = false;
-    const key = trimmedQuery;
+    const key = searchKey;
     const timer = setTimeout(() => {
-      const params = new URLSearchParams({ q: key });
+      const params = new URLSearchParams({ q: trimmedQuery });
       if (limit) params.set("limit", String(limit));
       if (supplierId) params.set("supplierId", supplierId);
       fetch(`/api/products/search?${params.toString()}`)
@@ -68,12 +71,12 @@ export function useProductPickerSearch(
       cancelled = true;
       clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- supplierId/limit are stable per screen; re-running on them too would just re-fire the same search.
-  }, [trimmedQuery]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- limit is stable per screen; supplierId is part of searchKey.
+  }, [searchKey]);
 
   const results =
     trimmedQuery.length > 0
-      ? remoteState?.key === trimmedQuery
+      ? remoteState?.key === searchKey
         ? remoteState.results
         : []
       : preload;
@@ -92,7 +95,7 @@ export function useProductPickerSearch(
 
   // Derived, not tracked state: true exactly while a remote search is
   // relevant but its result hasn't arrived for the current search term yet.
-  const searching = trimmedQuery.length > 0 && remoteState?.key !== trimmedQuery;
+  const searching = trimmedQuery.length > 0 && remoteState?.key !== searchKey;
 
   // A barcode scanner types the full code then sends Enter immediately -
   // far faster than the 300ms debounce above, so the debounced `results`

@@ -25,6 +25,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useProductPickerSearch } from "@/components/commerce/use-product-picker-search";
 import { ThermalPrinterPanel } from "@/components/driver-pos/thermal-printer-panel";
 import { LoadingReceiptPrint } from "@/components/loadings/loading-receipt-print";
+import { LoadingSupplierSelect } from "@/components/loadings/loading-supplier-select";
+import type { SupplierOption } from "@/components/pos/supplier-filter";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -46,6 +48,7 @@ import type {
 } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
 import type { LoadingTicketInput } from "@/lib/escpos-loading";
+import { buildSupplierOptions, filterBySupplier, productMatchesSupplier } from "@/lib/loading-supplier-filter";
 import { computePriceTTC } from "@/lib/product-pricing";
 import { printLoadingTicket } from "@/lib/thermal-loading-print";
 import { isThermalPrinterAvailable } from "@/lib/thermal-printer";
@@ -55,6 +58,8 @@ type LoadingsViewProps = {
   trucks: TruckDto[];
   drivers: DriverAssignmentDto[];
   products: ProductDto[];
+  /** Active suppliers of the organisation (id, name, logo) for the supplier filter. */
+  suppliers: SupplierOption[];
   initialHistoryPage: TruckLoadingHistoryPageDto;
 };
 
@@ -100,6 +105,9 @@ type DraftLoadingLine = {
   productUnit: string;
   /** Real product price TTC (display only). */
   productPriceTTC: number;
+  /** Default supplier of the product (display/filter only). */
+  supplierId?: string | null;
+  supplierName?: string | null;
   depotAvailableQuantity: number;
   initialLoadQuantity: number;
   reloadedQuantity: number;
@@ -112,7 +120,7 @@ type ProductSuggestion = {
   depotAvailableQuantity: number;
 };
 
-export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: LoadingsViewProps) {
+export function LoadingsView({ trucks, drivers, products, suppliers, initialHistoryPage }: LoadingsViewProps) {
   const [activeTab, setActiveTab] = React.useState("loading");
   const [trucksState] = React.useState(trucks);
   const [selectedDate, setSelectedDate] = React.useState(todayDateInput());
@@ -137,6 +145,8 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
   const [historyTotalCount, setHistoryTotalCount] = React.useState(initialHistoryPage.totalCount);
   const [historyLoading, setHistoryLoading] = React.useState(false);
 
+  // Supplier filter (view only): null = "Tous les fournisseurs".
+  const [supplierFilter, setSupplierFilter] = React.useState<SupplierOption | null>(null);
   const [productSearch, setProductSearch] = React.useState("");
   const [selectedProduct, setSelectedProduct] = React.useState<ProductSuggestion | null>(null);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = React.useState(0);
@@ -234,6 +244,8 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
             productBarcode: line.productBarcode,
             productUnit: line.productUnit,
             productPriceTTC: line.productPriceTTC,
+            supplierId: line.supplierId ?? null,
+            supplierName: line.supplierName ?? null,
             depotAvailableQuantity: line.depotAvailableQuantity,
             initialLoadQuantity: line.initialQuantity,
             reloadedQuantity: line.reloadedQuantity,
@@ -277,6 +289,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
   const { results: productSearchResults, resolveExact } = useProductPickerSearch(
     products,
     deferredProductSearch,
+    supplierFilter ? { supplierId: supplierFilter.id } : undefined,
   );
   const toSuggestion = React.useCallback(
     (product: ProductDto): ProductSuggestion => ({
@@ -288,8 +301,18 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
   );
   const productSuggestions = React.useMemo(() => {
     if (!deferredProductSearch.trim() || !selectedTruck) return [];
-    return productSearchResults.slice(0, 8).map(toSuggestion);
-  }, [deferredProductSearch, productSearchResults, selectedTruck, toSuggestion]);
+    // The server search is already scoped to the supplier; the strict check
+    // below also covers a supplier with no product of its own (the server then
+    // falls back to unscoped results) and products without a supplier.
+    return productSearchResults
+      .filter((product) => productMatchesSupplier(product, supplierFilter))
+      .slice(0, 8)
+      .map(toSuggestion);
+  }, [deferredProductSearch, productSearchResults, selectedTruck, supplierFilter, toSuggestion]);
+
+  const supplierOptions = React.useMemo(() => buildSupplierOptions(suppliers, draftLines), [suppliers, draftLines]);
+  // Only what is RENDERED is filtered: draftLines (saved, summed, printed) stays whole.
+  const visibleDraftLines = React.useMemo(() => filterBySupplier(draftLines, supplierFilter), [draftLines, supplierFilter]);
 
   const activeProductSuggestionIndex = Math.min(
     activeSuggestionIndex,
@@ -322,7 +345,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
       const response = await fetch(`/api/truck-loadings?${query.toString()}`);
       const body = (await response.json()) as TruckLoadingHistoryPageDto & { message?: string };
       if (!response.ok) {
-        toast.error(body.message ?? "Impossible de charger l'historique des chargements.");
+        toast.error(body.message ?? "Impossible de charger l'historique des transferts de stock.");
         return;
       }
       setHistoryState(body.items);
@@ -387,7 +410,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
 
   function commitQuickEntry() {
     if (!openLoading) {
-      toast.error("Creez d'abord une fiche de chargement.");
+      toast.error("Creez d'abord une fiche de transfert de stock.");
       return;
     }
     if (!selectedProduct) {
@@ -402,6 +425,8 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
       productBarcode: selectedProduct.product.barcode,
       productUnit: selectedProduct.product.unit,
       productPriceTTC: computePriceTTC(selectedProduct.product.salePrice, selectedProduct.product.taxRate),
+      supplierId: selectedProduct.product.supplier?.id ?? null,
+      supplierName: selectedProduct.product.supplier?.name ?? null,
       depotAvailableQuantity: selectedProduct.depotAvailableQuantity,
       initialLoadQuantity: parseInteger(initialLoadInput, 0),
       reloadedQuantity: parseInteger(reloadedInput, 0),
@@ -413,6 +438,9 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
         ? current.map((line) => (line.productId === nextLine.productId ? nextLine : line))
         : [nextLine, ...current],
     );
+    if (!productMatchesSupplier(selectedProduct.product, supplierFilter)) {
+      toast.info("Produit ajoute : il n'appartient pas au fournisseur filtre et reste masque (choisissez « Tous les fournisseurs »).");
+    }
 
     resetQuickEntry();
   }
@@ -506,7 +534,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
         message?: string;
       };
       if (!response.ok || !body.loading) {
-        toast.error(body.message ?? "Impossible de creer la fiche de chargement.");
+        toast.error(body.message ?? "Impossible de creer la fiche de transfert de stock.");
         return;
       }
 
@@ -514,13 +542,13 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
 
       if (body.reused) {
         toast.info(
-          `Une fiche de chargement ouverte existe deja pour ${selectedTruck.code}. ${body.loading.displayNumber} a ete chargee.`,
+          `Une fiche de transfert de stock ouverte existe deja pour ${selectedTruck.code}. ${body.loading.displayNumber} a ete chargee.`,
         );
       } else if (body.loading.lines.length > 0) {
         // A brand-new fiche only ever has lines when they were prefilled
         // from this driver's last closed fiche (quantities start at 0).
         toast.success(
-          `${body.loading.displayNumber} cree - ${body.loading.lines.length} produit(s) repris du dernier chargement de ${selectedDriver.user.fullName}.`,
+          `${body.loading.displayNumber} cree - ${body.loading.lines.length} produit(s) repris du dernier transfert de stock de ${selectedDriver.user.fullName}.`,
         );
       } else {
         toast.success(`${body.loading.displayNumber} cree.`);
@@ -607,7 +635,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
     }
     const result = await printLoadingTicket(loadingTicket);
     if (result.ok) {
-      toast.success("Chargement imprimé avec succès");
+      toast.success("Transfert de stock imprimé avec succès");
       return;
     }
     if (result.code === "NOT_AVAILABLE") {
@@ -617,7 +645,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
     if (result.code === "NO_PRINTER" || result.code === "PERMISSION_REQUIRED") {
       // Choose the paired printer (or allow Bluetooth), then the ticket is printed.
       pendingPrintRef.current = true;
-      setPrinterPanelReason(`${result.message} Le chargement sera imprimé dès que c'est réglé.`);
+      setPrinterPanelReason(`${result.message} Le transfert de stock sera imprimé dès que c'est réglé.`);
       setPrinterPanelOpen(true);
       return;
     }
@@ -656,7 +684,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
       });
       const body = (await response.json()) as { loading?: TruckLoadingDto; message?: string };
       if (!response.ok || !body.loading) {
-        toast.error(body.message ?? "Impossible de fermer le chargement.");
+        toast.error(body.message ?? "Impossible de fermer le transfert de stock.");
         return;
       }
 
@@ -681,16 +709,18 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">Chargements</h1>
+        <h1 className="font-heading text-2xl font-semibold text-foreground">Transferts de Stock</h1>
         <p className="text-sm text-muted-foreground">
-          Fiches de chargement independantes des tournees, centrees sur le camion.
+          Fiches de transfert de stock independantes des tournees, centrees sur le camion.
         </p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <TabsList variant="line" className="rounded-2xl border border-border bg-muted/30 p-1">
-          <TabsTrigger value="loading">Chargement</TabsTrigger>
-          <TabsTrigger value="history">Historique des chargements</TabsTrigger>
+          <TabsTrigger value="loading">Transfert de Stock</TabsTrigger>
+          <TabsTrigger value="history">
+            <ResponsiveText desktop="Historique des transferts de stock" mobile="Historique des transferts" />
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="loading" className="space-y-6">
@@ -722,11 +752,11 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                     <Button
                       type="button"
                       disabled={busy || !selectedDriver || !openLoadingLoaded}
-                      className="h-10 w-full"
+                      className="h-auto min-h-10 w-full whitespace-normal py-2 leading-tight"
                       onClick={createOrResumeLoading}
                     >
                       <Plus className="h-4 w-4" />
-                      Nouvelle fiche de chargement
+                      Nouvelle fiche de transfert de stock
                     </Button>
                   </div>
                 ) : null}
@@ -780,8 +810,8 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                 <p className="text-sm text-muted-foreground">Chargement en cours...</p>
               ) : !openLoading ? (
                 <p className="text-sm text-muted-foreground">
-                  Aucune fiche de chargement ouverte. Cliquez sur &laquo; Nouvelle fiche de
-                  chargement &raquo; pour en creer une.
+                  Aucune fiche de transfert de stock ouverte. Cliquez sur &laquo; Nouvelle fiche de
+                  transfert de stock &raquo; pour en creer une.
                 </p>
               ) : (
                 <>
@@ -815,6 +845,16 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                       </p>
                     </div>
 
+                    <div className="max-w-sm">
+                      <Field label="Fournisseur">
+                        <LoadingSupplierSelect
+                          suppliers={supplierOptions}
+                          value={supplierFilter}
+                          onChange={setSupplierFilter}
+                        />
+                      </Field>
+                    </div>
+
                     {/* Desktop (lg+): the whole table text is 1.5x bigger - titles 0.72rem -> 1.08rem,
                         values 0.94rem -> 1.41rem, reference 0.75rem -> 1.125rem, inputs, action
                         button. Below lg the compact mobile sizes are untouched. */}
@@ -822,17 +862,17 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                       <Table className="max-lg:table-fixed">
                         <TableHeader>
                           <TableRow>
-                            <TableHead className={`${MOBILE_HEAD} max-lg:w-[30%] max-lg:px-2`}>Produit</TableHead>
+                            <TableHead className={`${MOBILE_HEAD} max-lg:w-[34%] max-lg:px-2`}>Produit</TableHead>
                             <TableHead className="text-right max-lg:hidden">Prix</TableHead>
                             <TableHead className="text-right max-lg:hidden">Stock depot</TableHead>
-                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[23%] max-lg:text-center`}>
+                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[22%] max-lg:text-center`}>
                               <ResponsiveText desktop="Charge initiale" mobile="Charge" />
                             </TableHead>
-                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[23%] max-lg:text-center`}>
+                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[22%] max-lg:text-center`}>
                               <ResponsiveText desktop="Rechargee" mobile="Recharge" />
                             </TableHead>
                             <TableHead className="text-right max-lg:hidden">Restante theorique</TableHead>
-                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[23%] max-lg:text-center`}>
+                            <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[22%] max-lg:text-center`}>
                               <ResponsiveText desktop="Restante reelle" mobile="Stock réel" />
                             </TableHead>
                             <TableHead className="text-right max-lg:hidden">Action</TableHead>
@@ -846,11 +886,17 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                                 pour remplir la fiche.
                               </TableCell>
                             </TableRow>
+                          ) : visibleDraftLines.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                                Aucun produit de ce fournisseur sur cette fiche.
+                              </TableCell>
+                            </TableRow>
                           ) : (
-                            draftLines.map((line) => (
+                            visibleDraftLines.map((line) => (
                               <TableRow key={line.productId}>
                                 <TableCell className="max-lg:px-2 max-lg:py-2 max-lg:whitespace-normal">
-                                  <div className="font-medium max-lg:text-[13px] max-lg:leading-tight max-lg:break-words">
+                                  <div className="font-medium max-lg:text-[16.9px] max-lg:leading-tight max-lg:break-words">
                                     {line.productName}
                                   </div>
                                   <div className="text-xs text-muted-foreground max-lg:mt-0.5 max-lg:text-[10px] max-lg:leading-tight max-lg:break-words">
@@ -1096,7 +1142,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                   ) : (
                     <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
                       <Lock className="h-4 w-4" />
-                      Ce chargement est ferme et n&apos;est plus modifiable.
+                      Ce transfert de stock est ferme et n&apos;est plus modifiable.
                     </div>
                   )}
 
@@ -1125,7 +1171,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                         >
                           <RefreshCw className="h-4 w-4 max-lg:hidden" />
                           <Save aria-hidden="true" className="hidden h-4 w-4 shrink-0 max-lg:block" />
-                          <ResponsiveText desktop="Enregistrer le brouillon" mobile="Enregistrer le chargement" />
+                          <ResponsiveText desktop="Enregistrer le brouillon" mobile="Enregistrer le transfert de stock" />
                         </Button>
                         <Button
                           type="button"
@@ -1135,7 +1181,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                         >
                           <Lock className="h-4 w-4 max-lg:hidden" />
                           <X aria-hidden="true" className="hidden h-4 w-4 shrink-0 max-lg:block" />
-                          Fermer le chargement
+                          Fermer le transfert de stock
                         </Button>
                       </div>
                     </>
@@ -1152,7 +1198,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
               <div className="flex items-center gap-3">
                 <ClipboardList className="h-5 w-5 text-emerald-700" />
                 <h2 className="font-heading text-lg font-semibold">
-                  Historique des chargements
+                  Historique des transferts de stock
                 </h2>
               </div>
 
@@ -1214,7 +1260,7 @@ export function LoadingsView({ trucks, drivers, products, initialHistoryPage }: 
                     {filteredHistory.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={12} className="py-8 text-center text-muted-foreground">
-                          Aucune fiche de chargement ne correspond a la recherche.
+                          Aucune fiche de transfert de stock ne correspond a la recherche.
                         </TableCell>
                       </TableRow>
                     ) : (

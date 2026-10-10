@@ -22,7 +22,7 @@ export function LoadingReceiptPrint({ ticket }: { ticket: LoadingTicketInput | n
       <div className="receipt-print-ticket">
         <header className="receipt-print-header">
           <p className="receipt-print-brand">{ticket.brandName ?? "AITSALAH STORE"}</p>
-          <p style={{ fontSize: "14px", fontWeight: 700 }}>CHARGEMENT</p>
+          <p style={{ fontSize: "14px", fontWeight: 700 }}>TRANSFERT DE STOCK</p>
         </header>
         <div className="receipt-print-separator" />
         <div>Date : {dateLabel}</div>

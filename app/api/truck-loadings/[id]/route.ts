@@ -20,7 +20,7 @@ export async function GET(_request: Request, context: RouteContext) {
       return NextResponse.json({ message: error.message }, { status: error.status });
     }
     return NextResponse.json(
-      { message: "Impossible de charger le chargement." },
+      { message: "Impossible de charger le transfert de stock." },
       { status: 500 },
     );
   }

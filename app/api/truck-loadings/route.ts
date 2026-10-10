@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ message: error.message }, { status: error.status });
     }
     return NextResponse.json(
-      { message: "Impossible de charger l'historique des chargements." },
+      { message: "Impossible de charger l'historique des transferts de stock." },
       { status: 500 },
     );
   }

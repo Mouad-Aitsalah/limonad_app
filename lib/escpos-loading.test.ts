@@ -53,15 +53,17 @@ function rows(lines: ReceiptLine[]) {
   return out;
 }
 
-test("ticket content: brand, CHARGEMENT, date, driver, truck, and the three products with CHARGE / RECHARGE only", () => {
+test("ticket content: brand, TRANSFERT DE STOCK, date, driver, truck, and the three products with CHARGE / RECHARGE only", () => {
   const lines = buildLoadingReceiptLines(input);
   const text = allText(lines);
-  for (const expected of ["AITSALAH STORE", "CHARGEMENT", "Date : 26/09/2026", "Chauffeur : Ahmed Chauffeur", "Camion : CAM-01 - 12345-A-1", "PRODUIT", "CHARGE", "RECHARGE"]) {
+  for (const expected of ["AITSALAH STORE", "TRANSFERT DE STOCK", "Date : 26/09/2026", "Chauffeur : Ahmed Chauffeur", "Camion : CAM-01 - 12345-A-1", "PRODUIT", "CHARGE", "RECHARGE"]) {
     assert.ok(text.includes(expected), expected);
   }
   assert.deepEqual(rows(lines), [["Produit 1", "100", "200"], ["Produit 2", "0", "0"], ["Produit 3", "50", "0"]]);
   // nothing else is printed
-  for (const forbidden of ["STOCK", "DEPOT", "THEORIQUE", "REELLE", "Prix"]) assert.equal(text.toUpperCase().includes(forbidden.toUpperCase()), false, forbidden);
+  // (the title « TRANSFERT DE STOCK » itself is the only place the word STOCK may appear)
+  const body = text.replace("TRANSFERT DE STOCK", "");
+  for (const forbidden of ["STOCK", "DEPOT", "THEORIQUE", "REELLE", "Prix"]) assert.equal(body.toUpperCase().includes(forbidden.toUpperCase()), false, forbidden);
 });
 
 test("driver and truck lines are optional", () => {
@@ -195,7 +197,7 @@ test("printing the loading uses the Bluetooth plugin's print() with the selected
   assert.equal(calls.length, 1);
   assert.equal(calls[0].address, PRINTER.address);
   const bytes = Buffer.from(calls[0].data, "base64");
-  assert.ok(bytes.includes(Buffer.from("CHARGEMENT")));
+  assert.ok(bytes.includes(Buffer.from("TRANSFERT DE STOCK")));
   assert.ok(bytes.includes(Buffer.from("Produit 1")));
 });
 

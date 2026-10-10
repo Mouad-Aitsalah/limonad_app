@@ -44,6 +44,10 @@ const loadingInclude = {
           // display price (productPriceTTC on the line DTO) - read only
           salePrice: true,
           taxRate: true,
+          // supplier (supplierId/supplierName on the line DTO) - read only,
+          // lets the /chargements supplier filter work on lines whose product
+          // is not in the picker's current preload.
+          defaultSupplier: { select: { id: true, name: true } },
         },
       },
     },
@@ -222,6 +226,8 @@ export async function mapTruckLoadingToDto(
         productBarcode: line.product.barcode,
         productUnit: line.product.unit,
         productPriceTTC: computePriceTTC(line.product.salePrice.toNumber(), line.product.taxRate.toNumber()),
+        supplierId: line.product.defaultSupplier?.id ?? null,
+        supplierName: line.product.defaultSupplier?.name ?? null,
         quantity: line.quantity,
         initialQuantity,
         reloadedQuantity: line.reloadedQuantity,
@@ -439,7 +445,7 @@ export async function getLoadingById(id: string): Promise<TruckLoadingDto> {
     where: { id, organizationId: currentUser.organizationId },
     include: loadingInclude,
   });
-  if (!loading) throw new OperationsServiceError("Chargement introuvable.", 404);
+  if (!loading) throw new OperationsServiceError("Transfert de stock introuvable.", 404);
   return mapTruckLoadingToDto(loading);
 }
 
@@ -623,9 +629,9 @@ export async function updateOpenLoadingLines(
             },
           },
         });
-        if (!current) throw new OperationsServiceError("Chargement introuvable.", 404);
+        if (!current) throw new OperationsServiceError("Transfert de stock introuvable.", 404);
         if (current.status !== "DRAFT") {
-          throw new OperationsServiceError("Ce chargement est ferme et n'est plus modifiable.", 409);
+          throw new OperationsServiceError("Ce transfert de stock est ferme et n'est plus modifiable.", 409);
         }
 
         await assertProductsExist(tx, lines.map((line) => line.productId), user.organizationId);
@@ -710,7 +716,7 @@ export async function closeLoading(
   // VALIDATED) before doing anything else, so a retry after a Serializable
   // conflict either safely re-runs the same close on a still-DRAFT loading,
   // or - if the other concurrent request's close already committed -
-  // cleanly hits the "Ce chargement est deja ferme." 409 below instead of
+  // cleanly hits the "Ce transfert de stock est deja ferme." 409 below instead of
   // double-applying the stock adjustment. Reuses withLoadingSerializableRetry
   // (see createOrReuseOpenLoading above).
   const loading = await withLoadingSerializableRetry(() =>
@@ -733,12 +739,12 @@ export async function closeLoading(
           },
         },
       });
-      if (!current) throw new OperationsServiceError("Chargement introuvable.", 404);
+      if (!current) throw new OperationsServiceError("Transfert de stock introuvable.", 404);
       if (current.status === "VALIDATED") {
-        throw new OperationsServiceError("Ce chargement est deja ferme.", 409);
+        throw new OperationsServiceError("Ce transfert de stock est deja ferme.", 409);
       }
       if (current.status !== "DRAFT") {
-        throw new OperationsServiceError("Chargement annule, fermeture impossible.", 409);
+        throw new OperationsServiceError("Transfert de stock annule, fermeture impossible.", 409);
       }
       if (current.lines.length === 0) {
         throw new OperationsServiceError("Ajoutez au moins un produit.", 422);
@@ -878,9 +884,9 @@ export async function updateLoadingLines(
   for (const line of parsed.data.lines) {
     if (seen.has(line.productId)) {
       throw new OperationsServiceError(
-        "Ce produit existe deja dans ce chargement.",
+        "Ce produit existe deja dans ce transfert de stock.",
         422,
-        { [line.productId]: "Ce produit existe deja dans ce chargement." },
+        { [line.productId]: "Ce produit existe deja dans ce transfert de stock." },
       );
     }
     seen.add(line.productId);
@@ -910,9 +916,9 @@ export async function updateLoadingLines(
           },
         },
       });
-      if (!current) throw new OperationsServiceError("Chargement introuvable.", 404);
+      if (!current) throw new OperationsServiceError("Transfert de stock introuvable.", 404);
       if (current.status === "CANCELLED") {
-        throw new OperationsServiceError("Chargement annule, modification impossible.", 409);
+        throw new OperationsServiceError("Transfert de stock annule, modification impossible.", 409);
       }
 
       await assertProductsExist(
@@ -1161,7 +1167,7 @@ async function withLoadingSerializableRetry<T>(
       await sleep(Math.min(800, 10 * 1.5 ** attempt) * (0.5 + Math.random()));
     }
   }
-  throw new OperationsServiceError("Impossible de creer le chargement.", 500);
+  throw new OperationsServiceError("Impossible de creer le transfert de stock.", 500);
 }
 
 export async function createLoading(
@@ -1200,7 +1206,7 @@ export async function createLoading(
         throw new OperationsServiceError("Statut de tournee incompatible.", 409);
       }
       if (tour.loading) {
-        throw new OperationsServiceError("Cette tournee possede deja un chargement.", 409);
+        throw new OperationsServiceError("Cette tournee possede deja un transfert de stock.", 409);
       }
 
       await assertProductsExist(tx, lines.map((line) => line.productId), user.organizationId);
@@ -1297,9 +1303,9 @@ export async function updateDraftLoading(
           },
         },
       });
-      if (!current) throw new OperationsServiceError("Chargement introuvable.", 404);
+      if (!current) throw new OperationsServiceError("Transfert de stock introuvable.", 404);
       if (current.status !== "DRAFT") {
-        throw new OperationsServiceError("Un chargement valide est en lecture seule.", 409);
+        throw new OperationsServiceError("Un transfert de stock valide est en lecture seule.", 409);
       }
 
       await assertProductsExist(tx, lines.map((line) => line.productId), user.organizationId);
@@ -1382,9 +1388,9 @@ export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDt
           },
         },
       });
-      if (!current) throw new OperationsServiceError("Chargement introuvable.", 404);
+      if (!current) throw new OperationsServiceError("Transfert de stock introuvable.", 404);
       if (current.status !== "DRAFT") {
-        throw new OperationsServiceError("Un chargement valide ne peut pas etre annule.", 409);
+        throw new OperationsServiceError("Un transfert de stock valide ne peut pas etre annule.", 409);
       }
 
       if (current.stockAppliedAt) {
@@ -1468,12 +1474,12 @@ export async function validateLoading(
           },
         },
       });
-      if (!current) throw new OperationsServiceError("Chargement introuvable.", 404);
+      if (!current) throw new OperationsServiceError("Transfert de stock introuvable.", 404);
       if (current.status === "VALIDATED") {
         throw new OperationsServiceError("Cette fiche est deja validee.", 409);
       }
       if (current.status !== "DRAFT") {
-        throw new OperationsServiceError("Chargement annule, validation impossible.", 409);
+        throw new OperationsServiceError("Transfert de stock annule, validation impossible.", 409);
       }
       if (!current.tour) {
         throw new OperationsServiceError("Tournee introuvable.", 404);
@@ -1767,7 +1773,7 @@ async function assertProductsExist(
     },
   });
   if (count !== productIds.length) {
-    throw new OperationsServiceError("Un produit du chargement est introuvable.", 422);
+    throw new OperationsServiceError("Un produit du transfert de stock est introuvable.", 422);
   }
 }
 
@@ -1909,11 +1915,11 @@ async function applyLoadingStockDelta(
 
       if (!truckLevel || truckAvailable < reverseQuantity) {
         throw new OperationsServiceError(
-          "Le camion ne possede pas assez de stock pour reduire ce chargement.",
+          "Le camion ne possede pas assez de stock pour reduire ce transfert de stock.",
           422,
           {
             [productId]:
-              "Le camion ne possede pas assez de stock pour reduire ce chargement.",
+              "Le camion ne possede pas assez de stock pour reduire ce transfert de stock.",
           },
         );
       }
@@ -2002,12 +2008,12 @@ export function mapLoadingError(error: unknown) {
   const prismaError = error as { code?: string };
   if (prismaError.code === "P2002") {
     return new OperationsServiceError(
-      "Une fiche de chargement est deja ouverte pour ce camion.",
+      "Une fiche de transfert de stock est deja ouverte pour ce camion.",
       409,
     );
   }
   if (prismaError.code === "P2025") {
-    return new OperationsServiceError("Chargement introuvable.", 404);
+    return new OperationsServiceError("Transfert de stock introuvable.", 404);
   }
   return new OperationsServiceError("Une erreur est survenue.", 500);
 }

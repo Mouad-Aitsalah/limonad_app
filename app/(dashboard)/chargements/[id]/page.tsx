@@ -7,7 +7,7 @@ import { getProductPickerPreload } from "@/lib/server/products";
 import { getLoadingById } from "@/lib/server/truck-loadings";
 
 export const metadata: Metadata = {
-  title: "Detail chargement",
+  title: "Detail transfert de stock",
 };
 
 type PageProps = { params: Promise<{ id: string }> };

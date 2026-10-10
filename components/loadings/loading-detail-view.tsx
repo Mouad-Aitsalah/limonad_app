@@ -123,7 +123,7 @@ export function LoadingDetailView({
   }
 
   function removeLine(productId: string, productName: string) {
-    if (!window.confirm(`Voulez-vous vraiment supprimer ${productName} du chargement ?`)) {
+    if (!window.confirm(`Voulez-vous vraiment supprimer ${productName} du transfert de stock ?`)) {
       return;
     }
     setLines((current) => current.filter((line) => line.productId !== productId));
@@ -132,7 +132,7 @@ export function LoadingDetailView({
   function addProduct(product: ProductDto) {
     const existing = lines.find((line) => line.productId === product.id);
     if (existing) {
-      toast.error("Ce produit existe deja dans ce chargement.");
+      toast.error("Ce produit existe deja dans ce transfert de stock.");
       setProductSearch("");
       setSuggestionsOpen(false);
       return;
@@ -226,7 +226,7 @@ export function LoadingDetailView({
       setLoading(body.loading);
       setLines(buildLinesFromLoading(body.loading));
       setMode("view");
-      toast.success(`Chargement ${body.loading.displayNumber} modifie avec succes.`);
+      toast.success(`Transfert de stock ${body.loading.displayNumber} modifie avec succes.`);
       router.refresh();
     } finally {
       setBusy(false);
@@ -244,7 +244,7 @@ export function LoadingDetailView({
         <div>
           <div className="flex items-center gap-3">
             <h1 className="font-heading text-2xl font-semibold text-foreground">
-              Chargement {loading.displayNumber}
+              Transfert de stock {loading.displayNumber}
             </h1>
             <LoadingStatusBadge status={loading.status} />
           </div>
@@ -309,7 +309,7 @@ export function LoadingDetailView({
       <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-heading text-lg font-semibold">Produits du chargement</h2>
+            <h2 className="font-heading text-lg font-semibold">Produits du transfert de stock</h2>
             <p className="text-sm text-muted-foreground">Quantite totale : {totalQuantity}</p>
           </div>
 
@@ -333,7 +333,7 @@ export function LoadingDetailView({
                       colSpan={mode === "edit" ? 7 : 6}
                       className="py-8 text-center text-muted-foreground"
                     >
-                      Aucun produit dans ce chargement.
+                      Aucun produit dans ce transfert de stock.
                     </TableCell>
                   </TableRow>
                 ) : (

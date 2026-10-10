@@ -395,6 +395,10 @@ export interface TruckLoadingLineDto {
    *  or amounts. Embedded so an already-loaded line shows its price even when
    *  its product is not in the picker's current preload. */
   productPriceTTC: number;
+  /** The product's default supplier (read only; null when the product has none).
+   *  Embedded for the /chargements supplier filter - never used for stock or amounts. */
+  supplierId?: string | null;
+  supplierName?: string | null;
   quantity: number;
   initialQuantity: number;
   reloadedQuantity: number;
