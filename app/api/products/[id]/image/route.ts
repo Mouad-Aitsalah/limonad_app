@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { AuthServiceError } from "@/lib/server/auth";
+import { getCurrentClient } from "@/lib/server/client-auth";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 
@@ -26,6 +27,12 @@ const DATA_URI_PATTERN = /^data:([^;,]*)(;base64)?,([\s\S]*)$/;
  * access is impossible (`organizationId` is always taken from the session,
  * never trusted from the URL).
  *
+ * CLIENT PLATFORM (branch `client-platform`): the external customer catalog
+ * (lib/server/client-catalog.ts) also links here for a product's photo. A
+ * staff session is tried first, unchanged; only when there is none does this
+ * fall back to a client session (lib/server/client-auth.ts) - same
+ * organizationId-scoped lookup either way, never a separate, looser check.
+ *
  * CORS: same pattern as every other /api/products/* and /api/driver/* route
  * the Android shell calls cross-origin with a Bearer token -
  * requireOrganizationUser() already accepts that Bearer transparently (see
@@ -46,15 +53,19 @@ export async function GET(request: Request, context: ProductImageRouteContext) {
   const { id } = await context.params;
 
   try {
-    const user = await requireOrganizationUser([
-      "admin",
-      "depot_manager",
-      "cashier",
-      "driver",
-    ]);
+    let organizationId: string;
+    try {
+      const user = await requireOrganizationUser(["admin", "depot_manager", "cashier", "driver"]);
+      organizationId = user.organizationId;
+    } catch (staffError) {
+      if (!(staffError instanceof AuthServiceError)) throw staffError;
+      const client = await getCurrentClient();
+      if (!client) throw staffError;
+      organizationId = client.organizationId;
+    }
 
     const product = await prisma.product.findFirst({
-      where: { id, organizationId: user.organizationId },
+      where: { id, organizationId },
       select: { imageUrl: true },
     });
 
