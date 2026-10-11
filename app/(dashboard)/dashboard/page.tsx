@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
+import { CommercialAnalysisTabs } from "@/components/dashboard/commercial/commercial-analysis-tabs";
 import { DashboardForecastSection } from "@/components/dashboard/forecast/dashboard-forecast-section";
 import { ForecastSectionSkeleton } from "@/components/dashboard/forecast/forecast-section-view";
 import { DirectionCategoryChart } from "@/components/dashboard/direction-category-chart";
@@ -11,6 +12,7 @@ import { DirectionStockWatchCard } from "@/components/dashboard/direction-stock-
 import { DirectionTopCustomersCard } from "@/components/dashboard/direction-top-customers";
 import { DirectionTopProductsCard } from "@/components/dashboard/direction-top-products";
 import { DirectionWatchlistCard } from "@/components/dashboard/direction-watchlist";
+import { canViewCommercialAnalysis } from "@/lib/commercial-analysis/access";
 import { canViewForecast } from "@/lib/forecasting/forecast-access";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import { getDirectionDashboardData } from "@/lib/server/dashboard-direction";
@@ -40,6 +42,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   // sees the section (getDashboardForecast refuses the cashier as well).
   const sessionUser = await getCurrentSessionUser();
   const showForecast = canViewForecast(sessionUser?.role);
+  // "Analyse commerciale" (sales by driver / product / supplier, weekly coverage): admin only,
+  // also enforced by its API routes.
+  const showCommercialAnalysis = canViewCommercialAnalysis(sessionUser?.role);
 
   return (
     <div className="space-y-6">
@@ -71,6 +76,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           <DashboardForecastSection />
         </Suspense>
       ) : null}
+
+      {showCommercialAnalysis ? <CommercialAnalysisTabs /> : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
         <DirectionEvolutionChart granularity={data.salesEvolution.granularity} points={data.salesEvolution.points} />
