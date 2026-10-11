@@ -55,9 +55,15 @@ export async function saveCachedProducts(
   return result.ok;
 }
 
+/**
+ * Returned in the order the products were saved: saveCachedProducts inserts
+ * them in the order of the server's context, which is the best-sellers-first
+ * ranking (lib/server/pos-product-ranking.ts), so ORDER BY rowid keeps that
+ * order offline too. Without it SQLite answers in primary-key order (by id).
+ */
 export async function getCachedProducts(scope: Scope): Promise<CachedProduct[]> {
   const rows = await queryRows(
-    `SELECT * FROM cached_products WHERE organizationId = ? AND driverId = ?`,
+    `SELECT * FROM cached_products WHERE organizationId = ? AND driverId = ? ORDER BY rowid ASC`,
     [scope.organizationId, scope.driverId],
   );
   return rows.map(mapProductRow);

@@ -19,6 +19,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { getPosCustomerPreload } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
+import { orderByIds, rankPosProducts } from "@/lib/server/pos-product-ranking";
 import { toLightweightProductImageUrl } from "@/lib/server/product-image-url";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { markCustomerDeliveredOnTour } from "@/lib/server/driver-tour";
@@ -161,14 +162,20 @@ export async function getDriverPosContext(
     }, driver.truck, activeTour);
   }
 
-  const [productRows, customers, bankAccounts] = await Promise.all([
-    // Same rule as the counter POS: visibility = every ACTIVE product the
-    // driver is allowed to sell, NOT "what has a stock row on this truck".
-    // A product not (yet) loaded on the truck (no StockLevel row) is still
-    // shown and sellable at 0 / negative. Bounded (LIMIT + 1 -> truncated
-    // -> search fallback). minimumStock is never a filter.
-    prisma.product.findMany({
-      where: { organizationId: user.organizationId, status: "ACTIVE" },
+  // Best sellers first - the SAME ranking as the counter POS (rankPosProducts:
+  // total quantity sold over the organisation's real sales, never-sold products
+  // after, ties by designation). It decides the order AND which
+  // POS_PRODUCT_LIST_LIMIT products are preloaded; the rows are then fetched by
+  // id and put back in that order. Read only. The order is the array order of
+  // `products`, which the offline cache keeps (see getCachedProducts).
+  const loadRankedPreloadProducts = async () => {
+    const ranked = await rankPosProducts(prisma, {
+      organizationId: user.organizationId,
+      limit: POS_PRODUCT_LIST_LIMIT + 1,
+    });
+    const rankedIds = ranked.map((entry) => entry.id);
+    const rows = await prisma.product.findMany({
+      where: { id: { in: rankedIds }, organizationId: user.organizationId, status: "ACTIVE" },
       select: {
         id: true,
         reference: true,
@@ -181,9 +188,17 @@ export async function getDriverPosContext(
         defaultSupplierId: true,
         defaultSupplier: { select: { name: true, logoUrl: true } },
       },
-      orderBy: { name: "asc" },
-      take: POS_PRODUCT_LIST_LIMIT + 1,
-    }),
+    });
+    return orderByIds(rows, rankedIds);
+  };
+
+  const [productRows, customers, bankAccounts] = await Promise.all([
+    // Same rule as the counter POS: visibility = every ACTIVE product the
+    // driver is allowed to sell, NOT "what has a stock row on this truck".
+    // A product not (yet) loaded on the truck (no StockLevel row) is still
+    // shown and sellable at 0 / negative. Bounded (LIMIT + 1 -> truncated
+    // -> search fallback). minimumStock is never a filter. Order: best sellers first.
+    loadRankedPreloadProducts(),
     // Phase 3: bounded preload instead of every customer. The browsable list
     // is ONLY the customers this driver created (driverOwnCustomersWhere);
     // initialCustomerId - e.g. a tour-visit deep link's ?customerId=... - is

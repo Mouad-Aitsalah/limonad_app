@@ -374,7 +374,7 @@ test("the sold statuses are the project's real-sale perimeter (no DRAFT, no CANC
   assert.equal((SOLD_SALE_STATUSES as readonly string[]).includes("CANCELLED"), false);
 });
 
-test("wiring: the counter POS preload and its search use the ranking; the driver POS and the other screens do not", () => {
+test("wiring: the counter POS and the driver POS use the SAME ranking (preload and search); the other screens do not", () => {
   const sales = code("./counter-sales.ts");
   assert.match(sales, /const ranked = await rankPosProducts\(prisma, \{\s+organizationId: sessionUser\.organizationId,\s+limit: POS_PRODUCT_LIST_LIMIT \+ 1,/);
   assert.match(sales, /soldQuantity: soldByProductId\.get\(product\.id\) \?\? 0,/);
@@ -402,7 +402,16 @@ test("wiring: the counter POS preload and its search use the ranking; the driver
   assert.match(hook, /sort: "sold"/);
   assert.match(hook, /options\.searchRemote \?\? \(rankBySales \? rankedSearchRemote : defaultSearchRemote\)/);
   assert.match(code("../../components/pos/pos-layout.tsx"), /rankBySales: true,/);
-  assert.equal(/rankBySales/.test(code("../../components/driver-pos/driver-pos-view.tsx")), false, "driver POS unchanged");
+  // the driver POS: same function, same order - web page, /api/driver/pos (web + Android shell) and the search
+  const driver = code("./driver-sales.ts");
+  assert.match(driver, /const ranked = await rankPosProducts\(prisma, \{\s+organizationId: user\.organizationId,\s+limit: POS_PRODUCT_LIST_LIMIT \+ 1,/);
+  assert.match(driver, /return orderByIds\(rows, rankedIds\);/);
+  assert.match(driver, /loadRankedPreloadProducts\(\),/);
+  assert.equal(/orderBy: \{ name: "asc" \},\s+take: POS_PRODUCT_LIST_LIMIT \+ 1/.test(driver), false, "the name-ordered driver preload is gone");
+  assert.match(code("../../components/driver-pos/driver-pos-view.tsx"), /rankBySales: true,/);
+  assert.match(code("../../mobile/driver/src/screens/PosScreen.tsx"), /limit: String\(limit\), sort: "sold" \}\);/);
+  // no second implementation: the ranking SQL exists once
+  assert.equal(/SUM\(sl\.quantity\)/.test(driver), false);
 });
 
 test("the ranking is one aggregated query: no query inside a per-product loop", () => {

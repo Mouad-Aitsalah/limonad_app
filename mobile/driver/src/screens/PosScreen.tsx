@@ -307,7 +307,8 @@ export function PosScreen({ token, offlineContext, deviceOnline, onBack }: PosSc
   const searchProductsRemote = React.useCallback<PosProductRemoteSearch>(
     async ({ query, locationId, limit }) => {
       if (!token) return [];
-      const params = new URLSearchParams({ q: query, locationId, limit: String(limit) });
+      // sort=sold: best sellers first, like the counter POS and the preloaded list
+      const params = new URLSearchParams({ q: query, locationId, limit: String(limit), sort: "sold" });
       const outcome = await mobileFetch<{ products?: DriverPosProductDto[] }>(
         `/api/products/search?${params.toString()}`,
         token,

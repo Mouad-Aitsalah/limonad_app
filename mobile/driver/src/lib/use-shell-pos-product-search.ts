@@ -37,7 +37,7 @@ export function useShellPosProductSearch(
     let cancelled = false;
     const key = trimmedSearch;
     const timer = setTimeout(() => {
-      const query = new URLSearchParams({ q: key, locationId: locationId as string, limit: "50" });
+      const query = new URLSearchParams({ q: key, locationId: locationId as string, limit: "50", sort: "sold" });
       fetch(apiUrl(`/api/products/search?${query.toString()}`), {
         headers: { Authorization: `Bearer ${token}` },
       })

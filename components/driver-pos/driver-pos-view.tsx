@@ -806,6 +806,9 @@ export function DriverPosView({
       locationId: context.stockLocationId,
       normalize,
       searchRemote: searchProductsRemote,
+      // same best-seller order as the counter POS for the truncated-catalogue
+      // search (used when no `searchRemote` is injected; the shell injects its own)
+      rankBySales: true,
     },
   );
 
