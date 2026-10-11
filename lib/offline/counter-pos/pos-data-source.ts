@@ -90,6 +90,7 @@ export function productRecordFromDto(
     supplierLogoUrl: dto.supplierLogoUrl ?? null,
     priceToken: dto.priceToken ?? null,
     soldQuantity: dto.soldQuantity ?? 0,
+    quantityTiers: dto.quantityTiers ?? null,
     syncedAt,
   };
 }
@@ -113,6 +114,7 @@ export function productDtoFromRecord(
     supplierLogoUrl: record.supplierLogoUrl,
     ...(record.soldQuantity ? { soldQuantity: record.soldQuantity } : {}),
     ...(record.priceToken ? { priceToken: record.priceToken } : {}),
+    ...(record.quantityTiers ? { quantityTiers: record.quantityTiers } : {}),
   };
 }
 
@@ -294,6 +296,7 @@ export function hydrateCounterPosSnapshot(
       message: context.message ?? null,
       productsTruncated: context.productsTruncated,
       bankAccounts: context.bankAccounts ?? [],
+      quantityPricingEnabled: context.quantityPricingEnabled === true,
       syncedAt,
     };
 
@@ -400,7 +403,18 @@ function sameProduct(a: ProductRecord, b: ProductRecord): boolean {
     a.supplierName === b.supplierName &&
     a.supplierLogoUrl === b.supplierLogoUrl &&
     (a.soldQuantity ?? 0) === (b.soldQuantity ?? 0) &&
-    a.priceToken === b.priceToken
+    a.priceToken === b.priceToken &&
+    sameQuantityTiers(a.quantityTiers ?? null, b.quantityTiers ?? null)
+  );
+}
+
+function sameQuantityTiers(a: ProductRecord["quantityTiers"], b: ProductRecord["quantityTiers"]): boolean {
+  if (!a || !b) return !a && !b;
+  return (
+    a.retailPriceHT === b.retailPriceHT &&
+    a.semiWholesalePriceHT === b.semiWholesalePriceHT &&
+    a.semiWholesaleMinQty === b.semiWholesaleMinQty &&
+    a.wholesaleMinQty === b.wholesaleMinQty
   );
 }
 
@@ -486,6 +500,7 @@ export async function loadCachedCounterPosContext(
     products,
     productsTruncated: contextRecord.productsTruncated,
     bankAccounts: contextRecord.bankAccounts,
+    quantityPricingEnabled: contextRecord.quantityPricingEnabled === true,
   };
   if (options.applyPendingSales !== false) context = await withPendingSales(scope, context);
 

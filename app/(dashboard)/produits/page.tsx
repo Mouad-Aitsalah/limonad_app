@@ -7,17 +7,20 @@ import {
   getProductsPage,
   getSuppliers,
 } from "@/lib/server/products";
+import { getProductColumnSettings } from "@/lib/server/organization-settings";
 
 export const metadata: Metadata = {
   title: "Produits",
 };
 
 export default async function ProduitsPage() {
-  const [initialPage, categories, brands, suppliers] = await Promise.all([
-    getProductsPage(),
+  const [initialPage, categories, brands, suppliers, columns] = await Promise.all([
+    // withStock: the "Quantité en stock" column (one grouped query per page).
+    getProductsPage({ withStock: true }),
     getCategories(),
     getBrands(),
     getSuppliers(),
+    getProductColumnSettings(),
   ]);
 
   return (
@@ -26,6 +29,8 @@ export default async function ProduitsPage() {
       categories={categories}
       brands={brands}
       suppliers={suppliers}
+      initialColumnSettings={columns.settings}
+      canEditColumns={columns.canEdit}
     />
   );
 }

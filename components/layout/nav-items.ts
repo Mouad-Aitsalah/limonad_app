@@ -148,6 +148,7 @@ export const navItems: NavItem[] = [
     children: [
       { label: "Utilisateurs", href: "/utilisateurs", roles: ["admin"] },
       { label: "Paramètres", href: "/parametres/identite", roles: ["admin"] },
+      { label: "Tarification", href: "/parametres/tarification", roles: ["admin"] },
     ],
   },
   {

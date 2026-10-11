@@ -13,7 +13,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { computePriceTTC } from "@/lib/product-pricing";
-import { formatCurrency } from "@/lib/utils";
+import {
+  DEFAULT_PRODUCT_COLUMN_SETTINGS,
+  visibleProductColumns,
+  type ProductColumnKey,
+  type ProductColumnSettings,
+} from "@/lib/product-columns";
+import { cn, formatCurrency } from "@/lib/utils";
 import type { ProductDto } from "@/types/product-dto";
 
 const passthroughImageLoader = ({ src }: { src: string }) => src;
@@ -40,6 +46,81 @@ type ProductsTableProps = {
   onView: (product: ProductDto) => void;
   onEdit: (product: ProductDto) => void;
   onToggleStatus: (product: ProductDto) => void;
+  /** The organisation's column choice (lib/product-columns.ts). Absent = the default columns. */
+  columnSettings?: ProductColumnSettings;
+};
+
+/** A tier price HT shown TTC, or "-" when it is not set. */
+function optionalPriceTTC(priceHT: number | null | undefined, taxRate: number) {
+  return priceHT == null ? "-" : formatCurrency(computePriceTTC(priceHT, taxRate));
+}
+
+/** The content of one cell - one entry per configurable column. */
+function renderProductCell(key: ProductColumnKey, product: ProductDto, active: boolean) {
+  switch (key) {
+    case "photo":
+      return <ProductThumbnail imageUrl={product.imageUrl} name={product.name} />;
+    case "reference":
+      return product.reference;
+    case "designation":
+      return product.name;
+    case "category":
+      return product.category.name;
+    case "supplier":
+      return product.supplier?.name ?? "-";
+    case "purchasePriceTTC":
+      return formatCurrency(computePriceTTC(product.purchasePrice, product.taxRate));
+    case "retailPriceTTC":
+      return optionalPriceTTC(product.retailPrice, product.taxRate);
+    case "semiWholesalePriceTTC":
+      return optionalPriceTTC(product.semiWholesalePrice, product.taxRate);
+    case "salePriceTTC":
+      return formatCurrency(computePriceTTC(product.salePrice, product.taxRate));
+    case "semiWholesaleMinQty":
+      return product.semiWholesaleMinQty ?? "-";
+    case "wholesaleMinQty":
+      return product.wholesaleMinQty ?? "-";
+    case "unit":
+      return product.unit || "-";
+    case "taxRate":
+      return `${product.taxRate.toLocaleString("fr-FR")}%`;
+    case "stockQuantity":
+      return product.stockQuantity == null ? "-" : product.stockQuantity.toLocaleString("fr-FR");
+    case "minimumStock":
+      return product.minimumStock;
+    case "status":
+      return (
+        <Badge
+          variant="outline"
+          className={
+            active
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-slate-200 bg-slate-50 text-slate-600"
+          }
+        >
+          <BooleanIndicator value={active} label={active ? "Actif" : "Inactif"} />
+          {active ? "Actif" : "Inactif"}
+        </Badge>
+      );
+  }
+}
+
+/** Cell classes - the existing columns keep exactly their previous look. */
+const CELL_CLASS: Partial<Record<ProductColumnKey, string>> = {
+  reference: "font-medium text-foreground",
+  designation: "text-foreground",
+  category: "text-muted-foreground",
+  supplier: "text-muted-foreground",
+  purchasePriceTTC: "text-right tabular-nums",
+  retailPriceTTC: "text-right tabular-nums",
+  semiWholesalePriceTTC: "text-right tabular-nums",
+  salePriceTTC: "text-right font-medium tabular-nums",
+  semiWholesaleMinQty: "text-right tabular-nums",
+  wholesaleMinQty: "text-right tabular-nums",
+  unit: "text-muted-foreground",
+  taxRate: "text-right tabular-nums",
+  stockQuantity: "text-right tabular-nums",
+  minimumStock: "text-right text-muted-foreground tabular-nums",
 };
 
 export function ProductsTable({
@@ -47,7 +128,10 @@ export function ProductsTable({
   onView,
   onEdit,
   onToggleStatus,
+  columnSettings = DEFAULT_PRODUCT_COLUMN_SETTINGS,
 }: ProductsTableProps) {
+  const columns = visibleProductColumns(columnSettings);
+
   if (products.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -77,16 +161,15 @@ export function ProductsTable({
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Photo</TableHead>
-          <TableHead>Reference</TableHead>
-          <TableHead>Designation</TableHead>
-          <TableHead>Categorie</TableHead>
-          <TableHead>Fournisseur</TableHead>
-          <TableHead className="text-right">Prix achat TTC</TableHead>
-          <TableHead className="text-right">Prix vente TTC</TableHead>
-          <TableHead className="text-right">TVA</TableHead>
-          <TableHead className="text-right">Stock min.</TableHead>
-          <TableHead>Statut</TableHead>
+          {columns.map((column) => (
+            <TableHead
+              key={column.key}
+              data-column={column.key}
+              className={column.align === "right" ? "text-right" : undefined}
+            >
+              {column.header}
+            </TableHead>
+          ))}
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
@@ -96,50 +179,18 @@ export function ProductsTable({
 
           return (
             <TableRow key={product.id}>
-              <TableCell>
-                <ProductThumbnail
-                  imageUrl={product.imageUrl}
-                  name={product.name}
-                />
-              </TableCell>
-              <TableCell className="font-medium text-foreground">
-                {product.reference}
-              </TableCell>
-              <TableCell className="text-foreground">{product.name}</TableCell>
-              <TableCell className="text-muted-foreground">
-                {product.category.name}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {product.supplier?.name ?? "-"}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatCurrency(computePriceTTC(product.purchasePrice, product.taxRate))}
-              </TableCell>
-              <TableCell className="text-right font-medium tabular-nums">
-                {formatCurrency(computePriceTTC(product.salePrice, product.taxRate))}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {product.taxRate.toLocaleString("fr-FR")}%
-              </TableCell>
-              <TableCell className="text-right text-muted-foreground tabular-nums">
-                {product.minimumStock}
-              </TableCell>
-              <TableCell>
-                <Badge
-                  variant="outline"
-                  className={
-                    active
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border-slate-200 bg-slate-50 text-slate-600"
-                  }
+              {columns.map((column) => (
+                <TableCell
+                  key={column.key}
+                  className={cn(
+                    CELL_CLASS[column.key],
+                    // a negative stock reads red, like everywhere else
+                    column.key === "stockQuantity" && (product.stockQuantity ?? 0) < 0 && "text-red-600",
+                  )}
                 >
-                  <BooleanIndicator
-                    value={active}
-                    label={active ? "Actif" : "Inactif"}
-                  />
-                  {active ? "Actif" : "Inactif"}
-                </Badge>
-              </TableCell>
+                  {renderProductCell(column.key, product, active)}
+                </TableCell>
+              ))}
               <TableCell>
                 <div className="flex justify-end gap-2">
                   <Button

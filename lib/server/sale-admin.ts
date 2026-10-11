@@ -5,6 +5,11 @@ import { z } from "zod";
 import { addMoney, MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { computeDiscountedLineTotals } from "@/lib/pos-discount";
 import { prisma } from "@/lib/prisma";
+import {
+  quantityTierValuesFromRow,
+  resolveQuantityPrice,
+  sumQuantitiesByProduct,
+} from "@/lib/quantity-pricing";
 import { computeSaleTotals } from "@/lib/sale-rounding";
 import {
   computeCashSaleStampAmount,
@@ -16,6 +21,7 @@ import { computeCustomerDebt } from "@/lib/server/customer-settlements";
 import { releaseCustomerOrderForCancelledSale } from "@/lib/server/customer-orders-core";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { readQuantityPricingEnabled } from "@/lib/server/organization-settings";
 import {
   createMixedPayments,
   mapSaleToDto,
@@ -441,15 +447,28 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
             organizationId: sessionUser.organizationId,
             status: "ACTIVE",
           },
-          select: { id: true, salePrice: true, taxRate: true, purchasePrice: true },
+          select: {
+            id: true,
+            salePrice: true,
+            retailPrice: true,
+            semiWholesalePrice: true,
+            semiWholesaleMinQty: true,
+            wholesaleMinQty: true,
+            taxRate: true,
+            purchasePrice: true,
+          },
         });
         if (products.length !== productIds.length) {
           throw new OperationsServiceError("Un produit est introuvable.", 422);
         }
 
         // A manual per-line price from the edit cart wins; otherwise the
-        // historical price (product already on the sale) or the catalogue
-        // price (product added during the edit).
+        // historical price (product already on the sale - never re-priced) or
+        // the catalogue price (product added during the edit), which is the
+        // quantity price when the organisation's setting is on - the same rule
+        // the POS edit cart shows (lib/quantity-pricing.ts).
+        const quantityPricingEnabled = await readQuantityPricingEnabled(tx, sessionUser.organizationId);
+        const quantityByProduct = sumQuantitiesByProduct(newLines);
         const originalLineByProduct = new Map(sale.lines.map((line) => [line.productId, line]));
         const computedLines = newLines.map((line) => {
           const original = originalLineByProduct.get(line.productId);
@@ -459,7 +478,12 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
               ? roundMoney(line.unitPriceHT)
               : original
                 ? original.unitPriceHT.toNumber()
-                : product.salePrice.toNumber();
+                : resolveQuantityPrice({
+                    enabled: quantityPricingEnabled,
+                    wholesalePriceHT: product.salePrice.toNumber(),
+                    tiers: quantityTierValuesFromRow(product),
+                    quantity: quantityByProduct.get(line.productId) ?? line.quantity,
+                  }).unitPriceHT;
           const unitCostHT = original
             ? original.unitCostHT.toNumber()
             : product.purchasePrice.toNumber();

@@ -1,3 +1,5 @@
+import type { QuantityTiers } from "@/lib/quantity-pricing";
+
 export interface DepotDto {
   id: string;
   code: string;
@@ -673,6 +675,12 @@ export interface DriverPosProductDto {
    *  can flag a below-cost unit price. Never sent to cashiers or drivers, and
    *  never used for pricing or totals. Absent = unknown -> no alert. */
   purchasePriceHT?: number;
+  /** COUNTER-POS-ONLY: the product's quantity pricing tiers (HT), present only
+   *  when all four are set and valid (lib/quantity-pricing.ts). Used to show the
+   *  cart price when CounterPosContextDto.quantityPricingEnabled is on; the
+   *  server re-reads them at the sale - never trusted from the browser. Never
+   *  sent to the driver POS, which always sells at the wholesale price. */
+  quantityTiers?: QuantityTiers;
 }
 
 /** Active 5141 accounting account, offered as the "Compte bancaire" choice
@@ -723,6 +731,9 @@ export interface CounterPosContextDto {
   productsTruncated: boolean;
   /** Active 5141 accounts for the BANK_TRANSFER "Compte bancaire" picker. */
   bankAccounts: PosBankAccountOptionDto[];
+  /** Organization.quantityPricingEnabled (Paramètres -> Tarification). Absent
+   *  (an offline context cached before this setting existed) = off. */
+  quantityPricingEnabled?: boolean;
 }
 
 export interface SaleLineDto {

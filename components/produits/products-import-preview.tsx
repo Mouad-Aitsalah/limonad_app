@@ -22,6 +22,12 @@ import {
   type ServerSummary,
 } from "@/lib/products-import-client";
 import {
+  findOptionalImportColumns,
+  findRequiredImportHeader,
+  parseOptionalImportCells,
+  type OptionalImportValues,
+} from "@/lib/products-import-pricing";
+import {
   PRODUCT_IMPORT_MAX_ROWS,
   formatImportCount,
   importRowLimitMessage,
@@ -42,6 +48,8 @@ type Row = {
   salePriceTTC: number;
   taxRate: number;
   targetStock: number;
+  /** Optional columns present on this line (prix_detail, prix_semi_gros, Qped, Qgros, unite). */
+  optional: OptionalImportValues;
   status: LocalStatus;
   message: string;
 };
@@ -106,6 +114,11 @@ const CHANGE_LABELS: Record<string, string> = {
   salePriceHT: "Prix vente HT",
   taxRate: "TVA",
   stock: "Stock",
+  retailPriceHT: "Prix détail HT",
+  semiWholesalePriceHT: "Prix semi-gros HT",
+  semiWholesaleMinQty: "Qped",
+  wholesaleMinQty: "Qgros",
+  unit: "Unité",
 };
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "ALL", label: "Tous" },
@@ -144,6 +157,7 @@ function toLine(row: Row): ImportLineInput {
     salePriceTTC: row.salePriceTTC,
     taxRate: row.taxRate,
     targetStock: row.targetStock,
+    ...row.optional,
   };
 }
 
@@ -237,8 +251,11 @@ export function ProductsImportPreview() {
       const headerRow = (grid[0] ?? []).map(normHeader);
       const columnIndex: Record<string, number> = {};
       for (const header of REQUIRED_HEADERS) {
-        columnIndex[HEADER_ALIASES[header]] = headerRow.indexOf(header);
+        // "prix_gros" is accepted as another spelling of "prixGros" (same field).
+        columnIndex[HEADER_ALIASES[header]] = findRequiredImportHeader(headerRow, header);
       }
+      // Optional columns: absent from an old file = nothing changes for them.
+      const optionalColumns = findOptionalImportColumns(grid[0] ?? []);
       const missing = REQUIRED_HEADERS.filter((header) => columnIndex[HEADER_ALIASES[header]] < 0);
       if (missing.length) {
         setRows([]);
@@ -262,6 +279,10 @@ export function ProductsImportPreview() {
         const salePriceTTC = parseNumber(cell("salePriceTTC"));
         const taxRate = parseTva(cell("taxRate"));
         const targetStock = text(rawStock) === "" ? null : parseIntStrict(rawStock);
+        const optional = parseOptionalImportCells(
+          (field) => cells[optionalColumns[field] as number],
+          optionalColumns,
+        );
 
         const messages = [
           !reference && "ref_produit manquant",
@@ -272,6 +293,7 @@ export function ProductsImportPreview() {
           (salePriceTTC == null || salePriceTTC < 0) && "prixGros invalide",
           (taxRate == null || taxRate < 0 || taxRate > 100) && "taux_tva invalide",
           targetStock == null && "QuantiteStock invalide (entier attendu)",
+          ...optional.errors,
         ].filter(Boolean) as string[];
 
         parsed.push({
@@ -284,6 +306,7 @@ export function ProductsImportPreview() {
           salePriceTTC: salePriceTTC ?? 0,
           taxRate: taxRate ?? 0,
           targetStock: targetStock ?? 0,
+          optional: optional.values,
           status: messages.length ? "ERROR" : "VALID",
           message: messages.join(" ; ") || "Valide",
         });
@@ -403,6 +426,12 @@ export function ProductsImportPreview() {
         <h1 className="font-heading text-2xl font-semibold">Import des produits</h1>
         <p className="text-sm text-muted-foreground">
           Feuille <code>produits</code> — colonnes ref_produit, ref_fournisseur, designation, type, prixAchatTTC, prixGros, taux_tva, QuantiteStock.
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Colonnes facultatives : <code>prix_detail</code>, <code>prix_semi_gros</code> (TTC), <code>Qped</code>,{" "}
+          <code>Qgros</code> (quantités entières, Qped &lt; Qgros) et <code>unite</code>. Une colonne absente ou une
+          cellule vide ne modifie pas la valeur enregistrée. <code>prix_gros</code> est accepté à la place de{" "}
+          <code>prixGros</code>.
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
           Le fournisseur (<code>ref_fournisseur</code>) et la catégorie (<code>type</code>) sont créés s&apos;ils sont absents.

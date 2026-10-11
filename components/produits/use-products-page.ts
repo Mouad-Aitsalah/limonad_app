@@ -36,7 +36,8 @@ export function useProductsPage(filters: ProductsQueryFilters, initial?: Product
     async (cursor: string | null) => {
       setLoading(true);
       try {
-        const query = new URLSearchParams({ pageSize: String(PAGE_SIZE) });
+        // withStock: the "Quantité en stock" column (one grouped query per page).
+        const query = new URLSearchParams({ pageSize: String(PAGE_SIZE), withStock: "1" });
         if (cursor) query.set("cursor", cursor);
         if (search) query.set("search", search);
         if (categoryId && categoryId !== "all") query.set("categoryId", categoryId);

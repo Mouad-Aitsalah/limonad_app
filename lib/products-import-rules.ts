@@ -3,6 +3,11 @@ import { z } from "zod";
 import { MONEY_RANGE_MAX_NUMBER, roundMoney } from "@/lib/money";
 import { computePriceHTFromTTC } from "@/lib/product-pricing";
 import {
+  IMPORT_TIER_THRESHOLD_MAX,
+  IMPORT_UNIT_MAX_LENGTH,
+  tierThresholdsError,
+} from "@/lib/products-import-pricing";
+import {
   PRODUCT_IMPORT_BATCH_MAX_ROWS,
   PRODUCT_IMPORT_MAX_ROWS,
   importBatchLimitMessage,
@@ -34,6 +39,13 @@ export const productImportRowSchema = z.object({
   taxRate: z.number().finite().min(0).max(100),
   // Target stock in the depot. Integer, MAY be negative (§12).
   targetStock: z.number().int(),
+  // OPTIONAL columns (lib/products-import-pricing.ts): absent = the stored
+  // value is kept, never overwritten. Prices TTC like the two above.
+  retailPriceTTC: z.number().finite().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
+  semiWholesalePriceTTC: z.number().finite().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
+  semiWholesaleMinQty: z.number().int().min(1).max(IMPORT_TIER_THRESHOLD_MAX).optional(),
+  wholesaleMinQty: z.number().int().min(1).max(IMPORT_TIER_THRESHOLD_MAX).optional(),
+  unit: z.string().trim().min(1).max(IMPORT_UNIT_MAX_LENGTH).optional(),
 });
 
 /** The whole file, for the read-only preview (global conflict detection). */
@@ -90,6 +102,9 @@ export type ClassifiedProductRow = ProductImportRow & {
    * as the product form + /achats: computePriceHTFromTTC). */
   purchasePriceHT: number;
   salePriceHT: number;
+  /** Derived HT of the optional tier prices - undefined when the column / cell is absent. */
+  retailPriceHT?: number;
+  semiWholesalePriceHT?: number;
   /** Resolved existing supplier id, or null when it will be created (supplierCreate). */
   supplierId: string | null;
   supplierName: string | null;
@@ -118,6 +133,27 @@ export type ProductImportSummary = {
   errors: number;
 };
 
+/**
+ * The optional Product fields a classified line writes: ONLY those the file
+ * carries (absent column / empty cell -> the key is absent -> the stored value
+ * is kept). Prices are the derived HT, like purchasePrice / salePrice.
+ */
+export function importedOptionalProductFields(row: ClassifiedProductRow): {
+  retailPrice?: number;
+  semiWholesalePrice?: number;
+  semiWholesaleMinQty?: number;
+  wholesaleMinQty?: number;
+  unit?: string;
+} {
+  return {
+    ...(row.retailPriceHT !== undefined ? { retailPrice: row.retailPriceHT } : {}),
+    ...(row.semiWholesalePriceHT !== undefined ? { semiWholesalePrice: row.semiWholesalePriceHT } : {}),
+    ...(row.semiWholesaleMinQty !== undefined ? { semiWholesaleMinQty: row.semiWholesaleMinQty } : {}),
+    ...(row.wholesaleMinQty !== undefined ? { wholesaleMinQty: row.wholesaleMinQty } : {}),
+    ...(row.unit !== undefined ? { unit: row.unit } : {}),
+  };
+}
+
 /** trim + lowercase + collapse spaces, so "Jus", " jus ", "JUS" collide. */
 export function normalizeCategoryKey(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -136,6 +172,12 @@ export type ProductImportPreload = {
     purchasePrice: number;
     salePrice: number;
     taxRate: number;
+    /** Optional fields (absent from a preload written before them = null / "unité"). */
+    retailPrice?: number | null;
+    semiWholesalePrice?: number | null;
+    semiWholesaleMinQty?: number | null;
+    wholesaleMinQty?: number | null;
+    unit?: string;
   }[];
   suppliers: { id: string; code: string; name: string; active: boolean }[];
   categories: { id: string; name: string }[];
@@ -154,7 +196,9 @@ const money2 = (value: number) => roundMoney(value);
  *   - product exists, every compared field same -> EXISTING_UNCHANGED
  *   - product exists, something differs         -> EXISTING_UPDATE (+changes)
  * Compared fields for UPDATE: name, supplier, category, purchasePrice HT,
- * salePrice HT, taxRate, target stock (§9).
+ * salePrice HT, taxRate, target stock (§9) - and, ONLY when the file carries
+ * them, prix détail / semi-gros HT, Qped, Qgros and the unit.
+ *   - Qped >= Qgros (file values, or a file value against the stored one) -> ERROR
  */
 export function classifyPreloadedRows(
   rows: ProductImportRow[],
@@ -182,6 +226,12 @@ export function classifyPreloadedRows(
       ...row,
       purchasePriceHT,
       salePriceHT,
+      ...(row.retailPriceTTC !== undefined
+        ? { retailPriceHT: computePriceHTFromTTC(row.retailPriceTTC, row.taxRate) }
+        : {}),
+      ...(row.semiWholesalePriceTTC !== undefined
+        ? { semiWholesalePriceHT: computePriceHTFromTTC(row.semiWholesalePriceTTC, row.taxRate) }
+        : {}),
       supplierId: supplier?.id ?? null,
       supplierName: supplier?.name ?? null,
       supplierCreate: !supplier,
@@ -203,6 +253,15 @@ export function classifyPreloadedRows(
     }
 
     const existing = productByRef.get(row.reference);
+    // The thresholds the product will really have: the file's, else the stored
+    // ones - Qped must stay below Qgros so the quantity rule is never ambiguous.
+    const thresholdsError = tierThresholdsError(
+      row.semiWholesaleMinQty ?? existing?.semiWholesaleMinQty ?? null,
+      row.wholesaleMinQty ?? existing?.wholesaleMinQty ?? null,
+    );
+    if (thresholdsError) {
+      return { ...base, status: "ERROR", message: thresholdsError };
+    }
     if (!existing) {
       return { ...base, status: "NEW", message: "Nouveau produit." };
     }
@@ -240,6 +299,25 @@ export function classifyPreloadedRows(
     }
     if (currentStock !== row.targetStock) {
       changes.stock = { old: currentStock.toString(), new: row.targetStock.toString() };
+    }
+    // Optional columns: compared only when the file carries a value.
+    const moneyChange = (stored: number | null | undefined, next: number | undefined) =>
+      next !== undefined && (stored == null || money2(stored) !== money2(next))
+        ? { old: stored == null ? null : money2(stored).toString(), new: money2(next).toString() }
+        : null;
+    const retailChange = moneyChange(existing.retailPrice, base.retailPriceHT);
+    if (retailChange) changes.retailPriceHT = retailChange;
+    const semiChange = moneyChange(existing.semiWholesalePrice, base.semiWholesalePriceHT);
+    if (semiChange) changes.semiWholesalePriceHT = semiChange;
+    for (const field of ["semiWholesaleMinQty", "wholesaleMinQty"] as const) {
+      const next = row[field];
+      const stored = existing[field] ?? null;
+      if (next !== undefined && stored !== next) {
+        changes[field] = { old: stored == null ? null : stored.toString(), new: next.toString() };
+      }
+    }
+    if (row.unit !== undefined && row.unit !== (existing.unit ?? "unité")) {
+      changes.unit = { old: existing.unit ?? null, new: row.unit };
     }
 
     const hasChanges = Object.keys(changes).length > 0;

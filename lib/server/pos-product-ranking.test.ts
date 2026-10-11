@@ -387,7 +387,7 @@ test("wiring: the counter POS preload and its search use the ranking; the driver
   assert.match(products, /rankPosProducts\(prisma, \{ organizationId, search: query, limit \}\)/);
   // the catalogue pages the offline POS downloads: soldQuantity ONLY when asked (withSales), one query for the page
   assert.match(products, /params\.withSales\s+\? await soldQuantitiesByProduct\(prisma, \{ organizationId, productIds: pageRows\.map\(\(row\) => row\.id\) \}\)\s+: null;/);
-  assert.match(products, /return soldById \? \{ \.\.\.dto, soldQuantity: soldById\.get\(row\.id\) \?\? 0 \} : dto;/);
+  assert.match(products, /\.\.\.\(soldById \? \{ soldQuantity: soldById\.get\(row\.id\) \?\? 0 \} : \{\}\),/);
   assert.match(code("../../app/api/products/list/route.ts"), /withSales: url\.searchParams\.get\("withSales"\) === "1",/);
   assert.match(code("../offline/counter-pos/pos-sync.ts"), /withSales: "1"/);
   // the original name-ordered path is still there for everyone else

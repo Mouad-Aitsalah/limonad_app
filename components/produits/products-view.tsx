@@ -5,6 +5,7 @@ import Link from "next/link";
 import { FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 
+import { ProductColumnsPanel } from "@/components/produits/product-columns-panel";
 import { ProductDialog } from "@/components/produits/product-dialog";
 import { ProductsToolbar } from "@/components/produits/products-toolbar";
 import { ProductsTable } from "@/components/produits/products-table";
@@ -12,6 +13,7 @@ import { useProductsPage } from "@/components/produits/use-products-page";
 import { AppPageHeader } from "@/components/ui/app-page-header";
 import { Button } from "@/components/ui/button";
 import { DataTableShell } from "@/components/ui/data-table-shell";
+import type { ProductColumnSettings } from "@/lib/product-columns";
 import type {
   ProductDto,
   ProductMutationInput,
@@ -26,6 +28,10 @@ type ProductsViewProps = {
   categories: ProductOptionDto[];
   brands: ProductOptionDto[];
   suppliers: ProductOptionDto[];
+  /** The organisation's /produits columns (Organization.productColumnSettings). */
+  initialColumnSettings: ProductColumnSettings;
+  /** Admin only: shows the "Colonnes" panel. */
+  canEditColumns: boolean;
 };
 
 export function ProductsView({
@@ -33,7 +39,10 @@ export function ProductsView({
   categories,
   brands,
   suppliers,
+  initialColumnSettings,
+  canEditColumns,
 }: ProductsViewProps) {
+  const [columnSettings, setColumnSettings] = React.useState(initialColumnSettings);
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   React.useEffect(() => {
@@ -177,8 +186,15 @@ export function ProductsView({
               disponibilite={disponibilite}
               onDisponibiliteChange={setDisponibilite}
             />
-            {/* Phones: two full-width buttons; from sm the original right-aligned pair. */}
+            {/* Phones: two full-width buttons; from sm the original right-aligned pair.
+                The admin "Colonnes" panel sits before them on desktop (the
+                table is desktop-only; the phone cards do not change). */}
             <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:justify-end">
+              {canEditColumns ? (
+                <div className="mr-auto max-lg:hidden">
+                  <ProductColumnsPanel settings={columnSettings} onSettingsChange={setColumnSettings} />
+                </div>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
@@ -206,6 +222,7 @@ export function ProductsView({
           onView={setViewingProduct}
           onEdit={setEditingProduct}
           onToggleStatus={toggleStatus}
+          columnSettings={columnSettings}
         />
       </DataTableShell>
 

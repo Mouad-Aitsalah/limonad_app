@@ -9,6 +9,12 @@ import { prisma } from "@/lib/prisma";
 import { computeSaleTotals, type SaleRoundingMode } from "@/lib/sale-rounding";
 import { computePriceTTC } from "@/lib/product-pricing";
 import {
+  quantityTierValuesFromRow,
+  readCompleteQuantityTiers,
+  resolveQuantityPrice,
+  sumQuantitiesByProduct,
+} from "@/lib/quantity-pricing";
+import {
   computeCashSaleStampAmount,
   listActiveBankAccountOptions,
   postSaleAccountingEntry,
@@ -21,6 +27,7 @@ import { orderByIds, rankPosProducts } from "@/lib/server/pos-product-ranking";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { readQuantityPricingEnabled } from "@/lib/server/organization-settings";
 import { toLightweightProductImageUrl, toLightweightSupplierLogoUrl } from "@/lib/server/product-image-url";
 import {
   createMixedPayments,
@@ -241,6 +248,10 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
         imageUrl: true,
         updatedAt: true,
         salePrice: true,
+        retailPrice: true,
+        semiWholesalePrice: true,
+        semiWholesaleMinQty: true,
+        wholesaleMinQty: true,
         // Admin-only below-cost alert in the cart (see purchasePriceHT below).
         purchasePrice: sessionUser.role === "admin",
         taxRate: true,
@@ -251,7 +262,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     return orderByIds(rows, rankedIds);
   };
 
-  const [productRows, customers, bankAccounts] = await Promise.all([
+  const [productRows, customers, bankAccounts, quantityPricingEnabled] = await Promise.all([
     // Source of truth for POS visibility = every ACTIVE product of the
     // organisation, NOT "what has a stock row at this depot". A product
     // never received/loaded here (no StockLevel row) must still be sellable
@@ -272,6 +283,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       guaranteeCustomerId: defaultCustomer?.id ?? null,
     }),
     listActiveBankAccountOptions(prisma, sessionUser.organizationId),
+    readQuantityPricingEnabled(prisma, sessionUser.organizationId),
   ]);
 
   const productsTruncated = productRows.length > POS_PRODUCT_LIST_LIMIT;
@@ -295,6 +307,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     const salePriceHT = product.salePrice.toNumber();
     const taxRate = product.taxRate.toNumber();
     const level = levelByProductId.get(product.id);
+    const quantityTiers = readCompleteQuantityTiers(quantityTierValuesFromRow(product));
 
     return {
       id: product.id,
@@ -305,6 +318,8 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
       salePriceHT,
       salePriceTTC: computePriceTTC(salePriceHT, taxRate),
+      // Display of the cart price only - createCounterSale re-reads the tiers.
+      ...(quantityTiers ? { quantityTiers } : {}),
       ...(sessionUser.role === "admin" && "purchasePrice" in product && product.purchasePrice
         ? { purchasePriceHT: product.purchasePrice.toNumber() }
         : {}),
@@ -335,6 +350,7 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
     products,
     productsTruncated,
     bankAccounts,
+    quantityPricingEnabled,
   };
 }
 
@@ -475,6 +491,10 @@ export async function createCounterSale(
         select: {
           id: true,
           salePrice: true,
+          retailPrice: true,
+          semiWholesalePrice: true,
+          semiWholesaleMinQty: true,
+          wholesaleMinQty: true,
           taxRate: true,
           purchasePrice: true,
         },
@@ -483,8 +503,18 @@ export async function createCounterSale(
         throw new OperationsServiceError("Un produit est introuvable.", 422);
       }
 
+      // Quantity pricing (lib/quantity-pricing.ts): with the organisation's
+      // setting ON, a product whose four tiers are set is priced from Q = the
+      // total quantity of that product in THIS sale, read from the database -
+      // a price or a tier sent by the browser is never trusted. Setting OFF or
+      // incomplete tiers -> Product.salePrice (prix gros), exactly as before.
+      // The same function prices the POS cart, so screen and sale agree.
+      const quantityPricingEnabled = await readQuantityPricingEnabled(tx, sessionUser.organizationId);
+      const quantityByProduct = sumQuantitiesByProduct(lines);
+
       // A manual per-line price from the POS cart is honoured only for an
-      // admin session; every other role always sells at the catalogue price.
+      // admin session (and then wins over the quantity price); every other
+      // role always sells at the catalogue / quantity price.
       const canOverrideLinePrice = sessionUser.role === "admin";
       const computedLines = lines.map((line) => {
         const product = products.find((item) => item.id === line.productId);
@@ -492,7 +522,12 @@ export async function createCounterSale(
         const unitPriceHT =
           canOverrideLinePrice && line.unitPriceHT != null
             ? roundMoney(line.unitPriceHT)
-            : product.salePrice.toNumber();
+            : resolveQuantityPrice({
+                enabled: quantityPricingEnabled,
+                wholesalePriceHT: product.salePrice.toNumber(),
+                tiers: quantityTierValuesFromRow(product),
+                quantity: quantityByProduct.get(line.productId) ?? line.quantity,
+              }).unitPriceHT;
         // BI Phase 2A: snapshot of the cost of the day, frozen on the line
         // forever - see SaleLine.unitCostHT's doc comment. Never touched
         // again by collectSaleCore (DRAFT -> PAID/CREDIT only updates the

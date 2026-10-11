@@ -441,6 +441,14 @@ model Organization {
   // approach as product photos - a text column, never the Vercel FS).
   // Nullable: no logo => the "C" / name fallback is used.
   logoUrl                   String?
+  // Automatic price by quantity in the counter POS (Paramètres -> Tarification,
+  // admin only). Off by default = every sale is priced at Product.salePrice
+  // (prix gros) exactly as before. See lib/quantity-pricing.ts.
+  quantityPricingEnabled    Boolean                    @default(false)
+  // Columns shown in the /produits table, chosen by an admin for the whole
+  // organisation: { "columns": { "<column-key>": true | false } }. Display
+  // only - null = the default columns. See lib/product-columns.ts.
+  productColumnSettings     Json?
   status                    OrganizationStatus         @default(ACTIVE)
   users                     User[]
   depots                    Depot[]
@@ -920,7 +928,18 @@ model Product {
   defaultSupplierId         String?
   defaultSupplier           Supplier?                  @relation(fields: [defaultSupplierId], references: [id], onDelete: SetNull)
   purchasePrice             Decimal                    @db.Decimal(12, 2)
+  // Prix gros (HT) - THE sale price, unchanged meaning: used by every sale
+  // channel, and by the counter POS whenever quantity pricing is off or this
+  // product's tiers are incomplete.
   salePrice                 Decimal                    @db.Decimal(12, 2)
+  // Quantity pricing tiers (counter POS, only when
+  // Organization.quantityPricingEnabled). All four set and
+  // 0 < semiWholesaleMinQty (Qped) < wholesaleMinQty (Qgros), otherwise the
+  // product keeps salePrice. Prices HT, like salePrice. See lib/quantity-pricing.ts.
+  retailPrice               Decimal?                   @db.Decimal(12, 2)
+  semiWholesalePrice        Decimal?                   @db.Decimal(12, 2)
+  semiWholesaleMinQty       Int?
+  wholesaleMinQty           Int?
   taxRate                   Decimal                    @db.Decimal(5, 2)
   unit                      String
   minimumStock              Int                        @default(0)

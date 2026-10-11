@@ -4,6 +4,7 @@ import * as React from "react";
 import { ImagePlus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { SettingsNav } from "@/components/parametres/settings-nav";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -86,6 +87,8 @@ export function CompanyIdentityView({
         <h1 className="font-heading text-2xl font-semibold text-foreground">Paramètres</h1>
         <p className="text-sm text-muted-foreground">Identité de l&apos;entreprise</p>
       </div>
+
+      <SettingsNav />
 
       <Card className="max-w-2xl ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
         <CardContent className="space-y-6">

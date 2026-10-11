@@ -34,6 +34,7 @@
  *            budget is exhausted. Never retried automatically.
  */
 
+import type { QuantityTiers } from "@/lib/quantity-pricing";
 import type { PosBankAccountOptionDto } from "@/types/operations-dto";
 import type { UserRole } from "@/types/auth";
 import type { PosPaymentMethodValue } from "@/types/pos";
@@ -105,6 +106,9 @@ export type PosContextRecord = {
   message: string | null;
   productsTruncated: boolean;
   bankAccounts: PosBankAccountOptionDto[];
+  /** Organization.quantityPricingEnabled when the snapshot was taken. Absent
+   *  on records written before this setting existed = off. */
+  quantityPricingEnabled?: boolean;
   syncedAt: string;
 };
 
@@ -127,6 +131,10 @@ export type ProductRecord = {
   /** Total quantity sold (best-seller order of the grid) - a sort key only,
    *  never displayed. Absent on records written before this field existed = 0. */
   soldQuantity?: number;
+  /** Complete quantity pricing tiers (HT) - display of the offline cart price
+   *  only; the server re-prices the sale from its own data at synchronisation.
+   *  Absent / null = none (wholesale price). */
+  quantityTiers?: QuantityTiers | null;
   syncedAt: string;
 };
 

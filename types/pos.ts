@@ -1,3 +1,5 @@
+import type { QuantityTiers } from "@/lib/quantity-pricing";
+
 export type PosOperationType = "sale" | "transfer";
 
 export type PosProduct = {
@@ -12,6 +14,8 @@ export type PosProduct = {
   imageUrl?: string | null;
   /** Purchase price HT - admin counter POS only; see DriverPosProductDto.purchasePriceHT. */
   prixAchatHT?: number;
+  /** Counter POS only - complete quantity pricing tiers (HT); see DriverPosProductDto.quantityTiers. */
+  quantityTiers?: QuantityTiers;
 };
 
 // CARD is deliberately not offered here anymore (COMDIS no longer takes

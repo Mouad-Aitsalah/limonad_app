@@ -20,6 +20,8 @@ export async function GET(request: Request) {
       search: url.searchParams.get("search") || undefined,
       // Offline POS catalogue sync only (?withSales=1): adds soldQuantity to each item.
       withSales: url.searchParams.get("withSales") === "1",
+      // /produits only (?withStock=1): adds stockQuantity (every location) to each item.
+      withStock: url.searchParams.get("withStock") === "1",
     });
     return NextResponse.json(page);
   } catch {

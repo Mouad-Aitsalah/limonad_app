@@ -2,7 +2,7 @@ import "server-only";
 
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import type { ClassifiedProductRow } from "@/lib/products-import-rules";
+import { importedOptionalProductFields, type ClassifiedProductRow } from "@/lib/products-import-rules";
 import {
   writeImportBatch,
   type ImportLineTx,
@@ -113,7 +113,9 @@ async function createProductRow(
       purchasePrice: row.purchasePriceHT,
       salePrice: row.salePriceHT,
       taxRate: row.taxRate,
+      // Optional columns: absent -> no tier (NULL) and the historical default unit.
       unit: "unité",
+      ...importedOptionalProductFields(row),
       minimumStock: 0,
       status: "ACTIVE",
     },
@@ -139,7 +141,11 @@ async function updateProductRow(
       purchasePrice: row.purchasePriceHT,
       salePrice: row.salePriceHT,
       taxRate: row.taxRate,
-      // §9: barcode / brandId / unit / minimumStock / status left untouched.
+      // Optional columns: written ONLY when the file carries a value - an
+      // absent column / empty cell never overwrites what is stored.
+      ...importedOptionalProductFields(row),
+      // §9: barcode / brandId / minimumStock / status left untouched (unit too,
+      // unless the file has a "unite" value).
     },
   });
   if (count === 0) {

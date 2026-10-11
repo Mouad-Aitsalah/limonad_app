@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { computePriceTTC } from "@/lib/product-pricing";
+import { quantityTierValuesFromRow, readCompleteQuantityTiers } from "@/lib/quantity-pricing";
 import { prisma } from "@/lib/prisma";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -85,6 +86,10 @@ export function mapProductToDto(product: NonNullable<ProductRecord>): ProductDto
     description: product.description,
     purchasePrice: product.purchasePrice.toNumber(),
     salePrice: product.salePrice.toNumber(),
+    retailPrice: product.retailPrice ? product.retailPrice.toNumber() : null,
+    semiWholesalePrice: product.semiWholesalePrice ? product.semiWholesalePrice.toNumber() : null,
+    semiWholesaleMinQty: product.semiWholesaleMinQty,
+    wholesaleMinQty: product.wholesaleMinQty,
     taxRate: product.taxRate.toNumber(),
     unit: product.unit,
     minimumStock: product.minimumStock,
@@ -128,6 +133,10 @@ export type ProductsPageParams = {
    *  sold (soldQuantity) - ONE aggregated query for the whole page. Omitted
    *  (/produits and every other caller) = the page is exactly what it was. */
   withSales?: boolean;
+  /** Opt-in (/produits, "Quantité en stock" column): add each item's quantity
+   *  in stock over every location of the organisation (depots + trucks) - ONE
+   *  aggregated query for the whole page. Read only. */
+  withStock?: boolean;
 };
 
 function clampProductsPageSize(pageSize: number | undefined): number {
@@ -206,11 +215,26 @@ export async function getProductsPage(params: ProductsPageParams = {}): Promise<
   const soldById = params.withSales
     ? await soldQuantitiesByProduct(prisma, { organizationId, productIds: pageRows.map((row) => row.id) })
     : null;
+  const stockById = params.withStock && pageRows.length > 0
+    ? new Map(
+        (
+          await prisma.stockLevel.groupBy({
+            by: ["productId"],
+            where: { organizationId, productId: { in: pageRows.map((row) => row.id) } },
+            _sum: { quantity: true },
+          })
+        ).map((entry) => [entry.productId, entry._sum.quantity ?? 0]),
+      )
+    : null;
 
   return {
     items: pageRows.map((row) => {
       const dto = mapProductToDto(row);
-      return soldById ? { ...dto, soldQuantity: soldById.get(row.id) ?? 0 } : dto;
+      return {
+        ...dto,
+        ...(soldById ? { soldQuantity: soldById.get(row.id) ?? 0 } : {}),
+        ...(stockById ? { stockQuantity: stockById.get(row.id) ?? 0 } : {}),
+      };
     }),
     nextCursor: hasMore ? pageRows[pageRows.length - 1].id : null,
     hasMore,
@@ -484,7 +508,13 @@ export async function getProductPickerPreload(params?: {
  * searchPosProducts and getPosProductsByIds so both return exactly the same
  * fields - the purchase price is only ever selected for an admin session.
  */
-function posProductLoader(organizationId: string, isAdmin: boolean, locationId: string) {
+function posProductLoader(
+  organizationId: string,
+  isAdmin: boolean,
+  locationId: string,
+  /** Counter POS roles only: the driver POS always sells at the wholesale price. */
+  withQuantityTiers: boolean,
+) {
   const productSelect = {
     id: true,
     reference: true,
@@ -493,6 +523,10 @@ function posProductLoader(organizationId: string, isAdmin: boolean, locationId: 
     imageUrl: true,
     updatedAt: true,
     salePrice: true,
+    retailPrice: true,
+    semiWholesalePrice: true,
+    semiWholesaleMinQty: true,
+    wholesaleMinQty: true,
     // Admin-only below-cost alert in the counter POS cart; other roles never
     // select the purchase price.
     purchasePrice: isAdmin,
@@ -509,6 +543,10 @@ function posProductLoader(organizationId: string, isAdmin: boolean, locationId: 
     imageUrl: string | null;
     updatedAt: Date;
     salePrice: Prisma.Decimal;
+    retailPrice: Prisma.Decimal | null;
+    semiWholesalePrice: Prisma.Decimal | null;
+    semiWholesaleMinQty: number | null;
+    wholesaleMinQty: number | null;
     purchasePrice?: Prisma.Decimal;
     taxRate: Prisma.Decimal;
     defaultSupplierId: string | null;
@@ -530,6 +568,9 @@ function posProductLoader(organizationId: string, isAdmin: boolean, locationId: 
       const salePriceHT = product.salePrice.toNumber();
       const taxRate = product.taxRate.toNumber();
       const level = byId.get(product.id);
+      const quantityTiers = withQuantityTiers
+        ? readCompleteQuantityTiers(quantityTierValuesFromRow(product))
+        : null;
       return {
         id: product.id,
         reference: product.reference,
@@ -538,6 +579,7 @@ function posProductLoader(organizationId: string, isAdmin: boolean, locationId: 
         imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
         salePriceHT,
         salePriceTTC: computePriceTTC(salePriceHT, taxRate),
+        ...(quantityTiers ? { quantityTiers } : {}),
         ...(isAdmin && product.purchasePrice
           ? { purchasePriceHT: product.purchasePrice.toNumber() }
           : {}),
@@ -593,6 +635,7 @@ export async function searchPosProducts(params: {
     organizationId,
     currentUser.role === "admin",
     params.locationId,
+    currentUser.role !== "driver",
   );
 
   const exactBarcodeMatch = await prisma.product.findFirst({
@@ -659,6 +702,7 @@ export async function getPosProductsByIds(params: {
     currentUser.organizationId,
     currentUser.role === "admin",
     params.locationId,
+    currentUser.role !== "driver",
   );
   const products = await prisma.product.findMany({
     where: { organizationId: currentUser.organizationId, status: "ACTIVE", id: { in: ids } },

@@ -22,6 +22,7 @@
 import { z } from "zod";
 
 import { computePriceTTC } from "@/lib/product-pricing";
+import { readCompleteQuantityTiers } from "@/lib/quantity-pricing";
 import type { DriverPosProductDto } from "@/types/operations-dto";
 
 const id = z.string().min(1);
@@ -55,6 +56,15 @@ const contextProductSchema = z.object({
   supplierLogoUrl: optionalString,
   priceToken: z.string().optional(),
   soldQuantity: z.number().min(0).optional(),
+  // Counter POS quantity pricing (complete tiers only; absent = none).
+  quantityTiers: z
+    .object({
+      retailPriceHT: z.number().min(0),
+      semiWholesalePriceHT: z.number().min(0),
+      semiWholesaleMinQty: z.number().int().min(1),
+      wholesaleMinQty: z.number().int().min(1),
+    })
+    .optional(),
 });
 
 /** The customer fields the snapshot keeps - and nothing else. */
@@ -83,6 +93,7 @@ export const contextResponseSchema = z.object({
     products: z.array(contextProductSchema),
     productsTruncated: z.boolean(),
     bankAccounts: z.array(namedRef),
+    quantityPricingEnabled: z.boolean().optional(),
   }),
 });
 
@@ -99,6 +110,11 @@ const listProductSchema = z.object({
   imageUrl: optionalString,
   supplier: z.object({ id, name: z.string() }).nullish(),
   soldQuantity: z.number().min(0).optional(),
+  // Quantity pricing tiers (HT), as ProductDto sends them - null = not set.
+  retailPrice: z.number().nullish(),
+  semiWholesalePrice: z.number().nullish(),
+  semiWholesaleMinQty: z.number().nullish(),
+  wholesaleMinQty: z.number().nullish(),
 });
 
 export const productPageSchema = z.object({
@@ -154,7 +170,19 @@ export function posProductFromListProduct(
     supplierName: product.supplier?.name ?? null,
     supplierLogoUrl: null,
     ...(product.soldQuantity !== undefined ? { soldQuantity: product.soldQuantity } : {}),
+    ...withQuantityTiers(product),
   };
+}
+
+/** Same rule as the server (getCounterPosContext): only COMPLETE tiers travel. */
+function withQuantityTiers(product: ListProduct): Pick<DriverPosProductDto, "quantityTiers"> {
+  const tiers = readCompleteQuantityTiers({
+    retailPriceHT: product.retailPrice ?? null,
+    semiWholesalePriceHT: product.semiWholesalePrice ?? null,
+    semiWholesaleMinQty: product.semiWholesaleMinQty ?? null,
+    wholesaleMinQty: product.wholesaleMinQty ?? null,
+  });
+  return tiers ? { quantityTiers: tiers } : {};
 }
 
 /** "path.to.field: message" for the first problem - enough to debug a contract

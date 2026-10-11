@@ -48,6 +48,11 @@ import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { computeDiscountedLineTotals, reconstructDiscountUnitAmount } from "@/lib/pos-discount";
 import { computeSaleTotals } from "@/lib/sale-rounding";
 import { purchasePriceTTC } from "@/lib/pos-margin";
+import {
+  resolveQuantityPrice,
+  sumQuantitiesByProduct,
+  type QuantityPriceTier,
+} from "@/lib/quantity-pricing";
 import { OfflineStatusBar } from "@/components/pos/offline-status-bar";
 import { useCounterPosOffline } from "@/components/pos/use-counter-pos-offline";
 import { AiDraftReplaceDialog } from "@/components/pos/ai-draft-replace-dialog";
@@ -102,6 +107,10 @@ export type CartLineComputed = {
   unitPriceTTC: number;
   /** True when unitPriceHT comes from a manual per-line override, not the catalogue. */
   priceOverridden?: boolean;
+  /** Quantity pricing tier that set unitPriceHT ("Détail" / "Semi-gros" /
+   *  "Gros" label in the cart). null/absent = no tier: setting off, incomplete
+   *  tiers, manual price, historical (edit / pending) price. */
+  quantityPriceTier?: QuantityPriceTier | null;
   tauxTVA: number;
   baseHT: number;
   discountAmount: number;
@@ -173,6 +182,7 @@ function mapContextProductsToPosProducts(
     quantiteStock: product.availableQuantity,
     imageUrl: product.imageUrl,
     prixAchatHT: product.purchasePriceHT,
+    ...(product.quantityTiers ? { quantityTiers: product.quantityTiers } : {}),
   }));
 }
 
@@ -418,16 +428,32 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
       }));
     }
 
+    // Quantity pricing (lib/quantity-pricing.ts, the function createCounterSale
+    // uses too): Q = the total quantity of the product in the cart, so the
+    // price follows every +/-, typed quantity and removal. Setting off (or
+    // incomplete tiers) -> the wholesale price, exactly as before.
+    const quantityPricingEnabled = context.quantityPricingEnabled === true;
+    const quantityByProduct = sumQuantitiesByProduct(cart);
+
     return cart.flatMap((line) => {
       const product = productById.get(line.productId);
       const frozen = editLineInfoById.get(line.productId);
       if (!product && !frozen) return [];
 
       const tauxTVA = frozen?.tauxTVA ?? product!.tauxTVA;
-      // Catalogue price is the initial source; a per-line override (typed in
-      // the cart, always stored HT) takes over without ever touching the
-      // Product row.
-      const catalogueHT = frozen?.unitPriceHT ?? product!.prixVenteHT;
+      // Catalogue price is the initial source (the historical price for a line
+      // of the sale being edited, else the quantity / wholesale price); a
+      // per-line override (typed in the cart, always stored HT) takes over
+      // without ever touching the Product row.
+      const catalogue = frozen
+        ? { unitPriceHT: frozen.unitPriceHT, tier: null }
+        : resolveQuantityPrice({
+            enabled: quantityPricingEnabled,
+            wholesalePriceHT: product!.prixVenteHT,
+            tiers: product!.quantityTiers,
+            quantity: quantityByProduct.get(line.productId) ?? line.quantity,
+          });
+      const catalogueHT = catalogue.unitPriceHT;
       const priceOverridden = line.priceOverrideHT != null;
       const unitPriceHT = priceOverridden ? line.priceOverrideHT! : catalogueHT;
       const unitPriceTTC = roundCurrency(unitPriceHT * (1 + tauxTVA / 100));
@@ -454,6 +480,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         unitPriceHT,
         unitPriceTTC,
         priceOverridden,
+        quantityPriceTier: priceOverridden ? null : catalogue.tier,
         tauxTVA,
         baseHT,
         discountAmount,
@@ -464,7 +491,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         purchasePriceTTC: purchasePriceTTC(product?.prixAchatHT, tauxTVA),
       };
     });
-  }, [cart, openPendingSale, productById, editLineInfoById]);
+  }, [cart, openPendingSale, productById, editLineInfoById, context.quantityPricingEnabled]);
 
   const totals = React.useMemo<CartTotals>(() => {
     const sousTotalHT = roundCurrency(

@@ -16,6 +16,12 @@ export type ImportLineInput = {
   salePriceTTC: number;
   taxRate: number;
   targetStock: number;
+  /** Optional columns (lib/products-import-pricing.ts) - absent = keep the stored value. */
+  retailPriceTTC?: number;
+  semiWholesalePriceTTC?: number;
+  semiWholesaleMinQty?: number;
+  wholesaleMinQty?: number;
+  unit?: string;
 };
 
 export type ServerStatus = "NEW" | "EXISTING_UNCHANGED" | "EXISTING_UPDATE" | "CONFLICT" | "ERROR";

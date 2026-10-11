@@ -23,6 +23,16 @@ export interface ProductDto {
     id: string;
     name: string;
   } | null;
+  /** Quantity pricing tiers (HT, like salePrice - which stays the prix gros).
+   *  null = not set. See lib/quantity-pricing.ts. */
+  retailPrice?: number | null;
+  semiWholesalePrice?: number | null;
+  /** Qped / Qgros. */
+  semiWholesaleMinQty?: number | null;
+  wholesaleMinQty?: number | null;
+  /** Only when the page was requested with withStock (/produits): the
+   *  quantity in stock over every location of the organisation. */
+  stockQuantity?: number;
   /** Only when the page was requested with withSales (offline POS sync): total
    *  quantity sold, a sort key - never displayed. */
   soldQuantity?: number;

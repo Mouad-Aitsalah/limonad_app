@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { isSellingBelowCost } from "@/lib/pos-margin";
+import { QUANTITY_PRICE_TIER_LABELS } from "@/lib/quantity-pricing";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { CartLineComputed } from "@/components/pos/pos-layout";
 import type { PosOperationType } from "@/types/pos";
@@ -370,6 +371,16 @@ export function CartTable({
                   {money(isTransfer ? line.unitPriceHT : line.unitPriceTTC)}
                 </span>
               )}
+              {/* Quantity pricing only (setting on, complete tiers, no manual
+                  price): which tier set this unit price. Nothing otherwise. */}
+              {!isTransfer && line.quantityPriceTier ? (
+                <span
+                  data-quantity-tier={line.quantityPriceTier}
+                  className="mt-0.5 block text-[10px] font-medium leading-tight text-emerald-700 lg:text-xs"
+                >
+                  {QUANTITY_PRICE_TIER_LABELS[line.quantityPriceTier]}
+                </span>
+              ) : null}
             </TableCell>
             {!isTransfer && (
               <TableCell
