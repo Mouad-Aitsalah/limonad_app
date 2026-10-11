@@ -1,5 +1,6 @@
 "use client";
 
+import { InvoiceDiscountBadge } from "@/components/ventes/invoice-discount-badge";
 import { InvoiceLinesTable } from "@/components/ventes/invoice-lines-table";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
@@ -20,6 +21,7 @@ export function InvoiceDetailInline({ listItem, sale }: InvoiceDetailInlineProps
           Détail de la commande {sale.displayNumber}
         </h3>
         <InvoiceStatusBadge status={listItem.status} />
+        {listItem.hasDiscount ? <InvoiceDiscountBadge amountTTC={listItem.discountTTC} /> : null}
       </div>
 
       <div className="grid gap-3 rounded-xl border border-border bg-background p-3 sm:grid-cols-3">
@@ -57,6 +59,9 @@ export function InvoiceDetailInline({ listItem, sale }: InvoiceDetailInlineProps
       <div className="mx-auto w-full max-w-xs space-y-2 rounded-xl border border-border bg-background p-3">
         <TotalRow label="Total HT" value={formatCurrency(sale.subtotalHT)} />
         <TotalRow label="TVA" value={formatCurrency(sale.taxAmount)} />
+        {listItem.hasDiscount && listItem.discountTTC !== undefined ? (
+          <TotalRow label="Remise accordée (incluse)" value={formatCurrency(listItem.discountTTC)} />
+        ) : null}
         {(sale.roundingAmount ?? 0) !== 0 ? (
           <TotalRow label="Arrondi" value={formatSignedCurrency(sale.roundingAmount ?? 0)} />
         ) : null}

@@ -5,6 +5,7 @@ import { businessDayRangeUtc, formatBusinessDayLabel } from "@/lib/business-day"
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { canSeeDiscountIndicator } from "@/lib/sale-discount-indicator";
 import { mapOrderRowToListItemDto, orderListSelect } from "@/lib/server/sales-history";
 import type {
   DailyInvoicesPageDto,
@@ -159,7 +160,9 @@ export async function getDailyInvoicesPage(
   }
 
   const items = pageRows.map((row) =>
-    mapOrderRowToListItemDto(row, row.totalTTC.toNumber() - (refundsBySaleId.get(row.id) ?? 0)),
+    mapOrderRowToListItemDto(row, row.totalTTC.toNumber() - (refundsBySaleId.get(row.id) ?? 0), {
+      includeDiscount: canSeeDiscountIndicator(user.role),
+    }),
   );
 
   const paymentSums = new Map<string, number>();

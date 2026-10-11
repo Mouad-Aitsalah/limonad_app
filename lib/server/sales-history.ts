@@ -1,14 +1,14 @@
 import "server-only";
 
 import { roundMoney as roundMoneyDecimal } from "@/lib/money";
-import { formatSaleDisplayNumber } from "@/lib/sale-display-number";
+import { canSeeDiscountIndicator } from "@/lib/sale-discount-indicator";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { mapOrderRowToListItemDto, orderListSelect } from "@/lib/server/sale-list-row";
 import { buildOrdersWhere, type SalesOrdersPageParams } from "@/lib/sales-orders-where";
 import type {
   PosSessionDto,
-  SaleHistoryListItemDto,
   SaleHistoryOrdersPageDto,
   SalesMonthDto,
 } from "@/types/operations-dto";
@@ -30,6 +30,10 @@ const monthLabels = [
 
 export type { SalesOrdersPageParams };
 
+// Kept exported from here for lib/server/daily-invoices.ts (same row, same mapper):
+// the definitions live in sale-list-row.ts so they can be tested without "server-only".
+export { mapOrderRowToListItemDto, orderListSelect };
+
 const ORDERS_DEFAULT_PAGE_SIZE = 25;
 const ORDERS_MAX_PAGE_SIZE = 100;
 
@@ -46,63 +50,11 @@ function roundMoney(value: number) {
  */
 const postedSaleStatuses: Prisma.SaleWhereInput["status"] = { notIn: ["DRAFT", "CANCELLED"] };
 
-// Exported for reuse by lib/server/daily-invoices.ts (Factures journalières),
-// which renders the same InvoicesTable and so needs the exact same row shape
-// and DTO mapping - never a parallel copy that could drift.
-export const orderListSelect = {
-  id: true,
-  invoiceNumber: true,
-  saleYear: true,
-  saleNumber: true,
-  posSessionId: true,
-  status: true,
-  origin: true,
-  totalTTC: true,
-  paidAmount: true,
-  creditAmount: true,
-  paymentMethod: true,
-  createdAt: true,
-  updatedAt: true,
-  customer: { select: { id: true, code: true, name: true } },
-  driver: { select: { id: true, user: { select: { fullName: true } } } },
-  createdBy: { select: { fullName: true } },
-  lines: { select: { quantity: true } },
-} as const;
-
 function clampPageSize(pageSize: number | undefined): number {
   const requested = Math.trunc(pageSize ?? ORDERS_DEFAULT_PAGE_SIZE);
   return Number.isFinite(requested) && requested > 0
     ? Math.min(requested, ORDERS_MAX_PAGE_SIZE)
     : ORDERS_DEFAULT_PAGE_SIZE;
-}
-
-export function mapOrderRowToListItemDto(
-  row: Prisma.SaleGetPayload<{ select: typeof orderListSelect }>,
-  net: number,
-): SaleHistoryListItemDto {
-  return {
-    id: row.id,
-    invoiceNumber: row.invoiceNumber,
-    displayNumber: formatSaleDisplayNumber(
-      row.saleNumber,
-      row.saleYear,
-      row.invoiceNumber,
-    ),
-    posSessionId: row.posSessionId,
-    status: row.status,
-    origin: row.origin,
-    customer: row.customer,
-    driver: row.driver ? { id: row.driver.id, name: row.driver.user.fullName } : null,
-    articleCount: row.lines.reduce((sum, line) => sum + line.quantity, 0),
-    totalTTC: row.totalTTC.toNumber(),
-    net: roundMoney(net),
-    paidAmount: row.paidAmount.toNumber(),
-    creditAmount: row.creditAmount.toNumber(),
-    paymentMethod: row.paymentMethod,
-    createdByUserName: row.createdBy.fullName,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  };
 }
 
 /**
@@ -173,7 +125,9 @@ export async function getSalesOrdersPage(
 
   return {
     items: pageRows.map((row) =>
-      mapOrderRowToListItemDto(row, row.totalTTC.toNumber() - (refundsBySaleId.get(row.id) ?? 0)),
+      mapOrderRowToListItemDto(row, row.totalTTC.toNumber() - (refundsBySaleId.get(row.id) ?? 0), {
+        includeDiscount: canSeeDiscountIndicator(currentUser.role),
+      }),
     ),
     nextCursor: hasMore ? pageRows[pageRows.length - 1].id : null,
     hasMore,

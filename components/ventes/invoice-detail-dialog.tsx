@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { InvoiceDiscountBadge } from "@/components/ventes/invoice-discount-badge";
 import { InvoiceLinesTable } from "@/components/ventes/invoice-lines-table";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
@@ -119,6 +120,7 @@ export function InvoiceDetailDialog({
               <div className="flex items-center gap-2">
                 <DialogTitle className="text-xl">Commande {listItem.displayNumber}</DialogTitle>
                 <InvoiceStatusBadge status={listItem.status} />
+                {listItem.hasDiscount ? <InvoiceDiscountBadge amountTTC={listItem.discountTTC} /> : null}
               </div>
               <DialogDescription>Detail de la commande et des articles vendus.</DialogDescription>
             </DialogHeader>
@@ -208,6 +210,12 @@ export function InvoiceDetailDialog({
                       {formatCurrency(sale.taxAmount)}
                     </span>
                   </div>
+                  {listItem.hasDiscount && listItem.discountTTC !== undefined ? (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-rose-700">Remise accordée (incluse)</span>
+                      <span className="tabular-nums text-rose-700">{formatCurrency(listItem.discountTTC)}</span>
+                    </div>
+                  ) : null}
                   {(sale.roundingAmount ?? 0) !== 0 && (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Arrondi</span>

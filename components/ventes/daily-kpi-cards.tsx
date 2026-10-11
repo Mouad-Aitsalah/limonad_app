@@ -6,29 +6,21 @@ import { cn, formatCurrency } from "@/lib/utils";
 import type { DailyInvoicesKpisDto } from "@/types/daily-invoice";
 
 /**
- * KPI block of "Factures journalières": three highlighted figures (CA total,
- * Espèces, Crédit) above three discreet ones (Factures, Virement, Chèque).
- * Pure presentation - the figures come from the existing KPI data
- * (see lib/daily-invoice-kpis.ts).
+ * KPI block of "Factures journalières": three highlighted figures - Espèces,
+ * Crédit, CA total, in that order - above three discreet ones (Factures,
+ * Virement, Chèque). Pure presentation - the figures come from the existing
+ * KPI data (see lib/daily-invoice-kpis.ts).
  */
 export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
   const { primary, secondary, extras } = layoutDailyKpis(kpis);
 
   return (
     <div className="space-y-3 lg:space-y-4">
-      {/* Phones: CA total full width, Espèces + Crédit side by side; tablets: the
-          three on one row; desktop (lg): CA total alone and centred on the first
-          row, Espèces + Crédit side by side (equal widths) on the second. */}
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-2 lg:gap-4">
-        <PrimaryKpi
-          featured
-          icon={TrendingUp}
-          label="CA total"
-          value={formatCurrency(primary.revenueTotal)}
-          iconClassName="bg-emerald-100 text-emerald-700"
-          valueClassName="text-emerald-700"
-          className="col-span-2 sm:col-span-1 lg:col-span-2 lg:w-1/2 lg:justify-self-center"
-        />
+      {/* Espèces -> Crédit -> CA total, three cards of exactly the same size
+          (equal columns, equal row height): one single row from 640 px up
+          (tablet and desktop); on a phone two columns, so the third card wraps
+          cleanly onto its own row at the very same width and height. */}
+      <div className="grid auto-rows-fr grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:gap-4">
         <PrimaryKpi
           icon={Coins}
           label="Espèces"
@@ -42,6 +34,14 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
           value={formatCurrency(primary.credit)}
           iconClassName="bg-violet-100 text-violet-700"
           valueClassName="text-violet-700"
+        />
+        <PrimaryKpi
+          featured
+          icon={TrendingUp}
+          label="CA total"
+          value={formatCurrency(primary.revenueTotal)}
+          iconClassName="bg-emerald-100 text-emerald-700"
+          valueClassName="text-emerald-700"
         />
       </div>
 
@@ -93,7 +93,7 @@ function PrimaryKpi({
   value: string;
   iconClassName: string;
   valueClassName: string;
-  /** The CA total card: soft green tint and a larger amount. */
+  /** The CA total card: soft green tint (same size and amount size as the others). */
   featured?: boolean;
   className?: string;
 }) {
@@ -101,7 +101,7 @@ function PrimaryKpi({
     <div
       className={cn(
         // Phones / tablets: compact (p-3, gap-2). Desktop: compact too (px-5 py-4, gap-2.5).
-        "flex min-w-0 flex-col justify-between gap-2 rounded-2xl p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:gap-2.5 lg:px-5 lg:py-4",
+        "flex h-full min-w-0 flex-col justify-between gap-2 rounded-2xl p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:gap-2.5 lg:px-5 lg:py-4",
         featured ? "bg-gradient-to-br from-emerald-50 via-white to-white" : "bg-white",
         className,
       )}
@@ -114,8 +114,8 @@ function PrimaryKpi({
       </div>
       <p
         className={cn(
-          "font-heading leading-none font-semibold tracking-tight tabular-nums break-words",
-          featured ? "text-2xl lg:text-3xl xl:text-4xl" : "text-lg sm:text-xl lg:text-2xl xl:text-3xl",
+          // the same amount size on the three cards, so titles, icons and amounts line up
+          "font-heading text-lg leading-none font-semibold tracking-tight tabular-nums break-words sm:text-xl lg:text-2xl xl:text-3xl",
           valueClassName,
         )}
       >

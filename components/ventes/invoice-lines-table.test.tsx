@@ -140,7 +140,10 @@ test("both order details (inline row and dialog) use this one table; nothing els
   for (const file of ["./invoice-detail-inline.tsx", "./invoice-detail-dialog.tsx"]) {
     const source = read(file);
     assert.match(source, /<InvoiceLinesTable lines=\{sale\.lines\} \/>/, file);
-    assert.equal(/Remise|reconstructDiscountUnitAmount|unitPriceHT/.test(source), false, file);
+    // the lines table itself shows no discount; the ONLY discount wording allowed in the two details is the
+    // "REMISE" indicator row fed by the (role-gated) list row - never recomputed from the lines here
+    const withoutIndicator = source.replace(/Remise accordée \(incluse\)/g, "");
+    assert.equal(/Remise|reconstructDiscountUnitAmount|unitPriceHT/.test(withoutIndicator), false, file);
     // the invoice totals block is untouched
     assert.match(source, /formatCurrency\(sale\.subtotalHT\)/, file);
     assert.match(source, /formatCurrency\(sale\.taxAmount\)/, file);

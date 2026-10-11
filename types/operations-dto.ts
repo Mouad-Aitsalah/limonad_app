@@ -778,6 +778,14 @@ export interface SaleHistoryListItemDto {
   createdAt: string;
   /** Optimistic-lock token for admin cancel / edit from /ventes. */
   updatedAt: string;
+  /** "REMISE" indicator: a discount was recorded on this invoice (stored
+   *  Sale/SaleLine discount, never inferred from the total). Present ONLY when
+   *  the server sent the row to a role allowed to see it (admin, cashier -
+   *  lib/sale-discount-indicator.ts); absent for everyone else and when there
+   *  is no discount. */
+  hasDiscount?: boolean;
+  /** Discount amount as the customer sees it (TTC), with hasDiscount. */
+  discountTTC?: number;
 }
 
 export interface SaleHistoryOrdersPageDto {

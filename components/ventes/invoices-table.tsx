@@ -33,6 +33,7 @@ import {
   InvoiceDetailDialog,
 } from "@/components/ventes/invoice-detail-dialog";
 import { InvoiceDetailInline } from "@/components/ventes/invoice-detail-inline";
+import { InvoiceDiscountBadge } from "@/components/ventes/invoice-discount-badge";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
 import { useAuth } from "@/hooks/use-auth";
@@ -198,7 +199,10 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
                   </Button>
                 </TableCell>
                 <TableCell className="font-medium text-foreground">
-                  {invoice.displayNumber}
+                  <span className="inline-flex flex-wrap items-center gap-1.5">
+                    {invoice.displayNumber}
+                    {invoice.hasDiscount ? <InvoiceDiscountBadge amountTTC={invoice.discountTTC} /> : null}
+                  </span>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatDateTime(invoice.createdAt)}
