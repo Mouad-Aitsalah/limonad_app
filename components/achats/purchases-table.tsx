@@ -30,6 +30,7 @@ import { computePurchaseTotals } from "@/lib/purchase-calculations";
 import { formatCurrency } from "@/lib/utils";
 import type { ProductOptionDto } from "@/types/product-dto";
 import type { Purchase } from "@/types/purchase";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 function supplierName(purchase: Purchase, supplierOptions: ProductOptionDto[]) {
   return (
@@ -53,6 +54,7 @@ export function PurchasesTable({
   purchases,
   supplierOptions,
 }: PurchasesTableProps) {
+  const label = useColumnLabels("purchases");
   const [viewingPurchaseId, setViewingPurchaseId] = React.useState<string | null>(null);
   const [printingPurchase, setPrintingPurchase] = React.useState<Purchase | null>(null);
 
@@ -78,16 +80,16 @@ export function PurchasesTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>N° Achat</TableHead>
-            <TableHead>Date</TableHead>
-            <TableHead>Fournisseur</TableHead>
-            <TableHead>Utilisateur</TableHead>
-            <TableHead className="text-right">Montant HT</TableHead>
-            <TableHead className="text-right">TVA</TableHead>
-            <TableHead className="text-right">Montant TTC</TableHead>
-            <TableHead>Règlement</TableHead>
-            <TableHead>Statut</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{label("number")}</TableHead>
+            <TableHead>{label("date")}</TableHead>
+            <TableHead>{label("supplier")}</TableHead>
+            <TableHead>{label("user")}</TableHead>
+            <TableHead className="text-right">{label("amountHT")}</TableHead>
+            <TableHead className="text-right">{label("vat")}</TableHead>
+            <TableHead className="text-right">{label("amountTTC")}</TableHead>
+            <TableHead>{label("payment")}</TableHead>
+            <TableHead>{label("status")}</TableHead>
+            <TableHead className="text-right">{label("actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

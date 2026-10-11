@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { TruckStatusBadge } from "@/components/trucks/truck-status-badge";
 import type { TruckDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type TrucksTableProps = {
   trucks: TruckDto[];
@@ -25,6 +26,7 @@ export function TrucksTable({
   onEdit,
   onToggleStatus,
 }: TrucksTableProps) {
+  const label = useColumnLabels("trucks");
   if (trucks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -43,15 +45,15 @@ export function TrucksTable({
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Code</TableHead>
-          <TableHead>Immatriculation</TableHead>
-          <TableHead>Marque</TableHead>
-          <TableHead>Modele</TableHead>
-          <TableHead>Depot</TableHead>
-          <TableHead>Emplacement</TableHead>
-          <TableHead className="text-right">Capacite</TableHead>
-          <TableHead>Statut</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
+          <TableHead>{label("code")}</TableHead>
+          <TableHead>{label("registration")}</TableHead>
+          <TableHead>{label("brand")}</TableHead>
+          <TableHead>{label("model")}</TableHead>
+          <TableHead>{label("depot")}</TableHead>
+          <TableHead>{label("location")}</TableHead>
+          <TableHead className="text-right">{label("capacity")}</TableHead>
+          <TableHead>{label("status")}</TableHead>
+          <TableHead className="text-right">{label("actions")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

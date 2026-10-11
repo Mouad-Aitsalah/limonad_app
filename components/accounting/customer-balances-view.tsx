@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { CustomerBalancesPageDto } from "@/types/customer-balance";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 const SEARCH_DEBOUNCE_MS = 350;
 const PAGE_SIZE = 25;
@@ -26,6 +27,7 @@ type CustomerBalancesViewProps = {
 };
 
 export function CustomerBalancesView({ initialPage }: CustomerBalancesViewProps) {
+  const label = useColumnLabels("customerBalances");
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   const [includeSettled, setIncludeSettled] = React.useState(false);
@@ -118,11 +120,11 @@ export function CustomerBalancesView({ initialPage }: CustomerBalancesViewProps)
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>N° compte</TableHead>
-                <TableHead>Nom du compte</TableHead>
-                <TableHead className="text-right">Solde</TableHead>
-                <TableHead>Créé par</TableHead>
-                <TableHead className="text-right">Règlement</TableHead>
+                <TableHead>{label("accountNumber")}</TableHead>
+                <TableHead>{label("accountName")}</TableHead>
+                <TableHead className="text-right">{label("balance")}</TableHead>
+                <TableHead>{label("createdBy")}</TableHead>
+                <TableHead className="text-right">{label("settlement")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

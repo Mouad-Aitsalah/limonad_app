@@ -142,8 +142,6 @@ export function ProductsView({
   return (
     <div className="space-y-6">
       <AppPageHeader
-        eyebrow="Catalogue"
-        title="Produits"
         actions={
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button
@@ -169,8 +167,6 @@ export function ProductsView({
 
       <DataTableShell
         frameless="below-lg"
-        title="Catalogue produits"
-        description="Recherche, filtres et actions rapides sur l'ensemble des references."
         countLabel={`Page ${pageIndex + 1} · ${products.length} sur cette page · ${totalCount} au total`}
         toolbar={
           <div className="space-y-2 lg:space-y-3">

@@ -26,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type AccountingJournalViewProps = {
   initialLines: AccountingJournalLineDto[];
@@ -50,6 +51,7 @@ export function AccountingJournalView({
   accounts,
   initialAccountId,
 }: AccountingJournalViewProps) {
+  const label = useColumnLabels("journal");
   const [search, setSearch] = React.useState("");
   const [from, setFrom] = React.useState("");
   const [to, setTo] = React.useState("");
@@ -223,14 +225,14 @@ export function AccountingJournalView({
             <Table className="min-w-[860px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead>N° operation</TableHead>
-                  <TableHead>Date operation</TableHead>
-                  <TableHead>N° compte</TableHead>
-                  <TableHead>Designation</TableHead>
-                  <TableHead className="text-right">Debit</TableHead>
-                  <TableHead className="text-right">Credit</TableHead>
-                  <TableHead>N° cheque</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{label("operationNumber")}</TableHead>
+                  <TableHead>{label("operationDate")}</TableHead>
+                  <TableHead>{label("accountNumber")}</TableHead>
+                  <TableHead>{label("designation")}</TableHead>
+                  <TableHead className="text-right">{label("debit")}</TableHead>
+                  <TableHead className="text-right">{label("credit")}</TableHead>
+                  <TableHead>{label("chequeNumber")}</TableHead>
+                  <TableHead className="text-right">{label("actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

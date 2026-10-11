@@ -33,12 +33,6 @@ export default async function CustomerSettlementsPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">
-          Règlements clients
-        </h1>
-      </div>
-
       <CustomerSettlementsView initialCustomer={initialCustomer} />
     </div>
   );

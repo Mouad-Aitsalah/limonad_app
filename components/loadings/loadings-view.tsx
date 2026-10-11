@@ -53,6 +53,7 @@ import { computePriceTTC } from "@/lib/product-pricing";
 import { printLoadingTicket } from "@/lib/thermal-loading-print";
 import { isThermalPrinterAvailable } from "@/lib/thermal-printer";
 import { formatCurrency } from "@/lib/utils";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type LoadingsViewProps = {
   trucks: TruckDto[];
@@ -121,6 +122,8 @@ type ProductSuggestion = {
 };
 
 export function LoadingsView({ trucks, drivers, products, suppliers, initialHistoryPage }: LoadingsViewProps) {
+  const lineLabel = useColumnLabels("loadingLines");
+  const historyLabel = useColumnLabels("loadingsHistory");
   const [activeTab, setActiveTab] = React.useState("loading");
   const [trucksState] = React.useState(trucks);
   const [selectedDate, setSelectedDate] = React.useState(todayDateInput());
@@ -708,13 +711,6 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">Transferts de Stock</h1>
-        <p className="text-sm text-muted-foreground">
-          Fiches de transfert de stock independantes des tournees, centrees sur le camion.
-        </p>
-      </div>
-
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <TabsList variant="line" className="rounded-2xl border border-border bg-muted/30 p-1">
           <TabsTrigger value="loading">Transfert de Stock</TabsTrigger>
@@ -862,20 +858,20 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
                       <Table className="max-lg:table-fixed">
                         <TableHeader>
                           <TableRow>
-                            <TableHead className={`${MOBILE_HEAD} max-lg:w-[34%] max-lg:px-2`}>Produit</TableHead>
-                            <TableHead className="text-right max-lg:hidden">Prix</TableHead>
-                            <TableHead className="text-right max-lg:hidden">Stock depot</TableHead>
+                            <TableHead className={`${MOBILE_HEAD} max-lg:w-[34%] max-lg:px-2`}>{lineLabel("product")}</TableHead>
+                            <TableHead className="text-right max-lg:hidden">{lineLabel("price")}</TableHead>
+                            <TableHead className="text-right max-lg:hidden">{lineLabel("depotStock")}</TableHead>
                             <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[22%] max-lg:text-center`}>
-                              <ResponsiveText desktop="Charge initiale" mobile="Charge" />
+                              <ResponsiveText desktop={lineLabel("initialLoad")} mobile={lineLabel.custom("initialLoad") ?? "Charge"} />
                             </TableHead>
                             <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[22%] max-lg:text-center`}>
-                              <ResponsiveText desktop="Rechargee" mobile="Recharge" />
+                              <ResponsiveText desktop={lineLabel("reload")} mobile={lineLabel.custom("reload") ?? "Recharge"} />
                             </TableHead>
-                            <TableHead className="text-right max-lg:hidden">Restante theorique</TableHead>
+                            <TableHead className="text-right max-lg:hidden">{lineLabel("theoreticalRemaining")}</TableHead>
                             <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[22%] max-lg:text-center`}>
-                              <ResponsiveText desktop="Restante reelle" mobile="Stock réel" />
+                              <ResponsiveText desktop={lineLabel("actualRemaining")} mobile={lineLabel.custom("actualRemaining") ?? "Stock réel"} />
                             </TableHead>
-                            <TableHead className="text-right max-lg:hidden">Action</TableHead>
+                            <TableHead className="text-right max-lg:hidden">{lineLabel("action")}</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -1242,18 +1238,18 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Numero</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Chauffeur</TableHead>
-                      <TableHead>Camion</TableHead>
-                      <TableHead>Tournee</TableHead>
-                      <TableHead>Depot</TableHead>
-                      <TableHead className="text-right">Produits</TableHead>
-                      <TableHead className="text-right">Quantite</TableHead>
-                      <TableHead>Ouverture</TableHead>
-                      <TableHead>Fermeture</TableHead>
-                      <TableHead>Statut</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead>{historyLabel("number")}</TableHead>
+                      <TableHead>{historyLabel("date")}</TableHead>
+                      <TableHead>{historyLabel("driver")}</TableHead>
+                      <TableHead>{historyLabel("truck")}</TableHead>
+                      <TableHead>{historyLabel("tour")}</TableHead>
+                      <TableHead>{historyLabel("depot")}</TableHead>
+                      <TableHead className="text-right">{historyLabel("products")}</TableHead>
+                      <TableHead className="text-right">{historyLabel("quantity")}</TableHead>
+                      <TableHead>{historyLabel("opened")}</TableHead>
+                      <TableHead>{historyLabel("closed")}</TableHead>
+                      <TableHead>{historyLabel("status")}</TableHead>
+                      <TableHead className="text-right">{historyLabel("actions")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

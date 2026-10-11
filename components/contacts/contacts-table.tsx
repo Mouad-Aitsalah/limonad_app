@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { ContactDto } from "@/types/contacts";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 export type ContactsSortKey = "reference" | "fullName" | "status" | "createdAt";
 
@@ -19,7 +20,7 @@ export type ContactsSortState = {
   direction: "asc" | "desc";
 };
 
-const sortableColumns: Array<{ key: ContactsSortKey; label: string }> = [
+const sortableColumns: Array<{ key: Extract<ContactsSortKey, "reference" | "fullName">; label: string }> = [
   { key: "reference", label: "Reference" },
   { key: "fullName", label: "Nom complet" },
 ];
@@ -32,6 +33,7 @@ type ContactsTableProps = {
 };
 
 export function ContactsTable({ contacts, sort, onSortChange, onEdit }: ContactsTableProps) {
+  const label = useColumnLabels("contacts");
   if (contacts.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -49,26 +51,26 @@ export function ContactsTable({ contacts, sort, onSortChange, onEdit }: Contacts
             {sortableColumns.map((column) => (
               <TableHead key={column.key}>
                 <SortButton
-                  label={column.label}
+                  label={label(column.key)}
                   active={sort.key === column.key}
                   direction={sort.direction}
                   onClick={() => onSortChange(column.key)}
                 />
               </TableHead>
             ))}
-            <TableHead>Reference fournisseur</TableHead>
-            <TableHead>Telephone 1</TableHead>
-            <TableHead>Telephone 2</TableHead>
-            <TableHead>Email</TableHead>
+            <TableHead>{label("supplierReference")}</TableHead>
+            <TableHead>{label("phone1")}</TableHead>
+            <TableHead>{label("phone2")}</TableHead>
+            <TableHead>{label("email")}</TableHead>
             <TableHead>
               <SortButton
-                label="Statut"
+                label={label("status")}
                 active={sort.key === "status"}
                 direction={sort.direction}
                 onClick={() => onSortChange("status")}
               />
             </TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead className="text-right">{label("actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

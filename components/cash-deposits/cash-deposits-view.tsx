@@ -86,11 +86,6 @@ export function CashDepositsView({
 
   return (
     <div className="space-y-6">
-      <div>
-        {/* Page type scaled x1.4 (24px -> 33.6px title, 14px -> 19.6px text). */}
-        <h1 className="font-heading text-[33.6px] leading-tight font-semibold text-foreground">Versements</h1>
-      </div>
-
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <TabsList variant="line" className="min-h-[4.2rem] rounded-2xl border border-border bg-muted/30 p-1">
           <TabsTrigger value="new" className="px-5 text-[19.6px]">Nouveau versement</TabsTrigger>

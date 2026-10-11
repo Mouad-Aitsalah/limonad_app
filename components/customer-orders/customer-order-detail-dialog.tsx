@@ -19,6 +19,7 @@ import { CustomerOrderStatusBadge } from "@/components/customer-orders/customer-
 import { canOpenInPos, canStaffTransition } from "@/lib/client-portal-rules";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { CustomerOrderDetailDto } from "@/types/customer-order-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type CustomerOrderDetailDialogProps = {
   order: CustomerOrderDetailDto | null;
@@ -35,6 +36,7 @@ function formatDateTime(iso: string) {
 
 /** One online order: lines (estimated at submission), contact, note, and the staff actions. */
 export function CustomerOrderDetailDialog({ order, loading, busy, onClose, onAccept, onReject }: CustomerOrderDetailDialogProps) {
+  const label = useColumnLabels("customerOrderLines");
   const [rejecting, setRejecting] = React.useState(false);
   const [reason, setReason] = React.useState("");
   // The reason form only makes sense while this order can still be refused
@@ -73,9 +75,9 @@ export function CustomerOrderDetailDialog({ order, loading, busy, onClose, onAcc
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2 font-medium">Produit</th>
-                    <th className="px-3 py-2 text-right font-medium">Qté</th>
-                    <th className="px-3 py-2 text-right font-medium">Total estimé</th>
+                    <th className="px-3 py-2 font-medium">{label("product")}</th>
+                    <th className="px-3 py-2 text-right font-medium">{label("quantity")}</th>
+                    <th className="px-3 py-2 text-right font-medium">{label("estimatedTotal")}</th>
                   </tr>
                 </thead>
                 <tbody>

@@ -20,6 +20,7 @@ import { InventoryStatusBadge } from "@/components/inventory/inventory-status-ba
 import { formatCurrency } from "@/lib/utils";
 import type { DepotDto, InventoryDto, InventorySummaryDto } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type InventoryViewProps = {
   initialInventories: InventorySummaryDto[];
@@ -28,6 +29,7 @@ type InventoryViewProps = {
 };
 
 export function InventoryView({ initialInventories, depots, products }: InventoryViewProps) {
+  const label = useColumnLabels("inventories");
   const [inventories, setInventories] = React.useState(initialInventories);
   const [selectedDepotId, setSelectedDepotId] = React.useState(depots[0]?.id ?? "");
   const [busy, setBusy] = React.useState(false);
@@ -116,13 +118,6 @@ export function InventoryView({ initialInventories, depots, products }: Inventor
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">Inventaire</h1>
-        <p className="text-sm text-muted-foreground">
-          Comptage physique du stock, saisie rapide au clavier.
-        </p>
-      </div>
-
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard icon={ClipboardCheck} label="Inventaires" value={String(totals.count)} />
         <MetricCard icon={ListChecks} label="En cours" value={String(totals.inProgress)} />
@@ -175,15 +170,15 @@ export function InventoryView({ initialInventories, depots, products }: Inventor
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Numero</TableHead>
-                  <TableHead>Statut</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Lignes</TableHead>
-                  <TableHead className="text-right">Valeur inventaire</TableHead>
-                  <TableHead className="text-right">Stock avant</TableHead>
-                  <TableHead className="text-right">Difference</TableHead>
-                  <TableHead>Utilisateur</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{label("number")}</TableHead>
+                  <TableHead>{label("status")}</TableHead>
+                  <TableHead>{label("date")}</TableHead>
+                  <TableHead className="text-right">{label("lines")}</TableHead>
+                  <TableHead className="text-right">{label("value")}</TableHead>
+                  <TableHead className="text-right">{label("stockBefore")}</TableHead>
+                  <TableHead className="text-right">{label("difference")}</TableHead>
+                  <TableHead>{label("user")}</TableHead>
+                  <TableHead className="text-right">{label("actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

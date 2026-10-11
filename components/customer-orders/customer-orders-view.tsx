@@ -13,6 +13,7 @@ import { useCustomerOrderActions } from "@/components/customer-orders/use-custom
 import { canOpenInPos, canStaffTransition, type CustomerOrderStatusValue } from "@/lib/client-portal-rules";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { CustomerOrderDetailDto, CustomerOrderListItemDto, CustomerOrdersPageDto } from "@/types/customer-order-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 const FILTERS: Array<{ value: CustomerOrderStatusValue | null; label: string }> = [
   { value: "SUBMITTED", label: "À traiter" },
@@ -32,6 +33,7 @@ function formatDateTime(iso: string) {
  * POS cart and the invoice is created by the POS's normal validation.
  */
 export function CustomerOrdersView({ initialPage }: { initialPage: CustomerOrdersPageDto }) {
+  const label = useColumnLabels("customerOrders");
   const [status, setStatus] = React.useState<CustomerOrderStatusValue | null>("SUBMITTED");
   const [items, setItems] = React.useState<CustomerOrderListItemDto[]>(initialPage.items);
   const [nextCursor, setNextCursor] = React.useState<string | null>(initialPage.nextCursor);
@@ -108,13 +110,13 @@ export function CustomerOrdersView({ initialPage }: { initialPage: CustomerOrder
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Commande</TableHead>
-              <TableHead>Date</TableHead>
-              <TableHead>Client</TableHead>
-              <TableHead className="text-right">Articles</TableHead>
-              <TableHead className="text-right">Total estimé</TableHead>
-              <TableHead>Statut</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead>{label("order")}</TableHead>
+              <TableHead>{label("date")}</TableHead>
+              <TableHead>{label("customer")}</TableHead>
+              <TableHead className="text-right">{label("items")}</TableHead>
+              <TableHead className="text-right">{label("estimatedTotal")}</TableHead>
+              <TableHead>{label("status")}</TableHead>
+              <TableHead className="text-right">{label("actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

@@ -26,6 +26,7 @@ import { roleLabels } from "@/lib/roles";
 import { UserEditDialog } from "@/components/users/user-edit-dialog";
 import { UserStatusBadge } from "@/components/users/user-status-badge";
 import type { User } from "@/types/user";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 function formatLastLogin(date: Date | null) {
   if (!date) return "Jamais connecté";
@@ -44,6 +45,7 @@ type UsersTableProps = {
 };
 
 export function UsersTable({ users, onUserUpdated }: UsersTableProps) {
+  const label = useColumnLabels("users");
   const { currentUser } = useAuth();
   const [editingUser, setEditingUser] = React.useState<User | null>(null);
 
@@ -66,12 +68,12 @@ export function UsersTable({ users, onUserUpdated }: UsersTableProps) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Nom</TableHead>
-            <TableHead>Email</TableHead>
-            <TableHead>Rôle</TableHead>
-            <TableHead>Statut</TableHead>
-            <TableHead>Dernière connexion</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{label("name")}</TableHead>
+            <TableHead>{label("email")}</TableHead>
+            <TableHead>{label("role")}</TableHead>
+            <TableHead>{label("status")}</TableHead>
+            <TableHead>{label("lastLogin")}</TableHead>
+            <TableHead className="text-right">{label("actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

@@ -215,12 +215,6 @@ export function EmployeePayrollView({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">
-          Avances / Salaire
-        </h1>
-      </div>
-
       <div className="grid gap-6 xl:grid-cols-[420px_1fr]">
         <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
           <CardContent className="py-6">

@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { StockLevelDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 export function WarehouseStockTable({
   rows,
@@ -21,6 +22,7 @@ export function WarehouseStockTable({
   /** Phones only: add the location code under the reference (all-locations tab). */
   showLocation?: boolean;
 }) {
+  const label = useColumnLabels("warehouseStock");
   if (rows.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -55,12 +57,12 @@ export function WarehouseStockTable({
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Produit</TableHead>
-          <TableHead>Categorie</TableHead>
-          <TableHead className="text-right">Stock actuel</TableHead>
-          <TableHead className="text-right">Stock minimum</TableHead>
-          <TableHead className="text-right">Valeur</TableHead>
-          <TableHead>Statut</TableHead>
+          <TableHead>{label("product")}</TableHead>
+          <TableHead>{label("category")}</TableHead>
+          <TableHead className="text-right">{label("currentStock")}</TableHead>
+          <TableHead className="text-right">{label("minimumStock")}</TableHead>
+          <TableHead className="text-right">{label("value")}</TableHead>
+          <TableHead>{label("status")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

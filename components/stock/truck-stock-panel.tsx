@@ -37,6 +37,7 @@ import {
 import { cn, formatCurrency } from "@/lib/utils";
 import type { StockAdjustmentInput, StockLevelDto, StockLocationDto } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type TruckStockPanelProps = {
   locations: StockLocationDto[];
@@ -112,6 +113,7 @@ export function TruckStockPanel({
   products,
   onAdjusted,
 }: TruckStockPanelProps) {
+  const label = useColumnLabels("truckStock");
   const [selectedLocationId, setSelectedLocationId] = React.useState(
     locations[0]?.id ?? "",
   );
@@ -353,12 +355,12 @@ export function TruckStockPanel({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Produit</TableHead>
-                <TableHead className="text-right">Quantite</TableHead>
-                <TableHead className="text-right">Disponible</TableHead>
-                <TableHead className="text-right">Valeur</TableHead>
-                <TableHead className="text-right">Derniere MAJ</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{label("product")}</TableHead>
+                <TableHead className="text-right">{label("quantity")}</TableHead>
+                <TableHead className="text-right">{label("available")}</TableHead>
+                <TableHead className="text-right">{label("value")}</TableHead>
+                <TableHead className="text-right">{label("updatedAt")}</TableHead>
+                <TableHead className="text-right">{label("actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

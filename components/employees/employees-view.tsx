@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
 import type { EmployeeDto, EmployeesSummaryDto } from "@/types/employees";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type EmployeesViewProps = {
   initialEmployees: EmployeeDto[];
@@ -25,6 +26,7 @@ type EmployeesViewProps = {
 };
 
 export function EmployeesView({ initialEmployees, initialSummary }: EmployeesViewProps) {
+  const label = useColumnLabels("employees");
   const [employees, setEmployees] = React.useState(initialEmployees);
   const [summary, setSummary] = React.useState(initialSummary);
   const [search, setSearch] = React.useState("");
@@ -65,11 +67,7 @@ export function EmployeesView({ initialEmployees, initialSummary }: EmployeesVie
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold text-foreground">Employes</h1>
-        </div>
-
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-end">
         <EmployeeDialog onSaved={refreshEmployees} />
       </div>
 
@@ -109,17 +107,17 @@ export function EmployeesView({ initialEmployees, initialSummary }: EmployeesVie
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Code employe</TableHead>
-                  <TableHead>Nom complet</TableHead>
-                  <TableHead>Date embauche</TableHead>
-                  <TableHead className="text-right">Salaire</TableHead>
-                  <TableHead>Telephone</TableHead>
-                  <TableHead>Code compte avance</TableHead>
-                  <TableHead>Nom compte avance</TableHead>
-                  <TableHead>Code compte salaire</TableHead>
-                  <TableHead>Nom compte salaire</TableHead>
-                  <TableHead>Statut</TableHead>
-                  <TableHead>Actions</TableHead>
+                  <TableHead>{label("code")}</TableHead>
+                  <TableHead>{label("fullName")}</TableHead>
+                  <TableHead>{label("hireDate")}</TableHead>
+                  <TableHead className="text-right">{label("salary")}</TableHead>
+                  <TableHead>{label("phone")}</TableHead>
+                  <TableHead>{label("advanceAccountCode")}</TableHead>
+                  <TableHead>{label("advanceAccountName")}</TableHead>
+                  <TableHead>{label("salaryAccountCode")}</TableHead>
+                  <TableHead>{label("salaryAccountName")}</TableHead>
+                  <TableHead>{label("status")}</TableHead>
+                  <TableHead>{label("actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

@@ -7,6 +7,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { StockMovementDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 const movementLabels: Record<string, string> = {
   PURCHASE_ENTRY: "Reception achat",
@@ -26,22 +27,23 @@ export function StockMovementsTable({
 }: {
   movements: StockMovementDto[];
 }) {
+  const label = useColumnLabels("stockMovements");
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Date</TableHead>
-          <TableHead>N°</TableHead>
-          <TableHead>Produit</TableHead>
-          <TableHead>Emplacement</TableHead>
-          <TableHead className="text-right">Avant</TableHead>
-          <TableHead className="text-right">Apres</TableHead>
-          <TableHead className="text-right">Ecart</TableHead>
-          <TableHead>Motif</TableHead>
-          <TableHead>Origine</TableHead>
-          <TableHead>Destination</TableHead>
-          <TableHead>Utilisateur</TableHead>
-          <TableHead>Type</TableHead>
+          <TableHead>{label("date")}</TableHead>
+          <TableHead>{label("number")}</TableHead>
+          <TableHead>{label("product")}</TableHead>
+          <TableHead>{label("location")}</TableHead>
+          <TableHead className="text-right">{label("before")}</TableHead>
+          <TableHead className="text-right">{label("after")}</TableHead>
+          <TableHead className="text-right">{label("difference")}</TableHead>
+          <TableHead>{label("reason")}</TableHead>
+          <TableHead>{label("origin")}</TableHead>
+          <TableHead>{label("destination")}</TableHead>
+          <TableHead>{label("user")}</TableHead>
+          <TableHead>{label("type")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

@@ -90,15 +90,10 @@ export function TrucksView({ initialTrucks, depots }: TrucksViewProps) {
   return (
     <div className="space-y-6">
       <AppPageHeader
-        eyebrow="Logistique"
-        title="Camions"
-        description="Suivez la flotte COMDIS, les affectations, les statuts et la disponibilite des camions."
         actions={<TruckDialog depots={depots} onSave={saveTruck} />}
       />
 
       <DataTableShell
-        title="Flotte de livraison"
-        description="Recherchez un camion, consultez ses informations et pilotez son statut."
         countLabel={`${filteredTrucks.length} camion${filteredTrucks.length > 1 ? "s" : ""}`}
         toolbar={
           <TrucksToolbar

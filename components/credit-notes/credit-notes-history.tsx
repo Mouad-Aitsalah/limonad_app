@@ -41,6 +41,7 @@ import type {
   StockLocationDto,
   SupplierPartnerDto,
 } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type CreditNotesHistoryProps = {
   partyType: CreditNotePartyType;
@@ -83,6 +84,7 @@ export function CreditNotesHistory({
   onEditDraft,
   onCreditNoteUpdated,
 }: CreditNotesHistoryProps) {
+  const label = useColumnLabels("creditNotes");
   const [filters, setFilters] = React.useState<Filters>(defaultFilters);
   const [selectedDetail, setSelectedDetail] = React.useState<CreditNote | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
@@ -361,15 +363,15 @@ export function CreditNotesHistory({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>N° avoir</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>{partyLabel}</TableHead>
-                  <TableHead className="text-right">Produits</TableHead>
-                  <TableHead className="text-right">Montant</TableHead>
-                  <TableHead>{stockLabel}</TableHead>
-                  <TableHead>Statut</TableHead>
-                  <TableHead>Utilisateur</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{label("number")}</TableHead>
+                  <TableHead>{label("date")}</TableHead>
+                  <TableHead>{partyType === "client" ? label("customer") : label("supplier")}</TableHead>
+                  <TableHead className="text-right">{label("products")}</TableHead>
+                  <TableHead className="text-right">{label("amount")}</TableHead>
+                  <TableHead>{partyType === "client" ? label("stockDestination") : label("stockSource")}</TableHead>
+                  <TableHead>{label("status")}</TableHead>
+                  <TableHead>{label("user")}</TableHead>
+                  <TableHead className="text-right">{label("actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

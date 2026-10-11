@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/table";
 import type { TruckLoadingDto } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 const loadingStatusLabels: Record<string, string> = {
   DRAFT: "Ouvert",
@@ -66,6 +67,7 @@ export function LoadingDetailView({
   loading: TruckLoadingDto;
   products: ProductDto[];
 }) {
+  const label = useColumnLabels("loadingDetail");
   const router = useRouter();
   const [loading, setLoading] = React.useState(initialLoading);
   const [mode, setMode] = React.useState<"view" | "edit">("view");
@@ -317,13 +319,13 @@ export function LoadingDetailView({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Produit</TableHead>
-                  <TableHead className="text-right">Stock depart</TableHead>
-                  <TableHead className="text-right">Charge initiale</TableHead>
-                  <TableHead className="text-right">Recharge</TableHead>
-                  <TableHead className="text-right">Restant theorique</TableHead>
-                  <TableHead className="text-right">Restant reel</TableHead>
-                  {mode === "edit" ? <TableHead className="text-right">Action</TableHead> : null}
+                  <TableHead>{label("product")}</TableHead>
+                  <TableHead className="text-right">{label("departureStock")}</TableHead>
+                  <TableHead className="text-right">{label("initialLoad")}</TableHead>
+                  <TableHead className="text-right">{label("reload")}</TableHead>
+                  <TableHead className="text-right">{label("theoreticalRemaining")}</TableHead>
+                  <TableHead className="text-right">{label("actualRemaining")}</TableHead>
+                  {mode === "edit" ? <TableHead className="text-right">{label("action")}</TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>

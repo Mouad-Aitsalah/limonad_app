@@ -119,8 +119,6 @@ export function StockView({
   return (
     <div className="space-y-6">
       <AppPageHeader
-        eyebrow="Operations"
-        title="Stock"
         actions={
           <StockAdjustmentDialog
             products={products}

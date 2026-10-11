@@ -43,8 +43,12 @@ export type UserCreateInput = {
   depotId?: string | null;
 };
 
+/** PATCH /api/users/[id] - only the fields sent are changed (admin only). */
 export type UserUpdateInput = {
-  /** Only field currently editable through PATCH /api/users/[id]:
-   * (re)assign or clear the user's operating depot. */
-  depotId: string | null;
+  /** Full name (also re-splits firstName / lastName). */
+  nom?: string;
+  /** Login email: validated, lower-cased, unique. */
+  email?: string;
+  /** (Re)assign or clear the user's operating depot. */
+  depotId?: string | null;
 };

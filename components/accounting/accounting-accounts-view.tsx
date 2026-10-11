@@ -33,6 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 const accountTypes = Object.keys(accountingAccountTypeLabels) as AccountingAccountType[];
 
@@ -59,6 +60,7 @@ export function AccountingAccountsView({
   initialAccounts,
   canManage,
 }: AccountingAccountsViewProps) {
+  const label = useColumnLabels("accountingAccounts");
   const [accounts, setAccounts] = React.useState(initialAccounts);
   const [search, setSearch] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState<"all" | AccountingAccountType>("all");
@@ -321,12 +323,12 @@ export function AccountingAccountsView({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Code</TableHead>
-                <TableHead>Nom du compte</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Statut</TableHead>
-                <TableHead>Mouvements</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{label("code")}</TableHead>
+                <TableHead>{label("name")}</TableHead>
+                <TableHead>{label("type")}</TableHead>
+                <TableHead>{label("status")}</TableHead>
+                <TableHead>{label("movements")}</TableHead>
+                <TableHead className="text-right">{label("actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -25,6 +26,9 @@ const UNASSIGNED = "__none__";
 // versements). "super_admin" has no depot-scoped screens; "driver" is
 // scoped through Truck/Driver instead.
 const DEPOT_ROLES: User["role"][] = ["admin", "cashier", "depot_manager"];
+
+// Same check as the server (zod .email()) - the server stays the authority.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type UserEditFormProps = {
   user: User;
@@ -51,6 +55,12 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
   const [selectedDepotId, setSelectedDepotId] = React.useState(
     () => user.depotId ?? UNASSIGNED,
   );
+
+  // Name and email, prefilled with the current values (admin only: the
+  // Utilisateurs page and PATCH /api/users/[id] both require an admin).
+  const [name, setName] = React.useState(user.nom);
+  const [email, setEmail] = React.useState(user.email);
+  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
 
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -113,12 +123,83 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
     [trucks, user.driver?.id],
   );
 
-  async function handleSaveTruck() {
-    if (!user.driver || savingRef.current) return;
+  const trimmedName = name.trim();
+  const normalizedEmail = email.trim().toLowerCase();
+  const nameChanged = trimmedName !== user.nom;
+  const emailChanged = normalizedEmail !== user.email.toLowerCase();
+  const depotChanged = canAssignDepot && (selectedDepotId === UNASSIGNED ? null : selectedDepotId) !== (user.depotId ?? null);
+  const truckChanged = isDriver && (selectedTruckId === UNASSIGNED ? null : selectedTruckId) !== (user.driver?.truck?.id ?? null);
+  const hasChanges = nameChanged || emailChanged || depotChanged || truckChanged;
+
+  function validateIdentity(): Record<string, string> {
+    const errors: Record<string, string> = {};
+    if (!trimmedName) errors.nom = "Le nom est obligatoire.";
+    if (!normalizedEmail) errors.email = "L'email est obligatoire.";
+    else if (!EMAIL_PATTERN.test(normalizedEmail)) errors.email = "L'adresse email est invalide.";
+    return errors;
+  }
+
+  /** One "Enregistrer": name / email / depot (PATCH /api/users/[id], only what
+   *  changed), then the truck (existing driver endpoint) if it changed. */
+  async function handleSave() {
+    if (savingRef.current || !hasChanges) return;
+    const errors = validateIdentity();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) return;
 
     savingRef.current = true;
     setSaving(true);
     setError(null);
+    let saved: User = user;
+    try {
+      if (nameChanged || emailChanged || depotChanged) {
+        const body: Record<string, unknown> = {};
+        if (nameChanged) body.nom = trimmedName;
+        if (emailChanged) body.email = normalizedEmail;
+        if (depotChanged) body.depotId = selectedDepotId === UNASSIGNED ? null : selectedDepotId;
+        const response = await fetch(`/api/users/${user.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const result = (await response.json().catch(() => ({}))) as {
+          user?: User;
+          message?: string;
+          fieldErrors?: Record<string, string>;
+        };
+        if (!response.ok || !result.user) {
+          const message = result.message ?? "Impossible de modifier l'utilisateur.";
+          setFieldErrors(result.fieldErrors ?? {});
+          setError(result.fieldErrors?.email ?? result.fieldErrors?.nom ?? result.fieldErrors?.depotId ?? message);
+          toast.error(message);
+          return;
+        }
+        saved = { ...result.user, driver: user.driver };
+      }
+
+      if (truckChanged && user.driver) {
+        const truck = await saveTruck();
+        if (!truck.ok) {
+          // the name / email may already be saved: show it, then the truck error
+          if (saved !== user) onSaved(saved);
+          return;
+        }
+        saved = { ...saved, driver: truck.driver };
+      }
+
+      toast.success(`Utilisateur ${saved.nom} modifié.`);
+      onSaved(saved);
+    } catch {
+      setError("Impossible de modifier l'utilisateur.");
+      toast.error("Impossible de modifier l'utilisateur.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  async function saveTruck(): Promise<{ ok: true; driver: NonNullable<User["driver"]> } | { ok: false }> {
+    if (!user.driver) return { ok: false };
     try {
       const truckId = selectedTruckId === UNASSIGNED ? null : selectedTruckId;
       const response = await fetch(`/api/drivers/${user.driver.id}/truck`, {
@@ -140,74 +221,52 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
         const message = result.message ?? "Impossible d'affecter le camion.";
         setError(result.fieldErrors?.truckId ?? message);
         toast.error(message);
-        return;
+        return { ok: false };
       }
-
-      toast.success(
-        result.driver.truck
-          ? `Camion ${result.driver.truck.code} affecte a ${user.nom}.`
-          : `Affectation retiree pour ${user.nom}.`,
-      );
-      onSaved({
-        ...user,
-        driver: { id: result.driver.id, truck: result.driver.truck },
-      });
+      return { ok: true, driver: { id: result.driver.id, truck: result.driver.truck } };
     } catch {
       setError("Impossible d'affecter le camion.");
       toast.error("Impossible d'affecter le camion.");
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  }
-
-  async function handleSaveDepot() {
-    if (savingRef.current) return;
-
-    savingRef.current = true;
-    setSaving(true);
-    setError(null);
-    try {
-      const depotId = selectedDepotId === UNASSIGNED ? null : selectedDepotId;
-      const response = await fetch(`/api/users/${user.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ depotId }),
-      });
-      const result = (await response.json()) as {
-        user?: User;
-        message?: string;
-        fieldErrors?: Record<string, string>;
-      };
-
-      if (!response.ok || !result.user) {
-        const message = result.message ?? "Impossible de modifier l'utilisateur.";
-        setError(result.fieldErrors?.depotId ?? message);
-        toast.error(message);
-        return;
-      }
-
-      toast.success(
-        result.user.depotName
-          ? `Dépôt ${result.user.depotName} affecté à ${user.nom}.`
-          : `Dépôt retiré pour ${user.nom}.`,
-      );
-      onSaved(result.user);
-    } catch {
-      setError("Impossible de modifier l'utilisateur.");
-      toast.error("Impossible de modifier l'utilisateur.");
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
+      return { ok: false };
     }
   }
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 space-y-4 overflow-y-auto px-1 py-1">
+        <div className="space-y-2">
+          <Label htmlFor={`user-edit-name-${user.id}`}>Nom</Label>
+          <Input
+            id={`user-edit-name-${user.id}`}
+            value={name}
+            maxLength={160}
+            autoComplete="off"
+            aria-invalid={fieldErrors.nom ? true : undefined}
+            onChange={(event) => setName(event.target.value)}
+          />
+          {fieldErrors.nom ? <p className="text-xs text-destructive">{fieldErrors.nom}</p> : null}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor={`user-edit-email-${user.id}`}>Email</Label>
+          <Input
+            id={`user-edit-email-${user.id}`}
+            type="email"
+            value={email}
+            autoComplete="off"
+            aria-invalid={fieldErrors.email ? true : undefined}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          {fieldErrors.email ? (
+            <p className="text-xs text-destructive">{fieldErrors.email}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Identifiant de connexion : la nouvelle adresse servira à la prochaine connexion. Le mot de passe ne change pas.
+            </p>
+          )}
+        </div>
+
         <div className="grid gap-2.5 rounded-xl border border-border p-3 text-sm">
-          <InfoRow label="Nom" value={user.nom} />
-          <InfoRow label="Email" value={user.email} />
           <InfoRow label="Rôle" value={roleLabels[user.role]} />
         </div>
 
@@ -277,18 +336,15 @@ export function UserEditForm({ user, onCancel, onSaved }: UserEditFormProps) {
 
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
-          {isDriver || canAssignDepot ? "Annuler" : "Fermer"}
+          Annuler
         </Button>
-        {isDriver && (
-          <Button type="button" onClick={handleSaveTruck} disabled={saving || loadingTrucks}>
-            {saving ? "Enregistrement..." : "Enregistrer le camion"}
-          </Button>
-        )}
-        {canAssignDepot && (
-          <Button type="button" onClick={handleSaveDepot} disabled={saving || loadingDepots}>
-            {saving ? "Enregistrement..." : "Enregistrer le dépôt"}
-          </Button>
-        )}
+        <Button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={saving || !hasChanges || (isDriver && loadingTrucks) || (canAssignDepot && loadingDepots)}
+        >
+          {saving ? "Enregistrement..." : "Enregistrer"}
+        </Button>
       </DialogFooter>
     </div>
   );

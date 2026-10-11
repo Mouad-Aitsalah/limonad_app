@@ -20,15 +20,6 @@ export default async function AccountingSettingsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">
-          Paramètres comptables
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Centralise l&apos;association entre les operations metier et les comptes comptables.
-        </p>
-      </div>
-
       <AccountingSettingsView
         initialSettings={settings}
         accounts={accounts}

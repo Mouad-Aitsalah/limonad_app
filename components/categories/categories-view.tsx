@@ -101,14 +101,10 @@ export function CategoriesView({ initialCategories }: CategoriesViewProps) {
   return (
     <div className="space-y-6">
       <AppPageHeader
-        eyebrow="Catalogue"
-        title="Categories"
         actions={<CategoryDialog onSave={saveCategory} />}
       />
 
       <DataTableShell
-        title="Structure du catalogue"
-        description="Recherche, statuts et actions rapides sur les categories."
         countLabel={`${filteredCategories.length} categorie${filteredCategories.length > 1 ? "s" : ""}`}
         toolbar={
           <CategoriesToolbar

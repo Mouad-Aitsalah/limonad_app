@@ -20,12 +20,6 @@ export default async function VentesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">
-          Archives des factures
-        </h1>
-      </div>
-
       <SalesView initialOrdersPage={ordersPage} sessions={sessions} months={months} />
     </div>
   );

@@ -9,6 +9,7 @@ import {
 import { unitPriceTTCFromHT } from "@/lib/pos-discount";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { SaleLineDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 /**
  * The products of an invoice, as shown by the order detail of "Factures
@@ -38,19 +39,20 @@ const cellClass = "px-1.5 py-2 text-xs sm:px-3 sm:text-sm";
 const numericCellClass = cn(cellClass, "w-px px-1 text-right tabular-nums sm:px-3");
 
 export function InvoiceLinesTable({ lines }: { lines: SaleLineDto[] }) {
+  const label = useColumnLabels("invoiceLines");
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead className={cn(headClass, "w-full")}>Produit</TableHead>
+          <TableHead className={cn(headClass, "w-full")}>{label("product")}</TableHead>
           <TableHead className={numericHeadClass} title="Prix unitaire TTC catalogue">
-            Prix TTC
+            {label("unitPrice")}
           </TableHead>
           <TableHead className={numericHeadClass} title="Quantité">
-            Qté
+            {label("quantity")}
           </TableHead>
           <TableHead className={numericHeadClass} title="Montant TTC facturé de la ligne">
-            Total TTC
+            {label("total")}
           </TableHead>
         </TableRow>
       </TableHeader>

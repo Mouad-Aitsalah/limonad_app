@@ -101,13 +101,7 @@ export function AccountsView({ initialPage, accountingAccounts }: AccountsViewPr
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold text-foreground">
-            Comptes
-          </h1>
-        </div>
-
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-end">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button
             type="button"

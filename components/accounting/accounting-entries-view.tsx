@@ -24,6 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type AccountingEntriesViewProps = {
   accounts: AccountingAccountOptionDto[];
@@ -115,6 +116,7 @@ export function AccountingEntriesView({
   initialDrafts,
   reviseEntry,
 }: AccountingEntriesViewProps) {
+  const label = useColumnLabels("entryLines");
   const router = useRouter();
   const reviseMode = Boolean(reviseEntry);
 
@@ -663,11 +665,11 @@ export function AccountingEntriesView({
           <Table className="min-w-[720px] table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[14%]">N° compte</TableHead>
-                <TableHead className="w-[28%]">Désignation</TableHead>
-                <TableHead className="w-[30%]">Nom du compte</TableHead>
-                <TableHead className="w-[13%] text-right">Débit</TableHead>
-                <TableHead className="w-[13%] text-right">Crédit</TableHead>
+                <TableHead className="w-[14%]">{label("accountNumber")}</TableHead>
+                <TableHead className="w-[28%]">{label("designation")}</TableHead>
+                <TableHead className="w-[30%]">{label("accountName")}</TableHead>
+                <TableHead className="w-[13%] text-right">{label("debit")}</TableHead>
+                <TableHead className="w-[13%] text-right">{label("credit")}</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>

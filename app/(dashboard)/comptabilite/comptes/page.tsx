@@ -16,15 +16,6 @@ export default async function AccountingAccountsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">
-          Comptes comptables
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Gere le plan comptable sans dupliquer les donnees ni casser les anciennes references.
-        </p>
-      </div>
-
       <AccountingAccountsView
         initialAccounts={accounts}
         canManage={user?.role === "admin"}

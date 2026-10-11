@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { TABLE_COLUMNS } from "@/lib/table-labels/registry";
 
 const view = readFileSync(new URL("./loadings-view.tsx", import.meta.url), "utf8");
 
@@ -18,7 +19,8 @@ test("the rest of the open fiche is untouched: header, loaded products, per-line
   assert.match(view, /L&apos;enregistrement du brouillon met immediatement a jour le stock reel/);
   // the per-line columns (same labels, same sources) are still there
   assert.match(view, /<ResponsiveText desktop="Charge initiale" mobile="Charge" \/>/);
-  assert.match(view, /Restante theorique<\/TableHead>/);
+  assert.match(view, /\{lineLabel\("theoreticalRemaining"\)\}<\/TableHead>/);
+  assert.equal(TABLE_COLUMNS.loadingLines.columns.theoreticalRemaining, "Restante theorique");
   assert.match(view, /desktop="Restante reelle" mobile="Stock réel"/);
   assert.match(view, /truckLevelsByProductId\[line\.productId\] \?\? 0/);
 });

@@ -5,6 +5,14 @@ import {
   parseProductColumnSettings,
   type ProductColumnSettings,
 } from "@/lib/product-columns";
+import {
+  findInvalidLabel,
+  findTablePage,
+  parseTableLabels,
+  sanitizePageLabels,
+  withPageLabels,
+  type TableLabels,
+} from "@/lib/table-labels/labels";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -104,9 +112,15 @@ export async function updateProductColumnSettings(input: unknown): Promise<Produ
     where: { id: user.organizationId },
     select: { productColumnSettings: true },
   });
+  // The same JSON also holds the organisation's custom table labels ("labels"):
+  // only the "columns" part is replaced here.
+  const stored =
+    before?.productColumnSettings && typeof before.productColumnSettings === "object" && !Array.isArray(before.productColumnSettings)
+      ? (before.productColumnSettings as Record<string, unknown>)
+      : {};
   await prisma.organization.update({
     where: { id: user.organizationId },
-    data: { productColumnSettings: settings },
+    data: { productColumnSettings: { ...stored, ...settings } as Prisma.InputJsonObject },
     select: { id: true },
   });
 
@@ -123,4 +137,80 @@ export async function updateProductColumnSettings(input: unknown): Promise<Produ
   });
 
   return { settings, canEdit: true };
+}
+
+/**
+ * Custom column labels (Paramètres -> Personnalisation des tableaux), stored
+ * under "labels" in Organization.productColumnSettings - see
+ * lib/table-labels/labels.ts. Read by the dashboard layout for EVERY staff
+ * role (they all see the labels), written by an admin only.
+ */
+async function readTableLabels(organizationId: string): Promise<TableLabels> {
+  const organization = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { productColumnSettings: true },
+  });
+  return parseTableLabels(organization?.productColumnSettings);
+}
+
+/** Dashboard layout: the labels of the signed-in user's organisation, {} when there is none. */
+export async function getTableLabelsForShell(): Promise<TableLabels> {
+  try {
+    const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+    return await readTableLabels(user.organizationId);
+  } catch {
+    // No session / another role: every table keeps its default labels.
+    return {};
+  }
+}
+
+/** Loader of /parametres/tableaux. */
+export async function getTableLabelsForAdmin(): Promise<TableLabels> {
+  const user = await requireOrganizationUser(["admin"]);
+  return readTableLabels(user.organizationId);
+}
+
+/**
+ * Replaces the labels of ONE page (body: { page, labels: { [table]: { [column]: text } } }).
+ * Empty / default texts are not stored, so an empty object resets the page to
+ * its default labels. The other pages and the /produits column choice are kept.
+ */
+export async function updateTablePageLabels(input: unknown): Promise<TableLabels> {
+  const user = await requireOrganizationUser(["admin"]);
+  const body = (input && typeof input === "object" ? input : {}) as { page?: unknown; labels?: unknown };
+  const page = typeof body.page === "string" ? findTablePage(body.page) : undefined;
+  if (!page) {
+    throw new OperationsServiceError("Page inconnue.", 422, { page: "Page inconnue." });
+  }
+  const invalid = findInvalidLabel(page, body.labels);
+  if (invalid) {
+    throw new OperationsServiceError(invalid, 422, { labels: invalid });
+  }
+  const pageLabels = sanitizePageLabels(page, body.labels);
+
+  const before = await prisma.organization.findUnique({
+    where: { id: user.organizationId },
+    select: { productColumnSettings: true },
+  });
+  if (!before) throw new AuthServiceError("Organisation introuvable.", 404);
+  const next = withPageLabels(before.productColumnSettings, page.key, pageLabels);
+  await prisma.organization.update({
+    where: { id: user.organizationId },
+    data: { productColumnSettings: next as Prisma.InputJsonObject },
+    select: { id: true },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      organizationId: user.organizationId,
+      userId: user.id,
+      action: "TABLE_LABELS_UPDATED",
+      entityType: "Organization",
+      entityId: user.organizationId,
+      oldValue: { page: page.key, labels: parseTableLabels(before.productColumnSettings)[page.key] ?? {} },
+      newValue: { page: page.key, labels: pageLabels },
+    },
+  });
+
+  return parseTableLabels(next);
 }

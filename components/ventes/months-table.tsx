@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
 import type { SalesMonthDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type MonthsTableProps = {
   months: SalesMonthDto[];
@@ -17,6 +18,7 @@ type MonthsTableProps = {
 };
 
 export function MonthsTable({ months, onSelectMonth }: MonthsTableProps) {
+  const label = useColumnLabels("archiveMonths");
   if (months.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -30,12 +32,12 @@ export function MonthsTable({ months, onSelectMonth }: MonthsTableProps) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Mois</TableHead>
-          <TableHead className="text-right">Année</TableHead>
-          <TableHead className="text-right">Commandes</TableHead>
-          <TableHead className="text-right">Total vendu</TableHead>
-          <TableHead className="text-right">Remboursements</TableHead>
-          <TableHead className="text-right">Total net</TableHead>
+          <TableHead>{label("month")}</TableHead>
+          <TableHead className="text-right">{label("year")}</TableHead>
+          <TableHead className="text-right">{label("orders")}</TableHead>
+          <TableHead className="text-right">{label("sold")}</TableHead>
+          <TableHead className="text-right">{label("refunds")}</TableHead>
+          <TableHead className="text-right">{label("net")}</TableHead>
           <TableHead className="w-8" />
         </TableRow>
       </TableHeader>

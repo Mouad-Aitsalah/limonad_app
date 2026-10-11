@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 export const SETTINGS_SECTIONS = [
   { label: "Identité de l'entreprise", href: "/parametres/identite" },
   { label: "Tarification", href: "/parametres/tarification" },
+  { label: "Personnalisation des tableaux", href: "/parametres/tableaux" },
 ] as const;
 
 /**

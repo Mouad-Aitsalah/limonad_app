@@ -15,6 +15,7 @@ import { formatCurrency } from "@/lib/utils";
 import { readFileAsDataUrl, validateLogoFile } from "@/lib/logo-validation";
 import { useAuth } from "@/hooks/use-auth";
 import type { BusinessAccountListItem } from "@/types/business-account";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 const typeLabels: Record<BusinessAccountListItem["type"], string> = {
   CUSTOMER: "Client",
@@ -62,6 +63,7 @@ export function AccountsTable({
   onLogoChanged,
 }: AccountsTableProps) {
   const { currentUser } = useAuth();
+  const label = useColumnLabels("accounts");
   const canManageSupplierLogo = currentUser?.role === "admin";
   if (accounts.length === 0) {
     return (
@@ -95,19 +97,19 @@ export function AccountsTable({
                     : "inline-flex items-center gap-1 text-left"
                 }
               >
-                <span>{column.label}</span>
+                <span>{label(column.key)}</span>
                 <SortIcon active={sort.key === column.key} direction={sort.direction} />
               </button>
             </TableHead>
           ))}
-          <TableHead>Telephone</TableHead>
+          <TableHead>{label("phone")}</TableHead>
           <TableHead className="text-right">
             <button
               type="button"
               onClick={() => onSortChange("creditLimit")}
               className="inline-flex w-full items-center justify-end gap-1 text-left"
             >
-              <span>Plafond</span>
+              <span>{label("creditLimit")}</span>
               <SortIcon active={sort.key === "creditLimit"} direction={sort.direction} />
             </button>
           </TableHead>
@@ -117,12 +119,12 @@ export function AccountsTable({
               onClick={() => onSortChange("createdAt")}
               className="inline-flex items-center gap-1 text-left"
             >
-              <span>Date de creation</span>
+              <span>{label("createdAt")}</span>
               <SortIcon active={sort.key === "createdAt"} direction={sort.direction} />
             </button>
           </TableHead>
-          <TableHead>Cree par</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
+          <TableHead>{label("createdBy")}</TableHead>
+          <TableHead className="text-right">{label("actions")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

@@ -27,6 +27,7 @@ import { formatCustomerCode } from "@/lib/customer-code";
 import { formatCurrency } from "@/lib/utils";
 import type { CustomerDto } from "@/types/operations-dto";
 import type { CustomerJournalDto } from "@/types/customer-settlement";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type SettlementMethod = "CASH" | "CHECK" | "BANK_TRANSFER";
 
@@ -53,6 +54,7 @@ type CustomerSettlementsViewProps = {
 export function CustomerSettlementsView({
   initialCustomer = null,
 }: CustomerSettlementsViewProps) {
+  const label = useColumnLabels("customerJournal");
   // Single source of truth for the selected client - fed identically by the
   // "Client" combobox (search) and the "N° client" box (GET
   // /api/customers/by-number, org-scoped). No parallel state.
@@ -394,14 +396,14 @@ export function CustomerSettlementsView({
                   <Table className="min-w-[900px]">
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Date</TableHead>
-                        <TableHead>N° opération</TableHead>
-                        <TableHead>N° compte</TableHead>
-                        <TableHead>Désignation</TableHead>
-                        <TableHead>Utilisateur</TableHead>
-                        <TableHead className="text-right">Débit</TableHead>
-                        <TableHead className="text-right">Crédit</TableHead>
-                        <TableHead className="text-right">Solde</TableHead>
+                        <TableHead>{label("date")}</TableHead>
+                        <TableHead>{label("operationNumber")}</TableHead>
+                        <TableHead>{label("accountNumber")}</TableHead>
+                        <TableHead>{label("designation")}</TableHead>
+                        <TableHead>{label("user")}</TableHead>
+                        <TableHead className="text-right">{label("debit")}</TableHead>
+                        <TableHead className="text-right">{label("credit")}</TableHead>
+                        <TableHead className="text-right">{label("balance")}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>

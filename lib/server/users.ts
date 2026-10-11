@@ -72,7 +72,16 @@ const createUserSchema = z.object({
   depotId: depotIdSchema,
 });
 
+// Every field is optional: only the ones sent are changed (an absent field is
+// never cleared). Same rules as the creation form for the name and the email.
 const updateUserSchema = z.object({
+  nom: z.string().trim().min(1, "Le nom est obligatoire.").max(160, "Le nom est trop long.").optional(),
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .email("L'adresse email est invalide.")
+    .optional(),
   depotId: depotIdSchema,
 });
 
@@ -198,10 +207,16 @@ export async function createUser(input: UserCreateInput): Promise<User> {
 }
 
 /**
- * Real update flow for an existing user in the admin's own organization.
- * Currently narrow on purpose (hotfix): only (re)assigns or clears the
- * operating depot. organizationId is never taken from the request; the
- * target user must already belong to the admin's organization.
+ * Update of an existing user of the admin's own organization: the name, the
+ * email (login identifier) and/or the operating depot - ONLY the fields sent.
+ * organizationId is never taken from the request; the target user must already
+ * belong to the admin's organization. The role, the password, the status and
+ * the truck assignment are never touched here.
+ *
+ * Email: lower-cased like at creation and at login (auth.ts looks users up by
+ * the lower-cased email), refused if another user already has it. Sessions are
+ * bound to the user id, not the email, so an email change logs nobody out; the
+ * new address is the one to use at the next login.
  */
 export async function updateUser(
   userId: string,
@@ -222,22 +237,74 @@ export async function updateUser(
 
   const target = await prisma.user.findFirst({
     where: { id: userId, organizationId: currentUser.organizationId },
-    select: { id: true, role: true },
+    select: { id: true, role: true, fullName: true, email: true, depotId: true },
   });
   if (!target) {
     throw new OperationsServiceError("Utilisateur introuvable.", 404);
   }
 
-  const depotId =
-    target.role === "DRIVER"
-      ? null
-      : await resolveAssignableDepot(parsed.data.depotId, currentUser.organizationId);
+  const data: Prisma.UserUpdateInput = {};
+  const before: Record<string, string | null> = {};
+  const after: Record<string, string | null> = {};
+
+  if (parsed.data.nom !== undefined && parsed.data.nom !== target.fullName) {
+    const { firstName, lastName } = splitFullName(parsed.data.nom);
+    Object.assign(data, { fullName: parsed.data.nom, firstName, lastName });
+    before.nom = target.fullName;
+    after.nom = parsed.data.nom;
+  }
+
+  if (parsed.data.email !== undefined && parsed.data.email !== target.email) {
+    const taken = await prisma.user.findFirst({
+      where: { email: parsed.data.email, NOT: { id: target.id } },
+      select: { id: true },
+    });
+    if (taken) {
+      throw new OperationsServiceError("Cet email est deja utilise par un autre utilisateur.", 409, {
+        email: "Cet email est deja utilise par un autre utilisateur.",
+      });
+    }
+    data.email = parsed.data.email;
+    before.email = target.email;
+    after.email = parsed.data.email;
+  }
+
+  // The depot only when it is sent (a name / email change keeps it as it is).
+  if (parsed.data.depotId !== undefined) {
+    const depotId =
+      target.role === "DRIVER"
+        ? null
+        : await resolveAssignableDepot(parsed.data.depotId, currentUser.organizationId);
+    if (depotId !== target.depotId) {
+      data.depot = depotId ? { connect: { id: depotId } } : { disconnect: true };
+      before.depotId = target.depotId;
+      after.depotId = depotId;
+    }
+  }
 
   try {
-    const user = await prisma.user.update({
-      where: { id: target.id },
-      data: { depotId },
-      include: userInclude,
+    if (Object.keys(after).length === 0) {
+      const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: target.id }, include: userInclude });
+      return mapUserToDto(unchanged);
+    }
+    const user = await prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id: target.id },
+        data,
+        include: userInclude,
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId: currentUser.organizationId,
+          userId: currentUser.id,
+          action: "USER_UPDATED",
+          entityType: "User",
+          entityId: target.id,
+          oldValue: before,
+          newValue: after,
+        },
+      });
+      return updated;
     });
     return mapUserToDto(user);
   } catch (error) {

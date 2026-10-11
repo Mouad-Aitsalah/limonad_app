@@ -12,6 +12,7 @@ import {
 import { SessionStatusBadge } from "@/components/ventes/session-status-badge";
 import { formatCurrency } from "@/lib/utils";
 import type { PosSessionDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 function formatDateTime(value: string | null) {
   if (!value) return "-";
@@ -30,6 +31,7 @@ type SessionsTableProps = {
 };
 
 export function SessionsTable({ sessions, onViewOrders }: SessionsTableProps) {
+  const label = useColumnLabels("archiveSessions");
   if (sessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -45,15 +47,15 @@ export function SessionsTable({ sessions, onViewOrders }: SessionsTableProps) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Session</TableHead>
-          <TableHead>Ouverture</TableHead>
-          <TableHead>Fermeture</TableHead>
-          <TableHead className="text-right">Commandes</TableHead>
-          <TableHead className="text-right">Total ventes</TableHead>
-          <TableHead className="text-right">Remboursements</TableHead>
-          <TableHead className="text-right">Total net</TableHead>
-          <TableHead>Statut</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
+          <TableHead>{label("session")}</TableHead>
+          <TableHead>{label("opened")}</TableHead>
+          <TableHead>{label("closed")}</TableHead>
+          <TableHead className="text-right">{label("orders")}</TableHead>
+          <TableHead className="text-right">{label("sales")}</TableHead>
+          <TableHead className="text-right">{label("refunds")}</TableHead>
+          <TableHead className="text-right">{label("net")}</TableHead>
+          <TableHead>{label("status")}</TableHead>
+          <TableHead className="text-right">{label("actions")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

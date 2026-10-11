@@ -22,13 +22,6 @@ export default async function CustomerOrdersPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">Commandes en ligne</h1>
-        <p className="text-sm text-muted-foreground">
-          Commandes envoyées depuis l&apos;Espace Client. Acceptez-les puis ouvrez-les dans le POS : la facture est
-          créée uniquement par la validation normale du POS.
-        </p>
-      </div>
       <CustomerOrdersView initialPage={initialPage} />
     </div>
   );

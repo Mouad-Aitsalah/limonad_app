@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { CategoryListItem } from "@/types/category";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type CategoriesTableProps = {
   categories: CategoryListItem[];
@@ -27,6 +28,7 @@ export function CategoriesTable({
   onEdit,
   onToggleStatus,
 }: CategoriesTableProps) {
+  const label = useColumnLabels("categories");
   if (categories.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -45,11 +47,11 @@ export function CategoriesTable({
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Réf catégorie</TableHead>
-          <TableHead>Désignation catégorie</TableHead>
-          <TableHead className="text-right">Nombre de produits</TableHead>
-          <TableHead>Statut</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
+          <TableHead>{label("reference")}</TableHead>
+          <TableHead>{label("designation")}</TableHead>
+          <TableHead className="text-right">{label("productCount")}</TableHead>
+          <TableHead>{label("status")}</TableHead>
+          <TableHead className="text-right">{label("actions")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

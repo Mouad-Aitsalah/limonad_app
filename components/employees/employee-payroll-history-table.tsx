@@ -16,6 +16,7 @@ import {
 import { formatPayrollPeriod } from "@/lib/employee-payroll";
 import { formatCurrency } from "@/lib/utils";
 import type { EmployeeTransactionDto } from "@/types/employees";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type EmployeePayrollHistoryTableProps = {
   transactions: EmployeeTransactionDto[];
@@ -32,23 +33,24 @@ export function EmployeePayrollHistoryTable({
   onCancel,
   busyId = null,
 }: EmployeePayrollHistoryTableProps) {
+  const label = useColumnLabels("payrollHistory");
   return (
     <div className="overflow-x-auto rounded-xl border border-border">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>N°</TableHead>
-            <TableHead>Date</TableHead>
-            <TableHead>Periode</TableHead>
-            {showEmployee ? <TableHead>Employe</TableHead> : null}
-            {showEmployee ? <TableHead>Code employe</TableHead> : null}
-            <TableHead>Type</TableHead>
-            <TableHead className="text-right">Montant</TableHead>
-            <TableHead>Statut</TableHead>
-            <TableHead>Utilisateur</TableHead>
-            <TableHead>Commentaire</TableHead>
-            <TableHead>Journal</TableHead>
-            {(onValidate || onCancel) ? <TableHead>Actions</TableHead> : null}
+            <TableHead>{label("number")}</TableHead>
+            <TableHead>{label("date")}</TableHead>
+            <TableHead>{label("period")}</TableHead>
+            {showEmployee ? <TableHead>{label("employee")}</TableHead> : null}
+            {showEmployee ? <TableHead>{label("employeeCode")}</TableHead> : null}
+            <TableHead>{label("type")}</TableHead>
+            <TableHead className="text-right">{label("amount")}</TableHead>
+            <TableHead>{label("status")}</TableHead>
+            <TableHead>{label("user")}</TableHead>
+            <TableHead>{label("comment")}</TableHead>
+            <TableHead>{label("journal")}</TableHead>
+            {(onValidate || onCancel) ? <TableHead>{label("actions")}</TableHead> : null}
           </TableRow>
         </TableHeader>
         <TableBody>

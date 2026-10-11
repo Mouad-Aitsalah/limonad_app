@@ -15,9 +15,6 @@ export default async function OrganizationsPage() {
   return (
     <div className="space-y-6">
       <AppPageHeader
-        eyebrow="Super Admin"
-        title="Organisations"
-        description="Creez, pilotez et isolez chaque entreprise COMDIS depuis un espace global dedie."
         actions={<OrganizationFormDialog />}
       />
 

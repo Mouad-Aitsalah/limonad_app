@@ -90,10 +90,6 @@ export function NewPurchaseView() {
   if (createdPurchase) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold text-foreground">Nouvel achat</h1>
-        </div>
-
         <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
           <CardContent className="space-y-5 pt-6">
             <div className="flex items-start gap-3">
@@ -151,10 +147,6 @@ export function NewPurchaseView() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold text-foreground">Nouvel achat</h1>
-      </div>
-
       <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
         <CardContent className="pt-6">
           <PurchaseForm

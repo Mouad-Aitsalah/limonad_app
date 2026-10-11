@@ -4,8 +4,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTableShell } from "@/components/ui/data-table-shell";
 import type { DirectionTopProductRow, DirectionTopProducts } from "@/types/dashboard-direction";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 function ProductsTable({ rows }: { rows: DirectionTopProductRow[] }) {
+  const label = useColumnLabels("topProducts");
   if (rows.length === 0) {
     return (
       <p className="px-4 py-6 text-center text-sm text-muted-foreground">
@@ -24,11 +26,11 @@ function ProductsTable({ rows }: { rows: DirectionTopProductRow[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Produit</TableHead>
-            <TableHead>Categorie</TableHead>
-            <TableHead className="text-right">Quantite</TableHead>
-            <TableHead className="text-right">CA</TableHead>
-            <TableHead className="text-right">Marge</TableHead>
+            <TableHead>{label("product")}</TableHead>
+            <TableHead>{label("category")}</TableHead>
+            <TableHead className="text-right">{label("quantity")}</TableHead>
+            <TableHead className="text-right">{label("revenue")}</TableHead>
+            <TableHead className="text-right">{label("margin")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

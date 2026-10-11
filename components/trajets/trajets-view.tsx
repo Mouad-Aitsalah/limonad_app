@@ -40,6 +40,7 @@ import type {
   TruckRoutesPageData,
   TruckRouteVisitDto,
 } from "@/types/truck-routes";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 const TrajetsMap = dynamic(
   () =>
@@ -55,6 +56,7 @@ const TrajetsMap = dynamic(
 );
 
 export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData }) {
+  const label = useColumnLabels("tourVisits");
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -85,9 +87,6 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
   return (
     <div className="space-y-6">
       <AppPageHeader
-        eyebrow="TRACABILITE"
-        title="Trajets des camions"
-        description="Suivez vos camions en direct ou consultez l'historique GPS d'une tournee terminee."
         actions={
           <Button
             type="button"
@@ -392,13 +391,13 @@ export function TrajetsView({ initialData }: { initialData: TruckRoutesPageData 
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-14 text-right">N°</TableHead>
-                <TableHead>Client</TableHead>
-                <TableHead>Heure</TableHead>
-                <TableHead>Statut</TableHead>
-                <TableHead>Première vente</TableHead>
-                <TableHead>Vente</TableHead>
-                <TableHead className="text-right">Montant</TableHead>
+                <TableHead className="w-14 text-right">{label("order")}</TableHead>
+                <TableHead>{label("customer")}</TableHead>
+                <TableHead>{label("time")}</TableHead>
+                <TableHead>{label("status")}</TableHead>
+                <TableHead>{label("firstSale")}</TableHead>
+                <TableHead>{label("sale")}</TableHead>
+                <TableHead className="text-right">{label("amount")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

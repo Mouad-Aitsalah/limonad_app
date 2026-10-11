@@ -20,6 +20,7 @@ import {
   type ProductColumnSettings,
 } from "@/lib/product-columns";
 import { cn, formatCurrency } from "@/lib/utils";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 import type { ProductDto } from "@/types/product-dto";
 
 const passthroughImageLoader = ({ src }: { src: string }) => src;
@@ -130,6 +131,7 @@ export function ProductsTable({
   onToggleStatus,
   columnSettings = DEFAULT_PRODUCT_COLUMN_SETTINGS,
 }: ProductsTableProps) {
+  const label = useColumnLabels("products");
   const columns = visibleProductColumns(columnSettings);
 
   if (products.length === 0) {
@@ -167,10 +169,10 @@ export function ProductsTable({
               data-column={column.key}
               className={column.align === "right" ? "text-right" : undefined}
             >
-              {column.header}
+              {label(column.key)}
             </TableHead>
           ))}
-          <TableHead className="text-right">Actions</TableHead>
+          <TableHead className="text-right">{label("actions")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+import { TABLE_COLUMNS } from "@/lib/table-labels/registry";
+
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 // The table itself needs the router and the auth context, so its markup is
@@ -15,8 +17,13 @@ test("daily layout is an opt-in prop, off by default", () => {
 
 test("daily layout: the user column is titled 'Utilisateur', the Net column and its cells are not rendered", () => {
   const table = read("./invoices-table.tsx");
-  assert.match(table, /\{dailyLayout \? "Utilisateur" : "Chauffeur \/ utilisateur"\}/);
-  assert.match(table, /\{dailyLayout \? null : <TableHead className="text-right">Net<\/TableHead>\}/);
+  // headers go through the organisation's labels (Paramètres -> Personnalisation des tableaux);
+  // their defaults are the former texts
+  assert.match(table, /\{dailyLayout \? label\("user"\) : label\("driverUser"\)\}/);
+  assert.equal(TABLE_COLUMNS.invoices.columns.user, "Utilisateur");
+  assert.equal(TABLE_COLUMNS.invoices.columns.driverUser, "Chauffeur / utilisateur");
+  assert.match(table, /\{dailyLayout \? null : <TableHead className="text-right">\{label\("net"\)\}<\/TableHead>\}/);
+  assert.equal(TABLE_COLUMNS.invoices.columns.net, "Net");
   assert.match(table, /\{dailyLayout \? null : \(\s*<TableCell className="text-right font-medium tabular-nums">\s*\{formatCurrency\(invoice\.net\)\}/);
   // the expanded detail row spans exactly the visible columns: 10 (daily) / 11 (original)
   assert.match(table, /colSpan=\{dailyLayout \? 10 : 11\}/);
@@ -28,8 +35,13 @@ test("the displayed user is unchanged: the driver's name, otherwise the creating
 
 test("the other columns are all still there", () => {
   const table = read("./invoices-table.tsx");
-  for (const head of ["Commande", "Date", "Client", "Articles", "Total", "Paiement", "Statut", "Actions"]) {
-    assert.ok(table.includes(`>${head}</TableHead>`), head);
+  const heads: Array<[keyof typeof TABLE_COLUMNS.invoices.columns, string]> = [
+    ["order", "Commande"], ["date", "Date"], ["customer", "Client"], ["items", "Articles"],
+    ["total", "Total"], ["payment", "Paiement"], ["status", "Statut"], ["actions", "Actions"],
+  ];
+  for (const [key, head] of heads) {
+    assert.ok(table.includes(`>{label("${key}")}</TableHead>`), head);
+    assert.equal(TABLE_COLUMNS.invoices.columns[key], head);
   }
   for (const cell of ["invoice.displayNumber", "formatDateTime(invoice.createdAt)", "invoice.articleCount", "formatCurrency(invoice.totalTTC)", "InvoiceStatusBadge"]) {
     assert.ok(table.includes(cell), cell);

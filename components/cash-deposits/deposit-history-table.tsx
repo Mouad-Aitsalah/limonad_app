@@ -18,6 +18,7 @@ import {
 import { formatCurrency } from "@/lib/utils";
 import type { CashDepositContextDto, CashDepositSummaryDto } from "@/types/cash-deposits";
 import type { DepotDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type DepositHistoryTableProps = {
   deposits: CashDepositSummaryDto[];
@@ -48,6 +49,7 @@ export function DepositHistoryTable({
   onOpenDetail,
   onPrint,
 }: DepositHistoryTableProps) {
+  const label = useColumnLabels("deposits");
   const [search, setSearch] = React.useState("");
   const [dateFrom, setDateFrom] = React.useState("");
   const [dateTo, setDateTo] = React.useState("");
@@ -155,16 +157,16 @@ export function DepositHistoryTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>N° versement</TableHead>
-              <TableHead>Date</TableHead>
-              <TableHead>Heure</TableHead>
-              <TableHead>POS / Caisse</TableHead>
-              <TableHead>Caissier</TableHead>
-              <TableHead className="text-right">Total especes</TableHead>
-              <TableHead className="text-right">Cheques</TableHead>
-              <TableHead className="text-right">Total</TableHead>
-              <TableHead>Statut</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead>{label("number")}</TableHead>
+              <TableHead>{label("date")}</TableHead>
+              <TableHead>{label("time")}</TableHead>
+              <TableHead>{label("register")}</TableHead>
+              <TableHead>{label("cashier")}</TableHead>
+              <TableHead className="text-right">{label("cash")}</TableHead>
+              <TableHead className="text-right">{label("cheques")}</TableHead>
+              <TableHead className="text-right">{label("total")}</TableHead>
+              <TableHead>{label("status")}</TableHead>
+              <TableHead className="text-right">{label("actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

@@ -83,11 +83,7 @@ export function ContactsView({ initialContacts, initialSummary, suppliers }: Con
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold text-foreground">Contacts</h1>
-        </div>
-
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-end">
         <ContactDialog suppliers={suppliers} onSaved={refreshContacts} />
       </div>
 

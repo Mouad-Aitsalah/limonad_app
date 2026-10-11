@@ -77,7 +77,8 @@ test("phones only: product names are 30 % bigger (13px -> 16.9px) under max-lg, 
 test("rename: the visible labels say « Transfert(s) de Stock »; routes, API paths and stored movement texts are unchanged", () => {
   const stock = navItems.flatMap((item) => item.children ?? []).find((child) => child.href === "/chargements");
   assert.equal(stock?.label, "Transferts de Stock");
-  assert.match(view, /text-foreground">Transferts de Stock<\/h1>/);
+  // the page title is the fixed header's (menu label above); it is no longer repeated in the content
+  assert.equal(/<h1/.test(view), false);
   assert.match(view, /<TabsTrigger value="loading">Transfert de Stock<\/TabsTrigger>/);
   assert.match(view, /Historique des transferts de stock/);
   assert.match(view, /Nouvelle fiche de transfert de stock/);

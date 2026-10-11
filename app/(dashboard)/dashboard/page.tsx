@@ -11,7 +11,6 @@ import { DirectionStockWatchCard } from "@/components/dashboard/direction-stock-
 import { DirectionTopCustomersCard } from "@/components/dashboard/direction-top-customers";
 import { DirectionTopProductsCard } from "@/components/dashboard/direction-top-products";
 import { DirectionWatchlistCard } from "@/components/dashboard/direction-watchlist";
-import { AppPageHeader } from "@/components/ui/app-page-header";
 import { canViewForecast } from "@/lib/forecasting/forecast-access";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import { getDirectionDashboardData } from "@/lib/server/dashboard-direction";
@@ -44,12 +43,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   return (
     <div className="space-y-6">
-      <AppPageHeader
-        eyebrow="Direction"
-        title="Dashboard Direction"
-        description="Vue synthétique des ventes, marges, charges, créances et stocks."
-      />
-
       <DirectionPeriodBar activeKey={data.period.key} />
 
       <div className={KPI_ROW_CLASS}>

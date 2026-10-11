@@ -39,6 +39,7 @@ import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
 import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type InvoicesTableProps = {
   invoices: SaleHistoryListItemDto[];
@@ -72,6 +73,7 @@ function formatDateTime(value: string) {
 }
 
 export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: InvoicesTableProps) {
+  const label = useColumnLabels("invoices");
   const router = useRouter();
   const { currentUser } = useAuth();
   const isAdmin =
@@ -158,16 +160,16 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
             <TableHead className="w-10">
               <span className="sr-only">Déplier</span>
             </TableHead>
-            <TableHead>Commande</TableHead>
-            <TableHead>Date</TableHead>
-            <TableHead>Client</TableHead>
-            <TableHead>{dailyLayout ? "Utilisateur" : "Chauffeur / utilisateur"}</TableHead>
-            <TableHead className="text-right">Articles</TableHead>
-            <TableHead className="text-right">Total</TableHead>
-            {dailyLayout ? null : <TableHead className="text-right">Net</TableHead>}
-            <TableHead>Paiement</TableHead>
-            <TableHead>Statut</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{label("order")}</TableHead>
+            <TableHead>{label("date")}</TableHead>
+            <TableHead>{label("customer")}</TableHead>
+            <TableHead>{dailyLayout ? label("user") : label("driverUser")}</TableHead>
+            <TableHead className="text-right">{label("items")}</TableHead>
+            <TableHead className="text-right">{label("total")}</TableHead>
+            {dailyLayout ? null : <TableHead className="text-right">{label("net")}</TableHead>}
+            <TableHead>{label("payment")}</TableHead>
+            <TableHead>{label("status")}</TableHead>
+            <TableHead className="text-right">{label("actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

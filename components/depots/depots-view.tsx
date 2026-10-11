@@ -17,12 +17,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DepotCreateInput, DepotDto } from "@/types/operations-dto";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 type DepotsViewProps = {
   initialDepots: DepotDto[];
 };
 
 export function DepotsView({ initialDepots }: DepotsViewProps) {
+  const label = useColumnLabels("depots");
   const [depots, setDepots] = React.useState(initialDepots);
 
   async function createDepot(
@@ -55,15 +57,11 @@ export function DepotsView({ initialDepots }: DepotsViewProps) {
   return (
     <div className="space-y-6">
       <AppPageHeader
-        eyebrow="Structure"
-        title="Dépôts"
-        description="Chaque organisation gère ici ses dépôts. Un dépôt et son emplacement de stock sont nécessaires au point de vente et aux versements."
+        description="Un dépôt et son emplacement de stock sont nécessaires au point de vente et aux versements."
         actions={<DepotCreateDialog onCreate={createDepot} />}
       />
 
       <DataTableShell
-        title="Dépôts de l'organisation"
-        description="Nom, statut et emplacement de stock associé."
         countLabel={`${depots.length} dépôt${depots.length > 1 ? "s" : ""}`}
       >
         {depots.length === 0 ? (
@@ -81,10 +79,10 @@ export function DepotsView({ initialDepots }: DepotsViewProps) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Code</TableHead>
-                <TableHead>Nom</TableHead>
-                <TableHead>Statut</TableHead>
-                <TableHead>Emplacement de stock associé</TableHead>
+                <TableHead>{label("code")}</TableHead>
+                <TableHead>{label("name")}</TableHead>
+                <TableHead>{label("status")}</TableHead>
+                <TableHead>{label("stockLocation")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

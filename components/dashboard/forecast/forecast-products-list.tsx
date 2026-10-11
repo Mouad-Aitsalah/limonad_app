@@ -1,3 +1,5 @@
+"use client";
+
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -8,6 +10,7 @@ import {
 } from "@/lib/forecasting/forecast-format";
 import { cn } from "@/lib/utils";
 import type { DashboardForecastRow } from "@/types/dashboard-forecast";
+import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
 
 function Reliability({ value }: { value: DashboardForecastRow["reliability"] }) {
   return (
@@ -31,18 +34,19 @@ function Recommended({ row }: { row: DashboardForecastRow }) {
  * card per product (same convention as the Stock and Produits pages).
  */
 export function ForecastProductsList({ rows }: { rows: DashboardForecastRow[] }) {
+  const label = useColumnLabels("forecastProducts");
   return (
     <>
       <div className="max-xl:hidden">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Référence</TableHead>
-              <TableHead>Désignation</TableHead>
-              <TableHead className="text-right">Stock actuel</TableHead>
-              <TableHead className="text-right">Ventes prévues (7 j)</TableHead>
-              <TableHead className="text-right">Qté recommandée</TableHead>
-              <TableHead>Fiabilité</TableHead>
+              <TableHead>{label("reference")}</TableHead>
+              <TableHead>{label("designation")}</TableHead>
+              <TableHead className="text-right">{label("currentStock")}</TableHead>
+              <TableHead className="text-right">{label("forecastSales")}</TableHead>
+              <TableHead className="text-right">{label("recommendedQty")}</TableHead>
+              <TableHead>{label("reliability")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

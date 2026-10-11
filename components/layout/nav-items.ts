@@ -149,6 +149,7 @@ export const navItems: NavItem[] = [
       { label: "Utilisateurs", href: "/utilisateurs", roles: ["admin"] },
       { label: "Paramètres", href: "/parametres/identite", roles: ["admin"] },
       { label: "Tarification", href: "/parametres/tarification", roles: ["admin"] },
+      { label: "Personnalisation des tableaux", href: "/parametres/tableaux", roles: ["admin"] },
     ],
   },
   {
