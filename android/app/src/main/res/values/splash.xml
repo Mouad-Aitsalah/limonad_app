@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Animated launch screen (LaunchSplashOverlay.java). The background is the
+     illustration's own background colour, so the cut-out layers blend in. -->
+<resources>
+    <color name="splash_background">#FEFEFE</color>
+    <color name="splash_navy">#14284B</color>
+    <color name="splash_orange">#FF7510</color>
+    <color name="splash_grey">#6B7280</color>
+
+    <string name="splash_title" translatable="false">COMDIS MANAGER</string>
+    <string name="splash_subtitle">Gestion des livraisons</string>
+    <string name="splash_content_description">COMDIS Manager, chargement de l\'application</string>
+</resources>

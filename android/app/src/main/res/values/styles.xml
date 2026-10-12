@@ -16,7 +16,11 @@
     </style>
 
 
+    <!-- Launch window: the plain background of the animated launch screen
+         (LaunchSplashOverlay), so the switch from the system window to the
+         animation is seamless. (The former @drawable/splash files stay in res/.) -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="android:background">@color/splash_background</item>
+        <item name="android:windowBackground">@color/splash_background</item>
     </style>
 </resources>

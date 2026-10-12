@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Empty icon for the Android 12+ system splash: the system shows a plain
+     background for the few milliseconds before LaunchSplashOverlay draws, instead
+     of the launcher icon - so there is only ONE launch animation. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+    <size android:width="1dp" android:height="1dp" />
+</shape>
