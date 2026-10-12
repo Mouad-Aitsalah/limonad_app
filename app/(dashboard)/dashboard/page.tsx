@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { CommercialAnalysisTabs } from "@/components/dashboard/commercial/commercial-analysis-tabs";
+import { ReceivablesSection } from "@/components/dashboard/receivables/receivables-section";
 import { DashboardForecastSection } from "@/components/dashboard/forecast/dashboard-forecast-section";
 import { ForecastSectionSkeleton } from "@/components/dashboard/forecast/forecast-section-view";
 import { DirectionCategoryChart } from "@/components/dashboard/direction-category-chart";
@@ -13,6 +14,7 @@ import { DirectionTopCustomersCard } from "@/components/dashboard/direction-top-
 import { DirectionTopProductsCard } from "@/components/dashboard/direction-top-products";
 import { DirectionWatchlistCard } from "@/components/dashboard/direction-watchlist";
 import { canViewCommercialAnalysis } from "@/lib/commercial-analysis/access";
+import { canViewReceivables } from "@/lib/receivables/access";
 import { canViewForecast } from "@/lib/forecasting/forecast-access";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import { getDirectionDashboardData } from "@/lib/server/dashboard-direction";
@@ -45,6 +47,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   // "Analyse commerciale" (sales by driver / product / supplier, weekly coverage): admin only,
   // also enforced by its API routes.
   const showCommercialAnalysis = canViewCommercialAnalysis(sessionUser?.role);
+  // "Créances clients" (balances, aging, customer movements): admin only, also
+  // enforced by its API routes. Read only.
+  const showReceivables = canViewReceivables(sessionUser?.role);
 
   return (
     <div className="space-y-6">
@@ -78,6 +83,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       ) : null}
 
       {showCommercialAnalysis ? <CommercialAnalysisTabs /> : null}
+
+      {showReceivables ? <ReceivablesSection /> : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
         <DirectionEvolutionChart granularity={data.salesEvolution.granularity} points={data.salesEvolution.points} />

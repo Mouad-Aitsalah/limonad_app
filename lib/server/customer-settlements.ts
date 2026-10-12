@@ -9,6 +9,7 @@ import {
   postCustomerSettlementAccountingEntry,
   resolveCustomerAuxiliaryCode,
 } from "@/lib/server/accounting";
+import { computeCustomerDebt } from "@/lib/server/customer-debt";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -116,51 +117,10 @@ function mapSettlementToDto(settlement: SettlementRecord): CustomerSettlementDto
   };
 }
 
-
-/**
- * The BI/receivables source of truth for one customer:
- *   debt = max(0, creditSalesTotal - creditNotesTotal - settlementsTotal)
- * Takes a `db` (bare prisma or an active tx) so both the read-only
- * getCustomerDebt() and the write path in recordCustomerSettlement() (which
- * must see its own in-flight transaction's prior writes) share one
- * implementation - never two formulas that could drift apart.
- */
-export async function computeCustomerDebt(
-  db: Prisma.TransactionClient | typeof prisma,
-  organizationId: string,
-  customerId: string,
-): Promise<CustomerDebtDto> {
-  const [creditAgg, creditNoteAgg, settlementAgg] = await Promise.all([
-    db.sale.aggregate({
-      where: {
-        organizationId,
-        customerId,
-        status: { in: ["CREDIT", "PARTIALLY_PAID"] },
-      },
-      _sum: { creditAmount: true },
-    }),
-    db.creditNote.aggregate({
-      where: {
-        organizationId,
-        customerId,
-        partyType: "CUSTOMER",
-        status: "VALIDATED",
-      },
-      _sum: { totalTTC: true },
-    }),
-    db.customerSettlement.aggregate({
-      where: { organizationId, customerId, status: "VALIDATED" },
-      _sum: { amount: true },
-    }),
-  ]);
-
-  const creditSalesTotal = roundMoney(creditAgg._sum.creditAmount?.toNumber() ?? 0);
-  const creditNotesTotal = roundMoney(creditNoteAgg._sum.totalTTC?.toNumber() ?? 0);
-  const settlementsTotal = roundMoney(settlementAgg._sum.amount?.toNumber() ?? 0);
-  const debt = Math.max(0, roundMoney(creditSalesTotal - creditNotesTotal - settlementsTotal));
-
-  return { customerId, creditSalesTotal, creditNotesTotal, settlementsTotal, debt };
-}
+// The BI/receivables source of truth for one customer (unchanged - moved to
+// customer-debt.ts so tests and the receivables core can import it; every
+// existing caller keeps importing it from here).
+export { computeCustomerDebt };
 
 export async function getCustomerDebt(customerId: string): Promise<CustomerDebtDto> {
   const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);

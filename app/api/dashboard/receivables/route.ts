@@ -1,0 +1,20 @@
+import { NextResponse } from "next/server";
+
+import { AuthServiceError } from "@/lib/server/auth";
+import { getReceivablesOverview } from "@/lib/server/receivables";
+import { ReceivablesError } from "@/lib/server/receivables-core";
+
+/**
+ * GET /api/dashboard/receivables - Dashboard « Créances clients ».
+ * Admin only (401 / 403 otherwise), the caller's own organisation only. Read only.
+ */
+export async function GET() {
+  try {
+    return NextResponse.json(await getReceivablesOverview(), { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    if (error instanceof AuthServiceError || error instanceof ReceivablesError) {
+      return NextResponse.json({ message: error.message }, { status: error.status });
+    }
+    return NextResponse.json({ message: "Impossible de charger les créances clients." }, { status: 500 });
+  }
+}
