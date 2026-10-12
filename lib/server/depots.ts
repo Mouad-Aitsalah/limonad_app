@@ -3,45 +3,15 @@ import "server-only";
 import { z } from "zod";
 
 import type { Prisma } from "@/lib/generated/prisma/client";
-import { isWithinMoneyRange } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type { DepotCreateInput, DepotDto } from "@/types/operations-dto";
 
-export class OperationsServiceError extends Error {
-  constructor(
-    message: string,
-    public status = 400,
-    public fieldErrors?: Record<string, string>,
-  ) {
-    super(message);
-  }
-}
-
-/**
- * F8-D: the single gate every money-writing flow (createCounterSale,
- * createDriverSale, createPurchase, credit notes, payments, tour-closure
- * valorisations) calls right after computing an amount and before any
- * Prisma write. Every Sale/Purchase/CreditNote/Payment/TourClosure/
- * Discrepancy money column is `Decimal(12,2)` in Postgres - a value outside
- * [-9999999999.99, 9999999999.99] would otherwise reach the database as a
- * raw, unhandled overflow (Postgres 22003, surfaced by Prisma as P2010) deep
- * inside a transaction, rather than a clean business error. `label` is for
- * server-side diagnostics only (never included in the thrown message, which
- * stays generic on purpose - no internals leak to the client). Delegates the
- * actual comparison to lib/money.ts's Decimal-based `isWithinMoneyRange`, not
- * a fragile float one.
- */
-export function assertMoneyRange(value: number, label: string): void {
-  if (!isWithinMoneyRange(value)) {
-    console.error(`[assertMoneyRange] out-of-range amount rejected: ${label}=${value}`);
-    throw new OperationsServiceError(
-      "Le montant calcule depasse la limite autorisee.",
-      422,
-    );
-  }
-}
+// Moved unchanged to service-error.ts (testable without Next); re-exported here
+// so every existing import keeps the same class.
+import { assertMoneyRange, OperationsServiceError } from "@/lib/server/service-error";
+export { assertMoneyRange, OperationsServiceError };
 
 export function mapDepotToDto(depot: {
   id: string;

@@ -300,10 +300,15 @@ test("every application writer of StockMovement.movementNumber goes through the 
   for (const generator of generators) {
     assert.match(
       generator,
-      /await nextMovementNumber\(|movementNumbers\[index\]/,
+      /await nextMovementNumber\(|movementNumbers\[index\]|^lib\/server\/products-import-core\.ts: await sequences\.nextMovementNumber\(/,
       `a movementNumber is not taken from the counter: ${generator}`,
     );
   }
+  // the products import core receives its generator injected (testable without Next): in the
+  // application it is wired to the counter itself, nothing else
+  const importApply = readFileSync(new URL("lib/server/products-import-apply.ts", ROOT), "utf8");
+  assert.match(importApply, /nextMovementNumber: \(tx, organizationId\) => nextMovementNumber\(tx, organizationId\)/);
+  assert.match(importApply, /import \{ nextMovementNumber \} from "@\/lib\/server\/sales-shared";/);
   assert.ok(generators.length >= 10, `expected the known writers, found ${generators.length}`);
 });
 

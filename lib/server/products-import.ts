@@ -1,13 +1,9 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import {
-  classifyPreloadedRows,
-  type ClassifiedProductRow,
-  type ProductImportRow,
-  type ProductImportSummary,
-} from "@/lib/products-import-rules";
+import type { ClassifiedProductRow, ProductImportRow, ProductImportSummary } from "@/lib/products-import-rules";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { classifyProductImportRowsWith } from "@/lib/server/products-import-core";
 
 /**
  * Server side of the products Excel import (feuille "produits").
@@ -97,79 +93,16 @@ export async function resolveImportDepotTarget(
 }
 
 /**
- * One bulk preload per table (no N+1, §21), then the pure in-memory compare of
- * classifyPreloadedRows (see lib/products-import-rules.ts for the rules).
- * 4 grouped Prisma reads whatever the number of lines (6 SQL SELECTs measured,
- * the relations being fetched on the side): products by reference, suppliers by
- * code, the organisation's categories, and the depot stock of the products found.
+ * Classifies the lines against the organisation's data (see
+ * lib/server/products-import-core.ts for the preload and
+ * lib/products-import-rules.ts for the rules). `applyStock` is the user's
+ * explicit choice: without it QuantiteStock is only reported, never written.
  */
 export async function classifyProductImportRows(
   organizationId: string,
   locationId: string,
   rows: ProductImportRow[],
+  options: { applyStock: boolean },
 ): Promise<{ rows: ClassifiedProductRow[]; summary: ProductImportSummary }> {
-  const references = [...new Set(rows.map((row) => row.reference))];
-  const supplierCodes = [...new Set(rows.map((row) => row.supplierCode))];
-
-  const [products, suppliers, categories] = await Promise.all([
-    prisma.product.findMany({
-      where: { organizationId, reference: { in: references } },
-      select: {
-        id: true,
-        reference: true,
-        name: true,
-        defaultSupplierId: true,
-        defaultSupplier: { select: { name: true } },
-        categoryId: true,
-        category: { select: { name: true } },
-        purchasePrice: true,
-        salePrice: true,
-        taxRate: true,
-        retailPrice: true,
-        semiWholesalePrice: true,
-        semiWholesaleMinQty: true,
-        wholesaleMinQty: true,
-        unit: true,
-      },
-    }),
-    prisma.supplier.findMany({
-      where: { organizationId, code: { in: supplierCodes } },
-      select: { id: true, code: true, name: true, active: true },
-    }),
-    prisma.category.findMany({
-      where: { organizationId },
-      select: { id: true, name: true },
-    }),
-  ]);
-
-  const productIds = products.map((product) => product.id);
-  const levels = productIds.length
-    ? await prisma.stockLevel.findMany({
-        where: { organizationId, locationId, productId: { in: productIds } },
-        select: { productId: true, quantity: true },
-      })
-    : [];
-
-  return classifyPreloadedRows(rows, {
-    products: products.map((product) => ({
-      id: product.id,
-      reference: product.reference,
-      name: product.name,
-      defaultSupplierId: product.defaultSupplierId,
-      defaultSupplierName: product.defaultSupplier?.name ?? null,
-      categoryId: product.categoryId,
-      categoryName: product.category?.name ?? null,
-      purchasePrice: product.purchasePrice.toNumber(),
-      salePrice: product.salePrice.toNumber(),
-      taxRate: product.taxRate.toNumber(),
-      retailPrice: product.retailPrice ? product.retailPrice.toNumber() : null,
-      semiWholesalePrice: product.semiWholesalePrice ? product.semiWholesalePrice.toNumber() : null,
-      semiWholesaleMinQty: product.semiWholesaleMinQty,
-      wholesaleMinQty: product.wholesaleMinQty,
-      unit: product.unit,
-    })),
-    suppliers,
-    categories,
-    stockByProduct: new Map(levels.map((level) => [level.productId, level.quantity])),
-  });
+  return classifyProductImportRowsWith(prisma, organizationId, locationId, rows, options);
 }

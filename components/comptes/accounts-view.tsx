@@ -5,6 +5,7 @@ import Link from "next/link";
 import { FileSpreadsheet } from "lucide-react";
 
 import { AccountDialog } from "@/components/comptes/account-dialog";
+import { AccountsExportButton } from "@/components/comptes/accounts-export-button";
 import {
   AccountsTable,
   type AccountsSortKey,
@@ -22,9 +23,11 @@ const ACCOUNTS_SEARCH_DEBOUNCE_MS = 400;
 type AccountsViewProps = {
   initialPage: BusinessAccountsPageDto;
   accountingAccounts: AccountingAccountOptionDto[];
+  /** Admin: shows "Exporter" (the export API enforces it anyway). */
+  canExport?: boolean;
 };
 
-export function AccountsView({ initialPage, accountingAccounts }: AccountsViewProps) {
+export function AccountsView({ initialPage, accountingAccounts, canExport = false }: AccountsViewProps) {
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   React.useEffect(() => {
@@ -113,6 +116,8 @@ export function AccountsView({ initialPage, accountingAccounts }: AccountsViewPr
             <FileSpreadsheet aria-hidden="true" className="h-4 w-4" />
             Importer des comptes
           </Button>
+          {/* admin only (decided on the server by the page); the export API refuses every other role */}
+          {canExport ? <AccountsExportButton currentType={type} /> : null}
           <AccountDialog accountingAccounts={accountingAccounts} onSaved={refreshAccounts} />
         </div>
       </div>

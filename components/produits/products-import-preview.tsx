@@ -1,12 +1,14 @@
 "use client";
 
 import * as React from "react";
-import * as XLSX from "xlsx";
 
 import { ProductsImportPager } from "@/components/produits/products-import-pager";
 import { ProductsImportProgress } from "@/components/produits/products-import-progress";
 import { ProductsImportReport } from "@/components/produits/products-import-report";
 import { Button } from "@/components/ui/button";
+import { readProductImportFile, photoUploadBatches, type LinePhoto } from "@/lib/import-export/product-import-file";
+import { PRODUCT_STATUS_LABELS, type ProductImportLine } from "@/lib/import-export/products-format";
+import { TableFileError } from "@/lib/import-export/tabular";
 import {
   buildImportReport,
   runBatchedImport,
@@ -17,16 +19,12 @@ import {
 import {
   postProductImportBatch,
   postProductImportPreview,
+  postProductPhotos,
   type ImportLineInput,
+  type PhotoUploadResult,
   type ServerPreviewRow,
   type ServerSummary,
 } from "@/lib/products-import-client";
-import {
-  findOptionalImportColumns,
-  findRequiredImportHeader,
-  parseOptionalImportCells,
-  type OptionalImportValues,
-} from "@/lib/products-import-pricing";
 import {
   PRODUCT_IMPORT_MAX_ROWS,
   formatImportCount,
@@ -40,66 +38,17 @@ type FilterKey = "ALL" | "NEW" | "UPDATE" | "UNCHANGED" | "ERROR" | "CONFLICT";
 
 type Row = {
   line: number;
-  reference: string;
-  supplierCode: string;
-  name: string;
-  categoryName: string;
-  purchasePriceTTC: number;
-  salePriceTTC: number;
-  taxRate: number;
-  targetStock: number;
-  /** Optional columns present on this line (prix_detail, prix_semi_gros, Qped, Qgros, unite). */
-  optional: OptionalImportValues;
+  values: ProductImportLine;
+  /** Photo of the line read from the ZIP (sent after the lines). */
+  photo?: LinePhoto;
+  photoIssue?: string;
   status: LocalStatus;
   message: string;
 };
 
 const FILE_ACCEPT =
-  ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel";
+  ".xlsx,.xls,.csv,.zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/zip";
 
-// Excel headers (case + spacing tolerant, §22). Key = logical column.
-const HEADER_ALIASES: Record<string, string> = {
-  ref_produit: "reference",
-  ref_fournisseur: "supplierCode",
-  designation: "name",
-  type: "categoryName",
-  prixachatttc: "purchasePriceTTC",
-  prixgros: "salePriceTTC",
-  taux_tva: "taxRate",
-  quantitestock: "targetStock",
-};
-const REQUIRED_HEADERS = Object.keys(HEADER_ALIASES);
-
-function normHeader(value: unknown) {
-  return String(value ?? "").trim().toLowerCase().replace(/\s+/g, "");
-}
-function text(value: unknown) {
-  return value == null ? "" : String(value).trim();
-}
-function parseNumber(value: unknown): number | null {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  const cleaned = String(value ?? "").trim().replace(/\s/g, "").replace(",", ".").replace(/[^\d.\-]/g, "");
-  if (!cleaned) return null;
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-// taux_tva stays a PERCENTAGE (20 = 20 %). Accepts "0", "0%", "0,00%", "20",
-// "20%", "20,00%", the number 20, and a percent-formatted cell read as 0.2.
-function parseTva(value: unknown): number | null {
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return null;
-    return value > 0 && value < 1 ? value * 100 : value;
-  }
-  const cleaned = String(value ?? "").trim().replace(/\s/g, "").replace("%", "").replace(",", ".");
-  if (!cleaned) return null;
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-function parseIntStrict(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number(String(value ?? "").trim().replace(/\s/g, "").replace(",", "."));
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return null;
-  return parsed;
-}
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} o`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
@@ -110,6 +59,7 @@ const CHANGE_LABELS: Record<string, string> = {
   name: "Désignation",
   supplier: "Fournisseur",
   category: "Catégorie",
+  brand: "Marque",
   purchasePriceHT: "Prix achat HT",
   salePriceHT: "Prix vente HT",
   taxRate: "TVA",
@@ -119,6 +69,11 @@ const CHANGE_LABELS: Record<string, string> = {
   semiWholesaleMinQty: "Qped",
   wholesaleMinQty: "Qgros",
   unit: "Unité",
+  barcode: "Code-barres",
+  description: "Description",
+  minimumStock: "Stock minimum",
+  status: "Statut",
+  photo: "Photo",
 };
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "ALL", label: "Tous" },
@@ -147,25 +102,22 @@ function effectiveFilter(row: Row, server?: ServerPreviewRow): Exclude<FilterKey
 }
 
 function toLine(row: Row): ImportLineInput {
-  return {
-    excelRow: row.line,
-    reference: row.reference,
-    supplierCode: row.supplierCode,
-    name: row.name,
-    categoryName: row.categoryName,
-    purchasePriceTTC: row.purchasePriceTTC,
-    salePriceTTC: row.salePriceTTC,
-    taxRate: row.taxRate,
-    targetStock: row.targetStock,
-    ...row.optional,
-  };
+  return row.values;
 }
+
+const show = (value: string | number | undefined) => (value === undefined ? "—" : value);
+
+type PhotoReport = { sent: number; updated: number; unchanged: number; rejected: PhotoUploadResult[]; error?: string };
 
 export function ProductsImportPreview() {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const stopRequestedRef = React.useRef(false);
   const [fileName, setFileName] = React.useState("");
   const [fileSize, setFileSize] = React.useState<number | null>(null);
+  const [archiveInfo, setArchiveInfo] = React.useState<{ dataFileName: string; imageCount: number; unusedImages: number; unsafe: number } | null>(null);
+  const [hasStockColumn, setHasStockColumn] = React.useState(false);
+  // QuantiteStock is applied only after an explicit confirmation (never by default).
+  const [applyStock, setApplyStock] = React.useState(false);
   const [rows, setRows] = React.useState<Row[]>([]);
   const [error, setError] = React.useState("");
   const [serverRows, setServerRows] = React.useState<Map<number, ServerPreviewRow>>(new Map());
@@ -179,6 +131,8 @@ export function ProductsImportPreview() {
   const [stopping, setStopping] = React.useState(false);
   const [importError, setImportError] = React.useState("");
   const [importProgress, setImportProgress] = React.useState<ImportProgress | null>(null);
+  const [photoProgress, setPhotoProgress] = React.useState<{ done: number; total: number } | null>(null);
+  const [photoReport, setPhotoReport] = React.useState<PhotoReport | null>(null);
   const [importResult, setImportResult] = React.useState<{
     report: ImportReportView;
     problemRows: BatchRowResult[];
@@ -196,7 +150,7 @@ export function ProductsImportPreview() {
   }, [importing]);
 
   /** The whole file, in ONE read-only request, so a reference used twice is a conflict file-wide. */
-  async function checkWithDatabase(localRows: Row[]) {
+  async function checkWithDatabase(localRows: Row[], withStock: boolean = applyStock) {
     const validRows = localRows.filter((row) => row.status !== "ERROR").map(toLine);
     if (!validRows.length) {
       setServerRows(new Map());
@@ -206,7 +160,7 @@ export function ProductsImportPreview() {
     setServerLoading(true);
     setServerError("");
     try {
-      const body = await postProductImportPreview(validRows);
+      const body = await postProductImportPreview(validRows, { applyStock: withStock });
       setServerRows(new Map(body.rows.map((row) => [row.excelRow, row])));
       setServerSummary(body.summary);
       setDepot(body.depot);
@@ -239,78 +193,36 @@ export function ProductsImportPreview() {
     setServerError("");
     setImportResult(null);
     setImportError("");
+    setPhotoReport(null);
+    setArchiveInfo(null);
+    setApplyStock(false);
     try {
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", raw: true });
-      const sheet = workbook.Sheets.produits;
-      if (!sheet) {
+      const content = readProductImportFile(new Uint8Array(await file.arrayBuffer()), file.name);
+      if (content.parsed.fatal) {
         setRows([]);
-        setError("Feuille « produits » introuvable dans le fichier.");
+        setServerRows(new Map());
+        setServerSummary(null);
+        setError(content.parsed.fatal);
         return;
       }
-      const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, blankrows: false });
-      const headerRow = (grid[0] ?? []).map(normHeader);
-      const columnIndex: Record<string, number> = {};
-      for (const header of REQUIRED_HEADERS) {
-        // "prix_gros" is accepted as another spelling of "prixGros" (same field).
-        columnIndex[HEADER_ALIASES[header]] = findRequiredImportHeader(headerRow, header);
-      }
-      // Optional columns: absent from an old file = nothing changes for them.
-      const optionalColumns = findOptionalImportColumns(grid[0] ?? []);
-      const missing = REQUIRED_HEADERS.filter((header) => columnIndex[HEADER_ALIASES[header]] < 0);
-      if (missing.length) {
-        setRows([]);
-        setError(`Colonne(s) obligatoire(s) absente(s) : ${missing.join(", ")}`);
-        return;
-      }
-
-      const parsed: Row[] = [];
-      for (let index = 1; index < grid.length; index += 1) {
-        const cells = grid[index] ?? [];
-        const cell = (key: string) => cells[columnIndex[key]];
-        const reference = text(cell("reference"));
-        const supplierCode = text(cell("supplierCode"));
-        const name = text(cell("name"));
-        const categoryName = text(cell("categoryName"));
-        const rawStock = cell("targetStock");
-        // Skip a fully empty row.
-        if (!reference && !supplierCode && !name && !categoryName && text(rawStock) === "") continue;
-
-        const purchasePriceTTC = parseNumber(cell("purchasePriceTTC"));
-        const salePriceTTC = parseNumber(cell("salePriceTTC"));
-        const taxRate = parseTva(cell("taxRate"));
-        const targetStock = text(rawStock) === "" ? null : parseIntStrict(rawStock);
-        const optional = parseOptionalImportCells(
-          (field) => cells[optionalColumns[field] as number],
-          optionalColumns,
-        );
-
-        const messages = [
-          !reference && "ref_produit manquant",
-          !name && "designation manquante",
-          !supplierCode && "ref_fournisseur manquant",
-          !categoryName && "type (catégorie) manquant",
-          (purchasePriceTTC == null || purchasePriceTTC < 0) && "prixAchatTTC invalide",
-          (salePriceTTC == null || salePriceTTC < 0) && "prixGros invalide",
-          (taxRate == null || taxRate < 0 || taxRate > 100) && "taux_tva invalide",
-          targetStock == null && "QuantiteStock invalide (entier attendu)",
-          ...optional.errors,
-        ].filter(Boolean) as string[];
-
-        parsed.push({
-          line: index + 1,
-          reference,
-          supplierCode,
-          name,
-          categoryName,
-          purchasePriceTTC: purchasePriceTTC ?? 0,
-          salePriceTTC: salePriceTTC ?? 0,
-          taxRate: taxRate ?? 0,
-          targetStock: targetStock ?? 0,
-          optional: optional.values,
-          status: messages.length ? "ERROR" : "VALID",
-          message: messages.join(" ; ") || "Valide",
+      if (content.archive) {
+        setArchiveInfo({
+          dataFileName: content.dataFileName,
+          imageCount: content.archive.imageCount,
+          unusedImages: content.archive.unusedImages,
+          unsafe: content.archive.unsafePaths.length,
         });
       }
+      setHasStockColumn(content.parsed.present.has("targetStock"));
+
+      const parsed: Row[] = content.parsed.lines.map(({ line, errors }) => ({
+        line: line.excelRow,
+        values: line,
+        photo: content.photos.get(line.excelRow),
+        photoIssue: content.photoIssues.get(line.excelRow),
+        status: errors.length ? "ERROR" : "VALID",
+        message: errors.join(" ; ") || "Valide",
+      }));
 
       // A file over the limit is refused here, with the real numbers, before
       // anything is sent: never a bare "Lignes import invalides.".
@@ -329,14 +241,13 @@ export function ProductsImportPreview() {
       setServerSummary(null);
       setFilter("ALL");
       setPage(1);
-      void checkWithDatabase(parsed);
-    } catch {
+      void checkWithDatabase(parsed, false);
+    } catch (caught) {
       setRows([]);
-      setError("Impossible de lire le fichier Excel.");
+      setError(caught instanceof TableFileError || (caught instanceof Error && /ZIP|Archive/.test(caught.message)) ? caught.message : "Impossible de lire le fichier.");
     }
   }
 
-  // One pass over the file lines, only when the file or the server answer changes.
   const counts = React.useMemo(() => {
     const totals: Record<FilterKey, number> = { ALL: rows.length, NEW: 0, UPDATE: 0, UNCHANGED: 0, ERROR: 0, CONFLICT: 0 };
     for (const row of rows) {
@@ -363,13 +274,47 @@ export function ProductsImportPreview() {
       }),
     [rows, serverRows],
   );
-  const canImport = countsReady && importableRows.length > 0 && !importing;
+  // Photos of the ZIP for the lines the import keeps (new / updated / unchanged products).
+  const photoRows = React.useMemo(
+    () =>
+      rows.filter((row) => {
+        if (!row.photo || row.status === "ERROR") return false;
+        const status = serverRows.get(row.line)?.status;
+        return status === "NEW" || status === "EXISTING_UPDATE" || status === "EXISTING_UNCHANGED";
+      }),
+    [rows, serverRows],
+  );
+  const canImport = countsReady && (importableRows.length > 0 || photoRows.length > 0) && !importing;
 
   // Distinct ref_fournisseur the import will create (each one once, whatever the number of lines).
   const suppliersToCreate = React.useMemo(
-    () => new Set(importableRows.filter((row) => serverRows.get(row.line)?.supplierCreate).map((row) => row.supplierCode)).size,
+    () => new Set(importableRows.filter((row) => serverRows.get(row.line)?.supplierCreate).map((row) => row.values.supplierCode)).size,
     [importableRows, serverRows],
   );
+  // Lines whose depot stock differs from QuantiteStock while "apply stock" is off.
+  const pendingStockCount = React.useMemo(() => rows.filter((row) => serverRows.get(row.line)?.pendingStock).length, [rows, serverRows]);
+
+  async function sendPhotos(): Promise<PhotoReport> {
+    const report: PhotoReport = { sent: 0, updated: 0, unchanged: 0, rejected: [] };
+    const batches = photoUploadBatches(photoRows.map((row) => ({ reference: row.values.reference, mime: row.photo!.mime, bytes: row.photo!.bytes })));
+    setPhotoProgress({ done: 0, total: photoRows.length });
+    for (const batch of batches) {
+      if (stopRequestedRef.current) break;
+      try {
+        const results = await postProductPhotos(batch);
+        report.sent += batch.length;
+        report.updated += results.filter((result) => result.status === "UPDATED").length;
+        report.unchanged += results.filter((result) => result.status === "UNCHANGED").length;
+        report.rejected.push(...results.filter((result) => result.status === "INVALID" || result.status === "NOT_FOUND"));
+      } catch (caught) {
+        report.error = caught instanceof Error ? caught.message : "Envoi des photos impossible.";
+        break;
+      }
+      setPhotoProgress({ done: report.sent, total: photoRows.length });
+    }
+    setPhotoProgress(null);
+    return report;
+  }
 
   async function runImport() {
     if (!canImport) return;
@@ -381,6 +326,7 @@ export function ProductsImportPreview() {
     setImporting(true);
     setImportError("");
     setImportResult(null);
+    setPhotoReport(null);
     setImportProgress({
       total: lines.length,
       processed: 0,
@@ -397,11 +343,13 @@ export function ProductsImportPreview() {
       // Batches of 200 lines, sent strictly one after the other.
       const result = await runBatchedImport({
         rows: lines,
-        sendBatch: (batch) => postProductImportBatch(batch),
+        sendBatch: (batch) => postProductImportBatch(batch, { applyStock }),
         onProgress: setImportProgress,
         shouldStop: () => stopRequestedRef.current,
       });
       setImportResult({ report: buildImportReport(result, leftovers), problemRows: result.problemRows });
+      // Then the photos of the ZIP, a few at a time (the products exist now).
+      if (photoRows.length && !stopRequestedRef.current) setPhotoReport(await sendPhotos());
       // The database changed: classify the file again so the counters are current.
       await checkWithDatabase(rows);
     } catch (caught) {
@@ -425,18 +373,19 @@ export function ProductsImportPreview() {
       <div>
         <h1 className="font-heading text-2xl font-semibold">Import des produits</h1>
         <p className="text-sm text-muted-foreground">
-          Feuille <code>produits</code> — colonnes ref_produit, ref_fournisseur, designation, type, prixAchatTTC, prixGros, taux_tva, QuantiteStock.
+          Excel (feuille <code>produits</code>), CSV (séparateur <code>;</code>) ou ZIP exporté par COMDIS (fichier de données + dossier{" "}
+          <code>photos/</code>). Seule la colonne <code>ref_produit</code> est obligatoire.
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Colonnes facultatives : <code>prix_detail</code>, <code>prix_semi_gros</code> (TTC), <code>Qped</code>,{" "}
-          <code>Qgros</code> (quantités entières, Qped &lt; Qgros) et <code>unite</code>. Une colonne absente ou une
-          cellule vide ne modifie pas la valeur enregistrée. <code>prix_gros</code> est accepté à la place de{" "}
-          <code>prixGros</code>.
+          Colonnes reconnues : ref_produit, ref_fournisseur, nom_fournisseur, designation, type, prixAchatTTC, prixGros (ou prix_gros), prix_detail,
+          prix_semi_gros, Qped, Qgros, taux_tva, unite, code_barre, marque, description, stock_min, statut, QuantiteStock, photo. Une colonne absente ou
+          une cellule vide ne modifie pas la valeur enregistrée. Pour CRÉER un produit : designation, type, ref_fournisseur, prixAchatTTC, prixGros et
+          taux_tva.
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Le fournisseur (<code>ref_fournisseur</code>) et la catégorie (<code>type</code>) sont créés s&apos;ils sont absents.
-          <code className="ml-1">QuantiteStock</code> est le stock <span className="font-medium text-foreground">cible</span> du dépôt (pas un ajout).
-          Jusqu&apos;à {formatImportCount(PRODUCT_IMPORT_MAX_ROWS)} lignes par fichier.
+          Le fournisseur (<code>ref_fournisseur</code>), la catégorie (<code>type</code>) et la marque sont créés s&apos;ils sont absents.
+          <code className="ml-1">QuantiteStock</code> est le stock <span className="font-medium text-foreground">cible</span> du dépôt (pas un ajout),
+          appliqué seulement si vous le confirmez. Jusqu&apos;à {formatImportCount(PRODUCT_IMPORT_MAX_ROWS)} lignes par fichier.
         </p>
         {depot && (
           <p className="mt-1 text-sm">
@@ -447,16 +396,24 @@ export function ProductsImportPreview() {
 
       <div>
         <Button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing}>
-          Choisir un fichier Excel
+          Choisir un fichier (Excel, CSV ou ZIP)
         </Button>
-        <input ref={fileInputRef} type="file" accept={FILE_ACCEPT} className="hidden" onChange={handleFileChange} />
+        <input ref={fileInputRef} type="file" accept={FILE_ACCEPT} className="hidden" onChange={handleFileChange} data-import="file" />
       </div>
       {fileName && (
         <p className="text-sm text-muted-foreground">
           Fichier : {fileName}
           {fileSize != null ? ` · ${formatFileSize(fileSize)}` : ""}
+          {archiveInfo
+            ? ` · données : ${archiveInfo.dataFileName} · ${archiveInfo.imageCount} image(s) dans l'archive${archiveInfo.unusedImages ? `, dont ${archiveInfo.unusedImages} non référencée(s) (ignorée(s))` : ""}`
+            : ""}
         </p>
       )}
+      {archiveInfo && archiveInfo.unsafe > 0 ? (
+        <p role="alert" className="text-sm text-destructive">
+          {archiveInfo.unsafe} entrée(s) de l&apos;archive avec un chemin dangereux (.., chemin absolu) ont été ignorées.
+        </p>
+      ) : null}
 
       {serverLoading && <p className="text-sm text-muted-foreground">Vérification avec la base de données...</p>}
       {serverError && (
@@ -467,7 +424,34 @@ export function ProductsImportPreview() {
           </Button>
         </div>
       )}
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+
+      {rows.length > 0 && hasStockColumn ? (
+        <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" data-import="stock">
+          <p>
+            Le fichier contient <code>QuantiteStock</code> (stock cible du dépôt {depot ? `« ${depot.name} »` : "de votre utilisateur"}).
+            {!applyStock && countsReady
+              ? ` ${formatImportCount(pendingStockCount)} produit(s) verraient leur stock modifié si vous l'appliquez.`
+              : ""}{" "}
+            Par sécurité, il n&apos;est appliqué que si vous le confirmez : un ancien export ne doit pas écraser le stock du jour.
+          </p>
+          <label className="flex items-center gap-2 font-medium">
+            <input
+              type="checkbox"
+              className="size-4 accent-amber-600"
+              checked={applyStock}
+              disabled={importing || serverLoading}
+              onChange={(event) => {
+                const next = event.currentTarget.checked;
+                setApplyStock(next);
+                void checkWithDatabase(rows, next);
+              }}
+              data-import="apply-stock"
+            />
+            Appliquer les quantités de stock du fichier (ajustements d&apos;inventaire)
+          </label>
+        </div>
+      ) : null}
 
       {rows.length > 0 && (
         <>
@@ -499,7 +483,7 @@ export function ProductsImportPreview() {
           />
 
           <div className="overflow-x-auto rounded-xl border">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm" data-import="preview">
               <thead>
                 <tr>
                   <th className="p-2 text-left">Ligne</th>
@@ -511,7 +495,8 @@ export function ProductsImportPreview() {
                   <th className="p-2 text-right">Prix vente TTC</th>
                   <th className="p-2 text-right">TVA</th>
                   <th className="p-2 text-right">Stock actuel</th>
-                  <th className="p-2 text-right">Stock Excel</th>
+                  <th className="p-2 text-right">Stock fichier</th>
+                  <th className="p-2 text-left">Photo</th>
                   <th className="p-2 text-left">Statut</th>
                   <th className="p-2 text-left">Changements / erreur</th>
                 </tr>
@@ -532,25 +517,46 @@ export function ProductsImportPreview() {
                         : serverError
                           ? "Non vérifié"
                           : "…";
+                  const values = row.values;
                   return (
-                    <tr key={row.line} className="border-t align-top">
+                    <tr key={row.line} className="border-t align-top" data-line={row.line}>
                       <td className="p-2">{row.line}</td>
-                      <td className="p-2">{row.reference}</td>
-                      <td className="p-2">{row.name}</td>
+                      <td className="p-2">{values.reference}</td>
                       <td className="p-2">
-                        {row.supplierCode}
+                        {show(values.name)}
+                        {values.productStatus ? <span className="block text-[0.7rem] text-muted-foreground">{PRODUCT_STATUS_LABELS[values.productStatus]}</span> : null}
+                      </td>
+                      <td className="p-2">
+                        {show(values.supplierCode)}
                         {server?.supplierName ? <span className="text-muted-foreground"> · {server.supplierName}</span> : null}
                         {server?.supplierCreate ? <span className="text-muted-foreground"> (nouveau)</span> : null}
+                        {server?.supplierCreate && values.supplierName ? (
+                          <span className="block text-[0.7rem] text-muted-foreground">Nom : {values.supplierName}</span>
+                        ) : null}
                       </td>
                       <td className="p-2">
-                        {row.categoryName}
+                        {show(values.categoryName)}
                         {server?.categoryCreate ? <span className="text-muted-foreground"> (nouvelle)</span> : null}
+                        {values.brandName ? (
+                          <span className="block text-[0.7rem] text-muted-foreground">
+                            Marque : {values.brandName}
+                            {server?.brandCreate ? " (nouvelle)" : ""}
+                          </span>
+                        ) : null}
                       </td>
-                      <td className="p-2 text-right tabular-nums">{row.purchasePriceTTC}</td>
-                      <td className="p-2 text-right tabular-nums">{row.salePriceTTC}</td>
-                      <td className="p-2 text-right tabular-nums">{row.taxRate}%</td>
+                      <td className="p-2 text-right tabular-nums">{show(values.purchasePriceTTC)}</td>
+                      <td className="p-2 text-right tabular-nums">{show(values.salePriceTTC)}</td>
+                      <td className="p-2 text-right tabular-nums">{values.taxRate === undefined ? "—" : `${values.taxRate}%`}</td>
                       <td className="p-2 text-right tabular-nums">{server?.currentStock ?? "—"}</td>
-                      <td className="p-2 text-right tabular-nums">{row.targetStock}</td>
+                      <td className="p-2 text-right tabular-nums">
+                        {show(values.targetStock)}
+                        {server?.pendingStock ? <span className="block text-[0.7rem] text-amber-700">non appliqué</span> : null}
+                      </td>
+                      <td className="p-2 text-[0.75rem]">
+                        {row.photo && !row.photoIssue ? <span className="text-emerald-700">{row.photo.path}</span> : null}
+                        {row.photoIssue ? <span className="text-amber-700">{row.photoIssue}</span> : null}
+                        {!row.photo && !row.photoIssue ? (values.imageUrl ? "URL" : "—") : null}
+                      </td>
                       <td className="p-2">{statusLabel}</td>
                       <td className="p-2 text-muted-foreground">
                         {row.status === "ERROR" ? row.message : server ? `${server.message}${changes ? ` — ${changes}` : ""}` : ""}
@@ -571,16 +577,18 @@ export function ProductsImportPreview() {
             onPageChange={setPage}
           />
 
-          <div className="flex items-center gap-3">
-            <Button type="button" onClick={runImport} disabled={!canImport}>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="button" onClick={runImport} disabled={!canImport} data-import="run">
               {importing ? "Importation en cours..." : "Importer les produits"}
             </Button>
             {!importing && countsReady && (
               <span className="text-sm text-muted-foreground">
                 {importableRows.length > 0
                   ? `${formatImportCount(importableRows.length)} ligne(s) à importer`
-                  : "Rien à importer"}
+                  : "Aucune ligne à créer ou mettre à jour"}
                 {suppliersToCreate > 0 ? ` · ${formatImportCount(suppliersToCreate)} fournisseur(s) à créer` : ""}
+                {photoRows.length > 0 ? ` · ${formatImportCount(photoRows.length)} photo(s) à envoyer` : ""}
+                {applyStock ? " · stock appliqué" : ""}
               </span>
             )}
           </div>
@@ -596,8 +604,26 @@ export function ProductsImportPreview() {
               }}
             />
           )}
+          {photoProgress ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              Envoi des photos : {photoProgress.done} / {photoProgress.total}
+            </p>
+          ) : null}
 
           {importResult && <ProductsImportReport report={importResult.report} problemRows={importResult.problemRows} />}
+          {photoReport ? (
+            <div className="space-y-1 rounded-xl border px-4 py-3 text-sm" data-import="photo-report">
+              <p className="font-medium">
+                Photos : {photoReport.updated} enregistrée(s), {photoReport.unchanged} déjà identique(s), {photoReport.rejected.length} rejetée(s)
+              </p>
+              {photoReport.rejected.map((item) => (
+                <p key={item.reference} className="text-xs text-destructive">
+                  {item.reference} : {item.message}
+                </p>
+              ))}
+              {photoReport.error ? <p className="text-xs text-destructive">{photoReport.error}</p> : null}
+            </div>
+          ) : null}
         </>
       )}
     </div>

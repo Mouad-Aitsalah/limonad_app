@@ -14,9 +14,14 @@ import {
 import { buildImportReport, runBatchedImport, type BatchResponse } from "@/lib/products-import-batches";
 import { isImportableStatus } from "@/lib/products-import-shared";
 
+
+/** A historical full line: every creation column present (the import still accepts partial lines). */
+type FullRow = ProductImportRow &
+  Required<Pick<ProductImportRow, "name" | "supplierCode" | "categoryName" | "purchasePriceTTC" | "salePriceTTC" | "taxRate" | "targetStock">>;
+
 const pad = (value: number, size = 6) => String(value).padStart(size, "0");
 
-function fileRow(index: number, overrides: Partial<ProductImportRow> = {}): ProductImportRow {
+function fileRow(index: number, overrides: Partial<ProductImportRow> = {}): FullRow {
   return {
     excelRow: index + 1,
     reference: `PRD-${pad(index)}`,
@@ -83,7 +88,7 @@ test("the row contract itself is unchanged (the example line of the file is vali
 const SUPPLIER = { id: "sup-18", code: "FOUR-0018", name: "Fournisseur 18", active: true };
 const CATEGORY = { id: "cat-conserves", name: "Conserves" };
 
-function stored(row: ProductImportRow, overrides: Partial<ProductImportPreload["products"][number]> = {}) {
+function stored(row: FullRow, overrides: Partial<ProductImportPreload["products"][number]> = {}) {
   return {
     id: `prod-${row.reference}`,
     reference: row.reference,
@@ -154,7 +159,7 @@ test("classification: an inactive supplier, a new category, a changed stock / na
 // ---- the 10 000-line scenario, end to end (classify -> send -> report) -------------------
 
 function scenarioFile() {
-  const file: ProductImportRow[] = [];
+  const file: FullRow[] = [];
   const products: ReturnType<typeof stored>[] = [];
   let index = 0;
   const next = (overrides: Partial<ProductImportRow> = {}) => {
@@ -210,7 +215,7 @@ test("10 000 lines: 7 000 NEW, 1 000 UPDATE, 1 000 UNCHANGED, 500 CONFLICT, 500 
         rows: batch.map((row) => ({
           excelRow: row.excelRow,
           reference: row.reference,
-          name: row.name,
+          name: row.name ?? row.reference,
           status: statusByRow.get(row.excelRow) === "NEW" ? "CREATED" : "UPDATED",
           message: "ok",
         })),
@@ -250,7 +255,7 @@ test("re-running the same file after the import creates nothing twice: the impor
   // what the first run wrote: every NEW / UPDATE line is now stored exactly as in the file
   const afterImport = [...products];
   for (const row of first.rows) {
-    if (row.status === "NEW") afterImport.push(stored(row));
+    if (row.status === "NEW") afterImport.push(stored(row as FullRow));
   }
   const updated = new Set(first.rows.filter((row) => row.status === "EXISTING_UPDATE").map((row) => row.reference));
   const stateAfter = afterImport.map((product) => (updated.has(product.reference) ? stored({ ...file.find((row) => row.reference === product.reference)! }) : product));

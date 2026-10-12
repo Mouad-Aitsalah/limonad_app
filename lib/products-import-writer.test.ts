@@ -127,18 +127,20 @@ class FakeDb {
         draft.categories.push(category);
         return { id: category.id };
       },
+      findBrandByName: async () => null,
+      createBrand: async (name) => ({ id: this.id(`brand-${name}`) }),
       createProduct: async (row, categoryId, supplierId) => {
         if (this.failProductReferences.has(row.reference)) throw new Error("product insert failed");
         const product = {
           id: this.id("prod"),
           organizationId,
           reference: row.reference,
-          name: row.name,
+          name: row.name!,
           categoryId,
           defaultSupplierId: supplierId,
-          purchasePrice: row.purchasePriceHT,
-          salePrice: row.salePriceHT,
-          taxRate: row.taxRate,
+          purchasePrice: row.purchasePriceHT!,
+          salePrice: row.salePriceHT!,
+          taxRate: row.taxRate!,
         };
         draft.products.push(product);
         return product.id;
@@ -146,13 +148,14 @@ class FakeDb {
       updateProduct: async (productId, row, categoryId, supplierId) => {
         const product = draft.products.find((item) => item.id === productId && item.organizationId === organizationId);
         if (!product) throw Object.assign(new Error("Produit introuvable au moment de la mise à jour."), { status: 404 });
+        // like the real store: only what the line carries, links only when named
         Object.assign(product, {
-          name: row.name,
-          categoryId,
-          defaultSupplierId: supplierId,
-          purchasePrice: row.purchasePriceHT,
-          salePrice: row.salePriceHT,
-          taxRate: row.taxRate,
+          ...(row.name !== undefined ? { name: row.name } : {}),
+          ...(categoryId ? { categoryId } : {}),
+          ...(supplierId ? { defaultSupplierId: supplierId } : {}),
+          ...(row.purchasePriceHT !== undefined ? { purchasePrice: row.purchasePriceHT } : {}),
+          ...(row.salePriceHT !== undefined ? { salePrice: row.salePriceHT } : {}),
+          ...(row.taxRate !== undefined ? { taxRate: row.taxRate } : {}),
         });
         return productId;
       },
@@ -167,10 +170,15 @@ class FakeDb {
   }
 }
 
+
+/** A historical full line: every creation column present (the import still accepts partial lines). */
+type FullRow = ProductImportRow &
+  Required<Pick<ProductImportRow, "name" | "supplierCode" | "categoryName" | "purchasePriceTTC" | "salePriceTTC" | "taxRate" | "targetStock">>;
+
 const ORG = "org-a";
 const OTHER_ORG = "org-b";
 
-function line(index: number, overrides: Partial<ProductImportRow> = {}): ProductImportRow {
+function line(index: number, overrides: Partial<ProductImportRow> = {}): FullRow {
   return {
     excelRow: index + 1,
     reference: `PRD-${String(index).padStart(4, "0")}`,
@@ -401,16 +409,18 @@ test("7. multi-tenant: ACYL of another organisation is neither reused nor touche
 });
 
 test("7b. the Prisma store scopes every supplier query and creation to the session's organisation", () => {
-  const source = readFileSync(path.join(process.cwd(), "lib/server/products-import-apply.ts"), "utf8");
+  // the store's queries moved to the testable core; the transaction stays in products-import-apply.ts
+  const apply = readFileSync(path.join(process.cwd(), "lib/server/products-import-apply.ts"), "utf8");
+  const source = readFileSync(path.join(process.cwd(), "lib/server/products-import-core.ts"), "utf8");
   assert.match(source, /tx\.supplier\.findFirst\(\{\s*where: \{ organizationId, code \},/);
   assert.match(source, /tx\.supplier\.create\(\{\s*data: \{ organizationId, code, name, active: true, createdByUserId: userId \},/);
   // the organisation always comes from the session (requireOrganizationUser), never from the file
   const route = readFileSync(path.join(process.cwd(), "app/api/produits/import/route.ts"), "utf8");
   assert.match(route, /organizationId: user\.organizationId,/);
   // one Serializable transaction per line, as before
-  assert.match(source, /prisma\.\$transaction\(\(tx\) => work\(lineTx\(tx, organizationId, userId, locationId\)\), \{\s*isolationLevel: "Serializable",/);
+  assert.match(apply, /prisma\.\$transaction\(\(tx\) => work\(productImportLineTx\(tx, organizationId, userId, locationId, IMPORT_SEQUENCES\)\), \{\s*isolationLevel: "Serializable",/);
   // no accounting side effect at import time
-  assert.equal(/accountingAccount|resolveOrCreateAccountingLink/.test(source), false);
+  assert.equal(/accountingAccount|resolveOrCreateAccountingLink/.test(source + apply), false);
 });
 
 // ---- 8. idempotence -----------------------------------------------------------------------
@@ -448,7 +458,7 @@ test("the stock, category, price and movement rules are untouched by the supplie
 });
 
 test("the classified rows the writer gets carry the supplier decision; nothing else is new", () => {
-  const keys: (keyof ClassifiedProductRow)[] = ["supplierId", "supplierName", "supplierCreate", "categoryId", "categoryCreate"];
+  const keys: (keyof ClassifiedProductRow)[] = ["supplierId", "resolvedSupplierName", "supplierCreate", "categoryId", "categoryCreate"];
   const [row] = classifyPreloadedRows([line(1)], new FakeDb().preload(ORG)).rows;
   for (const key of keys) assert.ok(key in row, key);
 });

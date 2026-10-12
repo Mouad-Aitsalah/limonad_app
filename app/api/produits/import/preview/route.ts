@@ -33,10 +33,13 @@ export async function POST(request: Request) {
     const input = productImportSchema.parse(body);
     const user = await requireOrganizationUser(["admin", "depot_manager"]);
     const depot = await resolveImportDepotTarget(user.organizationId, user.id);
+    // QuantiteStock is compared (and reported as an update) only when the user
+    // explicitly asked to apply it; otherwise it comes back as pendingStock.
     const { rows, summary } = await classifyProductImportRows(
       user.organizationId,
       depot.locationId,
       input.rows,
+      { applyStock: input.applyStock === true },
     );
 
     return NextResponse.json({
@@ -44,9 +47,11 @@ export async function POST(request: Request) {
       summary,
       rows: rows.map((row) => ({
         excelRow: row.excelRow,
-        supplierName: row.supplierName,
+        supplierName: row.resolvedSupplierName,
         supplierCreate: row.supplierCreate,
         categoryCreate: row.categoryCreate,
+        brandCreate: row.brandCreate,
+        pendingStock: row.pendingStock,
         currentStock: row.currentStock,
         status: row.status,
         message: row.message,

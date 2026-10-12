@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { ProductColumnsPanel } from "@/components/produits/product-columns-panel";
 import { ProductDialog } from "@/components/produits/product-dialog";
+import { ProductsExportButton } from "@/components/produits/products-export-button";
 import { ProductsToolbar } from "@/components/produits/products-toolbar";
 import { ProductsTable } from "@/components/produits/products-table";
 import { useProductsPage } from "@/components/produits/use-products-page";
@@ -154,6 +155,16 @@ export function ProductsView({
               <FileSpreadsheet aria-hidden="true" className="h-4 w-4" />
               Importer des produits
             </Button>
+            {/* canEditColumns = admin (getProductColumnSettings); the export API also refuses every other role */}
+            {canEditColumns ? (
+              <ProductsExportButton
+                filters={{
+                  search: debouncedSearch,
+                  categoryId: categorie,
+                  status: disponibilite === "disponible" ? "ACTIVE" : disponibilite === "indisponible" ? "INACTIVE" : "all",
+                }}
+              />
+            ) : null}
             <ProductDialog
               categories={categories}
               brands={brands}

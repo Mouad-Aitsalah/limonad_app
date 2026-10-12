@@ -7,7 +7,6 @@ import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import {
   listAccountingAccountOptions,
-  normalizeAccountCode,
   resolveCustomerAuxiliaryCode,
   resolveSupplierAuxiliaryCode,
 } from "@/lib/server/accounting";
@@ -19,8 +18,8 @@ import {
 } from "@/lib/server/customers";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
+import { resolveOrCreateAccountingLink } from "@/lib/server/business-accounts-core";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
-import type { AccountingAccountType } from "@/types/accounting";
 import type {
   BusinessAccountFormOptions,
   BusinessAccountInput,
@@ -29,68 +28,6 @@ import type {
   BusinessAccountsSummaryDto,
   BusinessAccountStatus,
 } from "@/types/business-account";
-
-type DbClient = typeof prisma | Prisma.TransactionClient;
-
-/**
- * A business account (Client/Fournisseur/Charge/Tresorerie, managed in
- * /comptes) and an accounting-plan account (AccountingAccount, managed in
- * Comptabilite > Comptes comptables) are two different concepts: one is the
- * operational directory entry, the other is the ledger line écritures post
- * against. This resolves the accounting-plan account a business account
- * should be linked to - reusing an existing one by code (never duplicating
- * it) or creating it on the fly - so every business account with a real
- * accounting number is immediately selectable in "Choisir un compte".
- *
- * Codes that don't look like real accounting-plan numbers (the CHG-/TRE-
- * placeholders auto-generated when the admin leaves "N° compte" blank) are
- * left unlinked, exactly as before, so the chart of accounts isn't polluted
- * with internal placeholder codes.
- */
-async function resolveOrCreateAccountingLink(
-  db: DbClient,
-  organizationId: string,
-  input: { explicitAccountingAccountId: string | null; code: string; name: string; type: AccountingAccountType },
-): Promise<string | null> {
-  if (input.explicitAccountingAccountId) {
-    return input.explicitAccountingAccountId;
-  }
-
-  const normalizedCode = normalizeAccountCode(input.code);
-  if (!/^\d+$/.test(normalizedCode)) {
-    return null;
-  }
-
-  const existing = await db.accountingAccount.findFirst({
-    where: { code: normalizedCode, organizationId },
-    select: { id: true, type: true },
-  });
-
-  if (existing) {
-    if (existing.type !== input.type) {
-      throw new OperationsServiceError(
-        `Le compte comptable ${normalizedCode} existe deja avec un type incompatible.`,
-        409,
-        {
-          code: `Le compte comptable ${normalizedCode} existe deja avec un type incompatible.`,
-        },
-      );
-    }
-    return existing.id;
-  }
-
-  const created = await db.accountingAccount.create({
-    data: {
-      organizationId,
-      code: normalizedCode,
-      name: input.name,
-      type: input.type,
-      isActive: true,
-    },
-    select: { id: true },
-  });
-  return created.id;
-}
 
 const businessAccountTypeValues = [
   "CUSTOMER",

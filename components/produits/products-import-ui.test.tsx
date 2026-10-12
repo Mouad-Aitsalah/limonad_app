@@ -148,7 +148,9 @@ test("report: the refused-lines list is capped at 100 (1 000 problems must not b
 test("the page sends the batches through the sequential runner and paginates the preview", () => {
   const page = read("./products-import-preview.tsx");
   assert.match(page, /runBatchedImport\(\{/);
-  assert.match(page, /sendBatch: \(batch\) => postProductImportBatch\(batch\)/);
+  // each batch carries the user's explicit stock choice (off unless confirmed)
+  assert.match(page, /sendBatch: \(batch\) => postProductImportBatch\(batch, \{ applyStock \}\)/);
+  assert.match(page, /const \[applyStock, setApplyStock\] = React\.useState\(false\);/);
   assert.match(page, /paginateRows\(filteredRows, page\)/);
   assert.match(page, /pageData\.rows\.map\(/, "only the current page is rendered");
   assert.equal(/visibleRows/.test(page), false, "the whole list is no longer rendered at once");
@@ -203,11 +205,15 @@ test("routes: the write takes one batch (batch schema, 60 s, deferred lines), th
   assert.equal(/reference:|name:|purchasePriceTTC:|salePriceTTC:/.test(answer), false, "no echo of the file's own cells");
 });
 
-test("performance: the classification is 4 grouped reads whatever the file size - no query per line", () => {
+test("performance: the classification is a fixed set of grouped reads whatever the file size - no query per line", () => {
+  // the preload moved (same principle) to the testable core; products-import.ts delegates to it
   const server = read("../../lib/server/products-import.ts");
-  const classify = server.slice(server.indexOf("export async function classifyProductImportRows"));
-  for (const query of ["prisma.product.findMany", "prisma.supplier.findMany", "prisma.category.findMany", "prisma.stockLevel.findMany"]) {
-    assert.equal((classify.match(new RegExp(query.replace(/\./g, "\\."), "g")) ?? []).length, 1, query);
+  assert.match(server, /return classifyProductImportRowsWith\(prisma, organizationId, locationId, rows, options\);/);
+  const core = read("../../lib/server/products-import-core.ts");
+  const classify = core.slice(core.indexOf("export async function classifyProductImportRowsWith"), core.indexOf("export function productImportLineTx"));
+  // products by reference / by barcode of the file / photos of the file: three "IN" reads, never one per line
+  for (const [query, count] of [["db.product.findMany", 3], ["db.supplier.findMany", 1], ["db.category.findMany", 1], ["db.brand.findMany", 1], ["db.stockLevel.findMany", 1]] as const) {
+    assert.equal((classify.match(new RegExp(query.replace(/\./g, "\\."), "g")) ?? []).length, count, query);
   }
   assert.equal(/for \(|for await|\.map\(async|\.forEach\(async/.test(classify), false, "no loop with a query inside");
   assert.match(classify, /reference: \{ in: references \}/);
@@ -227,21 +233,22 @@ test("business rules unchanged: same statuses and messages, same per-line transa
   }
   // an unknown supplier is created at import, no longer refused by the classification
   assert.equal(rules.includes("Fournisseur introuvable"), false);
-  assert.match(rules, /supplierCreate: !supplier,/);
+  assert.match(rules, /supplierCreate: row\.supplierCode !== undefined && !supplier,/);
 
   // the per-line rules (now in the store-agnostic writer) ...
   const writer = read("../../lib/products-import-writer.ts");
   assert.match(writer, /message: "Produit déjà présent\."/);
   assert.match(writer, /processUntilBudget\(/);
-  assert.match(writer, /createdSupplierIds\.set\(row\.supplierCode, applied\.supplierId\)/);
-  // ... and the Prisma store: same transaction, same stock target and movement
+  assert.match(writer, /created\.suppliers\.set\(row\.supplierCode, applied\.supplier\.id\)/);
+  // ... and the Prisma store: same transaction (apply), same stock target and movement (core)
   const apply = read("../../lib/server/products-import-apply.ts");
   assert.match(apply, /isolationLevel: "Serializable",/);
-  assert.match(apply, /referenceType: "PRODUCT_IMPORT"/);
-  assert.match(apply, /reason: "Import Excel produits"/);
-  assert.match(apply, /if \(delta === 0\) return false;/);
-  // no Prisma schema / migration touched for this feature
-  assert.equal(/prisma\.\$executeRaw|\$queryRaw/.test(apply), false);
+  const core = read("../../lib/server/products-import-core.ts");
+  assert.match(core, /referenceType: "PRODUCT_IMPORT"/);
+  assert.match(core, /reason: "Import Excel produits"/);
+  assert.match(core, /if \(delta === 0\) return false;/);
+  // no raw SQL in the import write path
+  assert.equal(/prisma\.\$executeRaw|\$queryRaw/.test(apply + core), false);
 });
 
 test("the report shows how many suppliers were created for the whole file", () => {

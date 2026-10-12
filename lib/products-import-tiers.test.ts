@@ -110,9 +110,11 @@ test("a brand-new product: its tiers come from the file; without them it has non
   assert.equal(plain.status, "NEW");
   assert.deepEqual(importedOptionalProductFields(plain), {});
   // the Prisma store writes the historical default unit first, then only the fields the file carries
-  const apply = readFileSync(path.join(process.cwd(), "lib/server/products-import-apply.ts"), "utf8");
-  assert.match(apply, /unit: "unité",\s*\.\.\.importedOptionalProductFields\(row\),/);
-  assert.match(apply, /taxRate: row\.taxRate,[\s\S]*?\.\.\.importedOptionalProductFields\(row\),[\s\S]*?\}\s*,?\s*\}\);\s*if \(count === 0\)/);
+  // (the store's queries moved to lib/server/products-import-core.ts)
+  const apply = readFileSync(path.join(process.cwd(), "lib/server/products-import-core.ts"), "utf8");
+  assert.match(apply, /unit: "unité",\s*minimumStock: 0,\s*status: "ACTIVE",\s*\.\.\.importedProductFields\(row\),/);
+  // an update writes ONLY the fields of the file (importedProductFields includes the tiers / unit)
+  assert.match(apply, /data: \{[\s\S]*?\.\.\.importedProductFields\(row\),[\s\S]*?\}\s*,?\s*\}\);\s*if \(count === 0\)/);
 });
 
 test("Qped must stay below Qgros, checked against what the product will REALLY have (file value, else stored)", () => {

@@ -4,26 +4,32 @@ import { PRODUCT_IMPORT_BATCH_TIME_BUDGET_MS, processUntilBudget } from "@/lib/p
 /**
  * The real write of the products import for ONE batch of already classified lines,
  * written against a small storage interface (ImportWriteStore) instead of Prisma, so
- * the whole behaviour - line by line, error isolation, supplier / category creation
- * once per batch - is unit tested without a database. The Prisma implementation of
- * the store (Serializable transaction + retry, organisation scoping, the actual
- * queries) is lib/server/products-import-apply.ts.
+ * the whole behaviour - line by line, error isolation, supplier / category / brand
+ * creation once per batch - is unit tested without a database. The Prisma
+ * implementation of the store (organisation scoping, the actual queries) is
+ * lib/server/products-import-store.ts, run by lib/server/products-import-apply.ts
+ * (Serializable transaction + retry).
  *
- * The per-line rules are the ones the import always had (moved here unchanged from
- * lib/server/products-import-apply.ts): each importable line is applied in its OWN
- * transaction - Supplier (created on the fly) + Category (created on the fly) +
+ * The per-line rules are the ones the import always had: each importable line is
+ * applied in its OWN transaction - Supplier / Category / Brand (created on the fly) +
  * Product + StockLevel + StockMovement commit or roll back together (§15). A failing
  * line is reported as ERROR/CONFLICT without rolling back the lines already done
- * (§10). Stock is a TARGET, not an addition (§14, idempotent). Lines are applied one
- * after the other and, past the time budget, the lines not yet started are handed
- * back as `deferred`.
+ * (§10). Stock is a TARGET, not an addition (§14, idempotent), written only when the
+ * classification set `stockToApply` (the user confirmed "apply the stock"). Lines are
+ * applied one after the other and, past the time budget, the lines not yet started
+ * are handed back as `deferred`.
+ *
+ * Only what the line carries is written: a column absent from the file (or an empty
+ * cell) leaves the stored value - and the stored supplier / category / brand link -
+ * untouched.
  *
  * Suppliers: a line whose ref_fournisseur matches no supplier of the organisation
- * creates it (code = name = ref_fournisseur) inside the line's transaction, after a
- * re-check (it may have been created since the classification). The id of a supplier
- * created by a COMMITTED line is reused by the next lines of the batch, so ten lines
- * with the same new code create exactly one supplier; the next batch (and a second
- * import of the same file) finds it in its own classification and simply reuses it.
+ * creates it (code = ref_fournisseur, name = nom_fournisseur when the file has it,
+ * else the code) inside the line's transaction, after a re-check (it may have been
+ * created since the classification). The id of a supplier / category / brand created
+ * by a COMMITTED line is reused by the next lines of the batch, so ten lines with the
+ * same new code create exactly one; the next batch (and a second import of the same
+ * file) finds it in its own classification and simply reuses it.
  */
 
 export type ImportRowStatus = "CREATED" | "UPDATED" | "UNCHANGED" | "CONFLICT" | "ERROR";
@@ -42,6 +48,7 @@ export type ProductImportBatchOutcome = {
   deferred: number[];
   categoriesCreated: number;
   suppliersCreated: number;
+  brandsCreated: number;
   stockMovementsCreated: number;
 };
 
@@ -54,9 +61,22 @@ export type ImportLineTx = {
   /** Case-insensitive, on the trimmed name ("JUS" reuses "Jus"). */
   findCategoryByName(name: string): Promise<{ id: string } | null>;
   createCategory(name: string): Promise<{ id: string }>;
-  createProduct(row: ClassifiedProductRow, categoryId: string, supplierId: string): Promise<string>;
-  /** Throws a business error (status 404) when the product no longer exists. */
-  updateProduct(productId: string, row: ClassifiedProductRow, categoryId: string, supplierId: string): Promise<string>;
+  /** Case-insensitive, on the trimmed name. */
+  findBrandByName(name: string): Promise<{ id: string } | null>;
+  createBrand(name: string): Promise<{ id: string }>;
+  createProduct(row: ClassifiedProductRow, categoryId: string, supplierId: string, brandId: string | null): Promise<string>;
+  /**
+   * Writes ONLY what the line carries: a null category / supplier / brand id means
+   * that column is not in the file and the stored link is kept. Throws a business
+   * error (status 404) when the product no longer exists.
+   */
+  updateProduct(
+    productId: string,
+    row: ClassifiedProductRow,
+    categoryId: string | null,
+    supplierId: string | null,
+    brandId: string | null,
+  ): Promise<string>;
   /** Stock as a TARGET; returns true when a movement was written. */
   syncStock(productId: string, targetStock: number): Promise<boolean>;
 };
@@ -72,6 +92,7 @@ type RowOutcome = {
   result: ImportRowResult;
   categoryCreated: boolean;
   supplierCreated: boolean;
+  brandCreated: boolean;
   stockMovementCreated: boolean;
 };
 
@@ -91,24 +112,25 @@ export async function writeImportBatch(
   rows: ClassifiedProductRow[],
   options: { budgetMs?: number; now?: () => number } = {},
 ): Promise<ProductImportBatchOutcome> {
-  // Categories / suppliers auto-created during this batch: categories keyed by
-  // normalizeCategoryKey ("Jus" and "JUS" create exactly one Category, §4), suppliers
-  // by their exact code. Updated only after a line's transaction actually commits.
-  const createdCategoryIds = new Map<string, string>();
-  const createdSupplierIds = new Map<string, string>();
+  // Categories / brands auto-created during this batch keyed by normalizeCategoryKey
+  // ("Jus" and "JUS" create exactly one, §4), suppliers by their exact code. Updated
+  // only after a line's transaction actually commits.
+  const created: CreatedIds = { categories: new Map(), suppliers: new Map(), brands: new Map() };
   let categoriesCreated = 0;
   let suppliersCreated = 0;
+  let brandsCreated = 0;
   let stockMovementsCreated = 0;
 
   const { results: outcomes, deferred } = await processUntilBudget(
     rows,
-    (row) => applyRow(store, row, createdCategoryIds, createdSupplierIds),
+    (row) => applyRow(store, row, created),
     { budgetMs: options.budgetMs ?? PRODUCT_IMPORT_BATCH_TIME_BUDGET_MS, now: options.now },
   );
 
   for (const outcome of outcomes) {
     categoriesCreated += outcome.categoryCreated ? 1 : 0;
     suppliersCreated += outcome.supplierCreated ? 1 : 0;
+    brandsCreated += outcome.brandCreated ? 1 : 0;
     stockMovementsCreated += outcome.stockMovementCreated ? 1 : 0;
   }
 
@@ -117,18 +139,20 @@ export async function writeImportBatch(
     deferred: deferred.map((row) => row.excelRow),
     categoriesCreated,
     suppliersCreated,
+    brandsCreated,
     stockMovementsCreated,
   };
 }
 
-async function applyRow(
-  store: ImportWriteStore,
-  row: ClassifiedProductRow,
-  createdCategoryIds: Map<string, string>,
-  createdSupplierIds: Map<string, string>,
-): Promise<RowOutcome> {
-  const meta = { excelRow: row.excelRow, reference: row.reference, name: row.name };
-  const idle = { categoryCreated: false, supplierCreated: false, stockMovementCreated: false };
+type CreatedIds = {
+  categories: Map<string, string>;
+  suppliers: Map<string, string>;
+  brands: Map<string, string>;
+};
+
+async function applyRow(store: ImportWriteStore, row: ClassifiedProductRow, created: CreatedIds): Promise<RowOutcome> {
+  const meta = { excelRow: row.excelRow, reference: row.reference, name: row.name ?? row.reference };
+  const idle = { categoryCreated: false, supplierCreated: false, brandCreated: false, stockMovementCreated: false };
 
   if (row.status === "CONFLICT") {
     return { result: { ...meta, status: "CONFLICT", message: row.message }, ...idle };
@@ -139,39 +163,49 @@ async function applyRow(
   if (row.status === "EXISTING_UNCHANGED") {
     return { result: { ...meta, status: "UNCHANGED", message: "Produit inchangé." }, ...idle };
   }
-  if (!row.supplierId && !row.supplierCreate) {
+  if (row.supplierCode !== undefined && !row.supplierId && !row.supplierCreate) {
     return { result: { ...meta, status: "ERROR", message: `Fournisseur introuvable : ${row.supplierCode}` }, ...idle };
+  }
+  if (row.status === "NEW" && (row.supplierCode === undefined || row.categoryName === undefined)) {
+    return { result: { ...meta, status: "ERROR", message: "Fournisseur et catégorie obligatoires pour créer un produit." }, ...idle };
   }
   if (row.status === "EXISTING_UPDATE" && !row.existingId) {
     return { result: { ...meta, status: "ERROR", message: "Produit introuvable au moment de la mise à jour." }, ...idle };
   }
 
-  const categoryKey = normalizeCategoryKey(row.categoryName);
+  const categoryKey = row.categoryName !== undefined ? normalizeCategoryKey(row.categoryName) : null;
+  const brandKey = row.brandName !== undefined ? normalizeCategoryKey(row.brandName) : null;
 
   try {
     const applied = await store.runLine(async (tx) => {
-      const supplier = await resolveSupplier(tx, row, createdSupplierIds.get(row.supplierCode) ?? row.supplierId);
-      const category = await resolveCategory(tx, row, createdCategoryIds.get(categoryKey) ?? row.categoryId);
+      const supplier =
+        row.supplierCode !== undefined
+          ? await resolveSupplier(tx, row, created.suppliers.get(row.supplierCode) ?? row.supplierId)
+          : null;
+      const category =
+        categoryKey !== null ? await resolveCategory(tx, row, created.categories.get(categoryKey) ?? row.categoryId) : null;
+      const brand = brandKey !== null ? await resolveBrand(tx, row, created.brands.get(brandKey) ?? row.brandId) : null;
 
       const productId =
         row.status === "NEW"
-          ? await tx.createProduct(row, category.id, supplier.id)
-          : await tx.updateProduct(row.existingId!, row, category.id, supplier.id);
+          ? await tx.createProduct(row, category!.id, supplier!.id, brand?.id ?? null)
+          : await tx.updateProduct(row.existingId!, row, category?.id ?? null, supplier?.id ?? null, brand?.id ?? null);
 
-      const stockMovementCreated = await tx.syncStock(productId, row.targetStock);
+      // Stock only when the classification decided to apply it (the user confirmed it).
+      const stockMovementCreated = row.stockToApply !== undefined ? await tx.syncStock(productId, row.stockToApply) : false;
 
       return {
-        categoryId: category.id,
-        categoryCreated: category.created,
-        supplierId: supplier.id,
-        supplierCreated: supplier.created,
+        category,
+        supplier,
+        brand,
         stockMovementCreated,
       };
     });
 
-    // The line committed: its new supplier / category now exist for the next lines.
-    if (applied.categoryCreated) createdCategoryIds.set(categoryKey, applied.categoryId);
-    if (applied.supplierCreated) createdSupplierIds.set(row.supplierCode, applied.supplierId);
+    // The line committed: its new supplier / category / brand now exist for the next lines.
+    if (applied.category?.created && categoryKey !== null) created.categories.set(categoryKey, applied.category.id);
+    if (applied.supplier?.created && row.supplierCode !== undefined) created.suppliers.set(row.supplierCode, applied.supplier.id);
+    if (applied.brand?.created && brandKey !== null) created.brands.set(brandKey, applied.brand.id);
 
     return {
       result: {
@@ -179,8 +213,9 @@ async function applyRow(
         status: row.status === "NEW" ? "CREATED" : "UPDATED",
         message: row.status === "NEW" ? "Produit créé." : "Produit mis à jour.",
       },
-      categoryCreated: applied.categoryCreated,
-      supplierCreated: applied.supplierCreated,
+      categoryCreated: applied.category?.created ?? false,
+      supplierCreated: applied.supplier?.created ?? false,
+      brandCreated: applied.brand?.created ?? false,
       stockMovementCreated: applied.stockMovementCreated,
     };
   } catch (error) {
@@ -199,15 +234,16 @@ async function resolveSupplier(
   knownId: string | null,
 ): Promise<{ id: string; created: boolean }> {
   if (knownId) return { id: knownId, created: false };
+  const code = row.supplierCode!;
 
-  const existing = await tx.findSupplierByCode(row.supplierCode);
+  const existing = await tx.findSupplierByCode(code);
   if (existing) {
-    if (!existing.active) throw new ImportLineError(`Fournisseur inactif : ${row.supplierCode}`);
+    if (!existing.active) throw new ImportLineError(`Fournisseur inactif : ${code}`);
     return { id: existing.id, created: false };
   }
 
-  // No other supplier information in the file: its code is also its name.
-  const created = await tx.createSupplier({ code: row.supplierCode, name: row.supplierCode });
+  // The supplier name of the file (nom_fournisseur) when there is one, else its code.
+  const created = await tx.createSupplier({ code, name: row.supplierName ?? code });
   return { id: created.id, created: true };
 }
 
@@ -221,10 +257,25 @@ async function resolveCategory(
   // Re-check inside the transaction: a category with this name may exist now
   // (created since the preload, or by an earlier line). Case-insensitive so
   // "JUS" reuses an existing "Jus".
-  const existing = await tx.findCategoryByName(row.categoryName.trim());
+  const name = row.categoryName!.trim();
+  const existing = await tx.findCategoryByName(name);
   if (existing) return { id: existing.id, created: false };
 
-  const created = await tx.createCategory(row.categoryName.trim());
+  const created = await tx.createCategory(name);
+  return { id: created.id, created: true };
+}
+
+/** Same pattern as the category: re-checked inside the transaction, created once. */
+async function resolveBrand(
+  tx: ImportLineTx,
+  row: ClassifiedProductRow,
+  knownId: string | null,
+): Promise<{ id: string; created: boolean }> {
+  if (knownId) return { id: knownId, created: false };
+  const name = row.brandName!.trim();
+  const existing = await tx.findBrandByName(name);
+  if (existing) return { id: existing.id, created: false };
+  const created = await tx.createBrand(name);
   return { id: created.id, created: true };
 }
 
@@ -239,7 +290,10 @@ function mapRowError(
     const target = Array.isArray(prismaError.meta?.target)
       ? prismaError.meta.target.join(",")
       : String(prismaError.meta?.target ?? "");
-    if (target.includes("reference") || target.includes("barcode")) {
+    if (target.includes("barcode")) {
+      return { ...meta, status: "CONFLICT", message: "Code-barres déjà utilisé par un autre produit." };
+    }
+    if (target.includes("reference")) {
       return { ...meta, status: "UNCHANGED", message: "Produit déjà présent." };
     }
     return { ...meta, status: "CONFLICT", message: "Conflit d'unicité sur cette ligne." };

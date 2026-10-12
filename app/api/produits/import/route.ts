@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { describeImportValidationError } from "@/lib/products-import-rules";
+import { prisma } from "@/lib/prisma";
 import { AuthServiceError } from "@/lib/server/auth";
+import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { applyProductImportBatch, type ImportRowStatus } from "@/lib/server/products-import-apply";
@@ -36,6 +38,8 @@ export const maxDuration = 60;
  * caller's own depot StockLocation - never a request parameter.
  */
 export async function POST(request: Request) {
+  const csrfRejection = rejectUntrustedOrigin(request);
+  if (csrfRejection) return csrfRejection;
   let body: unknown = null;
   try {
     try {
@@ -52,10 +56,12 @@ export async function POST(request: Request) {
 
     const startedAt = Date.now();
     const depot = await resolveImportDepotTarget(user.organizationId, user.id);
+    const applyStock = input.applyStock === true;
     const { rows } = await classifyProductImportRows(
       user.organizationId,
       depot.locationId,
       input.rows,
+      { applyStock },
     );
 
     const outcome = await applyProductImportBatch({
@@ -68,6 +74,27 @@ export async function POST(request: Request) {
     const countStatus = (status: ImportRowStatus) =>
       outcome.results.filter((row) => row.status === status).length;
 
+    // Audit trail of the write (one entry per batch, counts only).
+    await prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        userId: user.id,
+        action: "PRODUCTS_IMPORT_BATCH",
+        entityType: "Product",
+        newValue: {
+          lines: input.rows.length,
+          created: countStatus("CREATED"),
+          updated: countStatus("UPDATED"),
+          unchanged: countStatus("UNCHANGED"),
+          conflicts: countStatus("CONFLICT"),
+          errors: countStatus("ERROR"),
+          applyStock,
+          stockMovementsCreated: outcome.stockMovementsCreated,
+          depot: depot.depotCode,
+        },
+      },
+    });
+
     return NextResponse.json({
       summary: {
         created: countStatus("CREATED"),
@@ -79,6 +106,7 @@ export async function POST(request: Request) {
       categoriesCreated: outcome.categoriesCreated,
       // Suppliers created by this batch (each new ref_fournisseur once).
       suppliersCreated: outcome.suppliersCreated,
+      brandsCreated: outcome.brandsCreated,
       stockMovementsCreated: outcome.stockMovementsCreated,
       depot: { name: depot.depotName, code: depot.depotCode },
       rows: outcome.results,

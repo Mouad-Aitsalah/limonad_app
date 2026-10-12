@@ -1,3 +1,4 @@
+import type { ProductImportLine } from "@/lib/import-export/products-format";
 import type { BatchResponse } from "@/lib/products-import-batches";
 
 /**
@@ -6,23 +7,8 @@ import type { BatchResponse } from "@/lib/products-import-batches";
  * a plain French message instead of "Unexpected token 'A'... is not valid JSON".
  */
 
-export type ImportLineInput = {
-  excelRow: number;
-  reference: string;
-  supplierCode: string;
-  name: string;
-  categoryName: string;
-  purchasePriceTTC: number;
-  salePriceTTC: number;
-  taxRate: number;
-  targetStock: number;
-  /** Optional columns (lib/products-import-pricing.ts) - absent = keep the stored value. */
-  retailPriceTTC?: number;
-  semiWholesalePriceTTC?: number;
-  semiWholesaleMinQty?: number;
-  wholesaleMinQty?: number;
-  unit?: string;
-};
+/** One line sent to the server - the shared file format's line (a missing key = keep the stored value). */
+export type ImportLineInput = ProductImportLine;
 
 export type ServerStatus = "NEW" | "EXISTING_UNCHANGED" | "EXISTING_UPDATE" | "CONFLICT" | "ERROR";
 export type ServerChange = { old: string | null; new: string | null };
@@ -35,7 +21,11 @@ export type ServerPreviewRow = {
   /** ref_fournisseur matches no supplier yet: the import will create it. */
   supplierCreate: boolean;
   categoryCreate: boolean;
+  /** A brand named by the file that does not exist yet: the import creates it. */
+  brandCreate?: boolean;
   currentStock: number | null;
+  /** A different QuantiteStock while "apply stock" is off: shown, never written. */
+  pendingStock?: ServerChange | null;
   status: ServerStatus;
   message: string;
   changes: Record<string, ServerChange>;
@@ -88,12 +78,23 @@ async function post<T>(url: string, payload: unknown, whatFailed: string): Promi
   return readJson<T>(response, whatFailed);
 }
 
-/** Read-only check of the WHOLE file against the database (one request). */
-export function postProductImportPreview(rows: ImportLineInput[]): Promise<ServerPreview> {
-  return post<ServerPreview>("/api/produits/import/preview", { rows }, "Vérification impossible");
+/**
+ * Read-only check of the WHOLE file against the database (one request).
+ * `applyStock`: the user's explicit choice to apply QuantiteStock (off by default).
+ */
+export function postProductImportPreview(rows: ImportLineInput[], options: { applyStock: boolean } = { applyStock: false }): Promise<ServerPreview> {
+  return post<ServerPreview>("/api/produits/import/preview", { rows, applyStock: options.applyStock }, "Vérification impossible");
 }
 
 /** The real write of ONE batch of lines. */
-export function postProductImportBatch(rows: ImportLineInput[]): Promise<BatchResponse> {
-  return post<BatchResponse>("/api/produits/import", { rows }, "Import du lot impossible");
+export function postProductImportBatch(rows: ImportLineInput[], options: { applyStock: boolean } = { applyStock: false }): Promise<BatchResponse> {
+  return post<BatchResponse>("/api/produits/import", { rows, applyStock: options.applyStock }, "Import du lot impossible");
+}
+
+export type PhotoUploadResult = { reference: string; status: "UPDATED" | "UNCHANGED" | "NOT_FOUND" | "INVALID"; message: string };
+
+/** A few photos of the ZIP (data: URIs prepared in the browser), attached by reference on the server. */
+export async function postProductPhotos(photos: Array<{ reference: string; dataUrl: string }>): Promise<PhotoUploadResult[]> {
+  const body = await post<{ results: PhotoUploadResult[] }>("/api/produits/import/photos", { photos }, "Envoi des photos impossible");
+  return body.results;
 }
