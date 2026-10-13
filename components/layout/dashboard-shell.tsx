@@ -9,6 +9,7 @@ import { SidebarProvider, useSidebar } from "@/hooks/use-sidebar";
 import { AssistantPanelProvider } from "@/components/assistant/assistant-panel";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
+import { PageHeaderSlotProvider } from "@/components/layout/page-header-slot";
 import { MobileHeader } from "@/components/mobile/mobile-header";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -42,13 +43,16 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           collapsed ? "lg:pl-[104px]" : "lg:pl-[296px]",
         )}
       >
-        <Header />
-        <MobileHeader />
-        <main className="mobile-safe-bottom mobile-safe-x min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          <div className="page-shell" data-desktop-scale={desktopScale ? "" : undefined}>
-            {children}
-          </div>
-        </main>
+        {/* Lets a page show its own content in the header (e.g. the POS status / invoice / time). */}
+        <PageHeaderSlotProvider>
+          <Header />
+          <MobileHeader />
+          <main className="mobile-safe-bottom mobile-safe-x min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+            <div className="page-shell" data-desktop-scale={desktopScale ? "" : undefined}>
+              {children}
+            </div>
+          </main>
+        </PageHeaderSlotProvider>
       </div>
 
       <Toaster position="top-right" />

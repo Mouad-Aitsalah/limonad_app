@@ -11,7 +11,16 @@ type OfflineStatusBarProps = {
   failedCount: number;
   syncStatus: SalesSyncStatus;
   onSyncNow: () => void;
+  /**
+   * "bar" (default): its own coloured strip. "inline": one segment of the POS
+   * header block (components/pos/pos-header-info.tsx) - same states, counters
+   * and "Synchroniser maintenant" button, without its own card; the offline
+   * explanation becomes the segment's tooltip and screen-reader text.
+   */
+  variant?: "bar" | "inline";
 };
+
+const OFFLINE_EXPLANATION = "les ventes sont gardées sur ce poste et envoyées à la reconnexion.";
 
 function plural(count: number, one: string, many: string) {
   return `${count} ${count > 1 ? many : one}`;
@@ -28,7 +37,9 @@ export function OfflineStatusBar({
   failedCount,
   syncStatus,
   onSyncNow,
+  variant = "bar",
 }: OfflineStatusBarProps) {
+  const inline = variant === "inline";
   const offline = networkState !== "ONLINE";
   const label =
     networkState === "ONLINE"
@@ -52,8 +63,11 @@ export function OfflineStatusBar({
       role="status"
       data-testid="pos-network-status"
       data-state={networkState}
+      title={inline && offline ? `${label} — ${OFFLINE_EXPLANATION}` : undefined}
       className={
-        offline
+        inline
+          ? `flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] font-medium ${offline ? "text-amber-800" : "text-emerald-700"}`
+          : offline
           ? "flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900"
           : compact
             ? "flex w-fit items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900"
@@ -65,15 +79,13 @@ export function OfflineStatusBar({
       ) : (
         <Wifi aria-hidden="true" className="h-3.5 w-3.5" />
       )}
-      <span>{label}</span>
+      <span className={inline ? "whitespace-nowrap" : undefined}>{label}</span>
       {offline ? (
-        <span className="font-normal">
-          — les ventes sont gardées sur ce poste et envoyées à la reconnexion.
-        </span>
+        <span className={inline ? "sr-only" : "font-normal"}>— {OFFLINE_EXPLANATION}</span>
       ) : null}
 
       {compact ? null : (
-      <div className="ml-auto flex flex-wrap items-center gap-2">
+      <div className={inline ? "flex flex-wrap items-center gap-2 text-xs" : "ml-auto flex flex-wrap items-center gap-2"}>
         {syncStatus.running ? (
           <span data-testid="pos-sync-running" className="inline-flex items-center gap-1.5">
             <RefreshCw aria-hidden="true" className="h-3.5 w-3.5 motion-safe:animate-spin" />

@@ -4,16 +4,15 @@ type InvoiceHeaderProps = {
 };
 
 /**
- * Invoice metadata strip of the POS top bar: N° Facture and Heure only, next
- * to the network status (desktop, >= lg); hidden on mobile (< lg) so the
- * phone screens keep going straight to products / cart.
+ * "N° Facture" and "Heure" segments of the POS header block
+ * (components/pos/pos-header-info.tsx), side by side - a fragment, so the
+ * block's vertical separators fall between them.
  *
- * Screen display only. The user and the date are deliberately not shown here
- * any more, but nothing else changed: the session user stays in the POS
- * context (ticket "Caisse", sale author), the sale keeps its own dates, and
- * the depot / stock source are still sent to the backend (buildSaleBody) and
- * printed on the ticket. The hour is read at render time, as before. Type is
- * x1.4 of the former one (12px labels -> 16.8px, 14px values -> 19.6px).
+ * Screen display only. The user and the date are deliberately not shown, but
+ * nothing else changed: the session user stays in the POS context (ticket
+ * "Caisse", sale author), the sale keeps its own dates, and the invoice
+ * number is the POS's own activeInvoiceLabel. The hour is read at render
+ * time, as before.
  */
 export function InvoiceHeader({ invoiceLabel }: InvoiceHeaderProps) {
   const heure = new Date().toLocaleTimeString("fr-FR", {
@@ -22,20 +21,17 @@ export function InvoiceHeader({ invoiceLabel }: InvoiceHeaderProps) {
   });
 
   return (
-    <div
-      data-testid="pos-invoice-header"
-      className="hidden items-center gap-x-5 rounded-2xl border border-border bg-muted/40 px-5 py-2.5 lg:flex"
-    >
-      <div>
-        <p className="text-[16.8px] leading-tight text-muted-foreground">N° Facture</p>
-        <p className="text-[19.6px] leading-tight font-semibold text-foreground tabular-nums">{invoiceLabel ?? "-"}</p>
-      </div>
-      <div className="border-l border-border pl-5">
-        <p className="text-[16.8px] leading-tight text-muted-foreground">Heure</p>
-        <p className="text-[19.6px] leading-tight font-medium text-foreground tabular-nums" suppressHydrationWarning>
+    <>
+      <p data-testid="pos-invoice-number" className="flex items-baseline gap-1.5 px-2 whitespace-nowrap">
+        <span className="text-xs text-muted-foreground">N° Facture</span>
+        <span className="text-sm font-semibold text-foreground tabular-nums">{invoiceLabel ?? "-"}</span>
+      </p>
+      <p data-testid="pos-invoice-time" className="flex items-baseline gap-1.5 px-2 whitespace-nowrap">
+        <span className="text-xs text-muted-foreground">Heure</span>
+        <span className="text-sm font-semibold text-foreground tabular-nums" suppressHydrationWarning>
           {heure}
-        </p>
-      </div>
-    </div>
+        </span>
+      </p>
+    </>
   );
 }

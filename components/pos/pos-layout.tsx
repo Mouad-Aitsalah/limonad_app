@@ -31,7 +31,7 @@ import { MobileSelectedProduct } from "@/components/pos/mobile-selected-product"
 import { PHONE_PRODUCT_TILE_NAME_CLASS } from "@/components/pos/phone-pos-style";
 import { useFlyToCart } from "@/components/pos/use-fly-to-cart";
 import { usePosProductSearch } from "@/components/pos/use-pos-product-search";
-import { InvoiceHeader } from "@/components/pos/invoice-header";
+import { PageHeaderSlot } from "@/components/layout/page-header-slot";
 import { CustomerCombobox } from "@/components/pos/customer-combobox";
 import { CustomerNumberInput } from "@/components/pos/customer-number-input";
 import {
@@ -53,7 +53,7 @@ import {
   sumQuantitiesByProduct,
   type QuantityPriceTier,
 } from "@/lib/quantity-pricing";
-import { OfflineStatusBar } from "@/components/pos/offline-status-bar";
+import { PosHeaderInfo } from "@/components/pos/pos-header-info";
 import { useCounterPosOffline } from "@/components/pos/use-counter-pos-offline";
 import { AiDraftReplaceDialog } from "@/components/pos/ai-draft-replace-dialog";
 import { useAiPosDraft } from "@/components/pos/use-ai-pos-draft";
@@ -1642,6 +1642,16 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   const paymentMethodLabel =
     posPaymentMethods.find((method) => method.value === paymentMethod)?.label ?? "";
   const cartItemCount = cart.reduce((count, line) => count + line.quantity, 0);
+  const headerInfo = (
+    <PosHeaderInfo
+      networkState={offline.networkState}
+      pendingCount={offline.pendingCount}
+      failedCount={offline.failedCount}
+      syncStatus={offline.syncStatus}
+      onSyncNow={() => void offline.syncNow()}
+      invoiceLabel={activeInvoiceLabel}
+    />
+  );
 
   return (
     <div className="space-y-4 max-lg:pb-6">
@@ -1666,21 +1676,20 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         </Button>
       </div>
 
-      {/* Top right of the POS (desktop): network status, N° Facture and Heure,
-          one compact aligned group above "Nouvelle facture". The user and the
-          date are no longer displayed there (they stay in the session / sale
-          data). On phones the status keeps its place (the invoice info is
-          hidden below lg, and the fixed cart button owns the top-right). */}
-      <div className="flex flex-wrap items-center gap-3 lg:justify-end" data-testid="pos-top-info">
-        <OfflineStatusBar
-          networkState={offline.networkState}
-          pendingCount={offline.pendingCount}
-          failedCount={offline.failedCount}
-          syncStatus={offline.syncStatus}
-          onSyncNow={() => void offline.syncNow()}
-        />
-        <InvoiceHeader invoiceLabel={activeInvoiceLabel} />
-      </div>
+      {/* Network status | N° Facture | Heure: in the page header, on the line of
+          the "Point de vente" title (desktop) or under it (mobile / tablet) -
+          no longer in the cash-desk content. Same data as before. The offline
+          shell (/hors-ligne) has no shared header: there the block stays at
+          the top of the content (PageHeaderSlot's fallback). */}
+      <PageHeaderSlot
+        fallback={
+          <div className="flex justify-end" data-testid="pos-top-info">
+            {headerInfo}
+          </div>
+        }
+      >
+        {headerInfo}
+      </PageHeaderSlot>
       {linkedCustomerOrder && !openPendingSale ? (
         <CustomerOrderLinkBanner
           orderNumber={linkedCustomerOrder.orderNumber}

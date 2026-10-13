@@ -107,7 +107,7 @@ test("phone layout: sticky tabs, sticky search block with supplier + last produc
   assert.match(layout, /max-lg:rounded-\[24px\] max-lg:border-0 max-lg:p-4/);
   assert.match(layout, /pcLayout\s*phoneStyle/);
   // the invoice navigation (Nouvelle facture, tabs) and the status bar remain
-  for (const text of ["Nouvelle facture", "Facture précédente", "Facture suivante", "OfflineStatusBar", "InvoiceActions"]) {
+  for (const text of ["Nouvelle facture", "Facture précédente", "Facture suivante", "PosHeaderInfo", "InvoiceActions"]) {
     assert.ok(layout.includes(text), text);
   }
 });

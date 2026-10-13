@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
 import { AssistantLauncherButton } from "@/components/assistant/assistant-panel";
 import { getNavigationPageLabel } from "@/components/layout/navigation";
+import { PageHeaderSlotTarget } from "@/components/layout/page-header-slot";
 import { MobileBackLink } from "@/components/mobile/mobile-back-link";
 
 export function MobileHeader() {
@@ -22,6 +23,9 @@ export function MobileHeader() {
             corner, so the robot stays clear of it. */}
         <AssistantLauncherButton compact className={pathname === "/pos" ? "mr-14" : undefined} />
       </div>
+      {/* A page's own header content (e.g. the POS status / invoice / time) on a
+          second row, free to wrap; empty and hidden on the other pages. */}
+      <PageHeaderSlotTarget kind="mobile" className="mobile-safe-x px-4 pb-2 empty:hidden" />
     </header>
   );
 }
