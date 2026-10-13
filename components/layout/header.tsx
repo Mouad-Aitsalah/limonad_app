@@ -27,8 +27,12 @@ export function Header() {
       <div className="page-shell flex min-h-[104px] items-center gap-4 px-4 py-4 sm:px-6 lg:px-8">
         <div className="min-w-0 flex-1">
           <p className="page-eyebrow">Workspace</p>
-          <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
-            <h1 className="font-heading text-[1.8rem] font-semibold tracking-[-0.04em] text-[var(--text-primary)] sm:text-[2.3rem]">
+          {/* Title on its own line, the date right under it (same sizes and
+              colours as before). leading-tight keeps the date close to the
+              title; a long title wraps inside this flexible column, never
+              under the assistant / profile block on the right. */}
+          <div className="mt-2 flex min-w-0 flex-col gap-1">
+            <h1 className="font-heading text-[1.8rem] leading-tight font-semibold tracking-[-0.04em] break-words text-[var(--text-primary)] sm:text-[2.3rem]">
               {currentLabel}
             </h1>
             <p className="text-sm capitalize text-[var(--text-secondary)]" suppressHydrationWarning>

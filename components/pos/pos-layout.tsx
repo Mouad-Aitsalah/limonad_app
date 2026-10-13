@@ -1666,10 +1666,12 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         </Button>
       </div>
 
-      {/* Desktop: the invoice info (moved here from the cart column) sits next
-          to the network status, above "Nouvelle facture". Same data as
-          before - activeInvoiceLabel and the session user. */}
-      <div className="flex flex-wrap items-center gap-3">
+      {/* Top right of the POS (desktop): network status, N° Facture and Heure,
+          one compact aligned group above "Nouvelle facture". The user and the
+          date are no longer displayed there (they stay in the session / sale
+          data). On phones the status keeps its place (the invoice info is
+          hidden below lg, and the fixed cart button owns the top-right). */}
+      <div className="flex flex-wrap items-center gap-3 lg:justify-end" data-testid="pos-top-info">
         <OfflineStatusBar
           networkState={offline.networkState}
           pendingCount={offline.pendingCount}
@@ -1677,7 +1679,7 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
           syncStatus={offline.syncStatus}
           onSyncNow={() => void offline.syncNow()}
         />
-        <InvoiceHeader userName={context.user.name} invoiceLabel={activeInvoiceLabel} />
+        <InvoiceHeader invoiceLabel={activeInvoiceLabel} />
       </div>
       {linkedCustomerOrder && !openPendingSale ? (
         <CustomerOrderLinkBanner
