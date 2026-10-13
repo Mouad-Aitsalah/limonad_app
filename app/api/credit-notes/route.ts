@@ -9,10 +9,13 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import type { CreditNoteStatus } from "@/types/credit-note";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 const acceptedStatuses: CreditNoteStatus[] = ["BROUILLON", "VALIDE", "CONTREPASSE"];
 
-export async function GET() {
+export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     return NextResponse.json({ creditNotes: await getCreditNotes() });
   } catch (error) {
@@ -24,6 +27,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {

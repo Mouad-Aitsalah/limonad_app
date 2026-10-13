@@ -5,8 +5,11 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { createPurchase, getPurchases } from "@/lib/server/purchases";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     return NextResponse.json({ purchases: await getPurchases() });
   } catch (error) {
@@ -23,6 +26,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {

@@ -3,12 +3,14 @@ import type { Metadata } from "next";
 import { ContactsView } from "@/components/contacts/contacts-view";
 import { getContacts } from "@/lib/server/contacts";
 import { getSupplierPartners } from "@/lib/server/suppliers";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Contacts",
 };
 
 export default async function ContactsPage() {
+  await requireModulePage("contacts");
   const [{ items, summary }, suppliers] = await Promise.all([
     getContacts(),
     getSupplierPartners(),

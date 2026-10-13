@@ -85,7 +85,7 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.redirect(
-      new URL(getDefaultRouteForRole(user.role), request.url),
+      new URL(getDefaultRouteForRole(user.role, user.disabledModules), request.url),
       { status: 303 },
     );
   } catch (error) {

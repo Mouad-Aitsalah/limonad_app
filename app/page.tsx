@@ -10,5 +10,5 @@ export default async function HomePage() {
     redirect("/login");
   }
 
-  return <HomeRedirect role={user.role} />;
+  return <HomeRedirect role={user.role} disabledModules={user.disabledModules} />;
 }

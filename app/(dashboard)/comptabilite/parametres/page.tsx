@@ -6,12 +6,14 @@ import {
   getAccountingSettings,
   listAccountingAccountOptions,
 } from "@/lib/server/accounting";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Paramètres comptables",
 };
 
 export default async function AccountingSettingsPage() {
+  await requireModulePage("accounting");
   const [settings, accounts, user] = await Promise.all([
     getAccountingSettings(),
     listAccountingAccountOptions(),

@@ -40,6 +40,13 @@ import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
 import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
+import { useTableColumns } from "@/components/table-columns/table-columns-provider";
+import type { TableColumnKey } from "@/lib/table-labels/registry";
+
+type InvoiceColumn = TableColumnKey<"invoices">;
+
+// Alignment of each column, unchanged; the others are left-aligned.
+const RIGHT_ALIGNED: ReadonlySet<InvoiceColumn> = new Set(["items", "total", "net", "actions"]);
 
 type InvoicesTableProps = {
   invoices: SaleHistoryListItemDto[];
@@ -48,7 +55,10 @@ type InvoicesTableProps = {
    * "Factures journalières" layout (opt-in): the user column is titled
    * "Utilisateur" and the "Net" column is not shown. The data behind it
    * (SaleHistoryListItemDto.net) is untouched and the other callers (archives
-   * des factures, drill-down dialog) keep the original table.
+   * des factures, drill-down dialog) keep the original table. It also selects
+   * the page whose columns apply: "dailyInvoices", else "salesArchive" - each
+   * page has its own default columns and its own "Personnaliser les colonnes"
+   * preference (lib/table-columns).
    */
   dailyLayout?: boolean;
 };
@@ -74,6 +84,9 @@ function formatDateTime(value: string) {
 
 export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: InvoicesTableProps) {
   const label = useColumnLabels("invoices");
+  // The columns of this page, in the order chosen by the admin (default = the
+  // page's original columns). Hiding one never touches the data.
+  const { columns } = useTableColumns(dailyLayout ? "dailyInvoices" : "salesArchive", "invoices");
   const router = useRouter();
   const { currentUser } = useAuth();
   const isAdmin =
@@ -160,16 +173,11 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
             <TableHead className="w-10">
               <span className="sr-only">Déplier</span>
             </TableHead>
-            <TableHead>{label("order")}</TableHead>
-            <TableHead>{label("date")}</TableHead>
-            <TableHead>{label("customer")}</TableHead>
-            <TableHead>{dailyLayout ? label("user") : label("driverUser")}</TableHead>
-            <TableHead className="text-right">{label("items")}</TableHead>
-            <TableHead className="text-right">{label("total")}</TableHead>
-            {dailyLayout ? null : <TableHead className="text-right">{label("net")}</TableHead>}
-            <TableHead>{label("payment")}</TableHead>
-            <TableHead>{label("status")}</TableHead>
-            <TableHead className="text-right">{label("actions")}</TableHead>
+            {columns.map((column) => (
+              <TableHead key={column} className={RIGHT_ALIGNED.has(column) ? "text-right" : undefined}>
+                {label(column)}
+              </TableHead>
+            ))}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -200,83 +208,120 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
                     )}
                   </Button>
                 </TableCell>
-                <TableCell className="font-medium text-foreground">
-                  <span className="inline-flex flex-wrap items-center gap-1.5">
-                    {invoice.displayNumber}
-                    {invoice.hasDiscount ? <InvoiceDiscountBadge amountTTC={invoice.discountTTC} /> : null}
-                  </span>
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {formatDateTime(invoice.createdAt)}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {invoice.customer?.name ?? "Client comptoir"}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {invoice.driver?.name ?? invoice.createdByUserName}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">{invoice.articleCount}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatCurrency(invoice.totalTTC)}
-                </TableCell>
-                {dailyLayout ? null : (
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {formatCurrency(invoice.net)}
-                  </TableCell>
-                )}
-                <TableCell className="text-muted-foreground">
-                  {paymentMethodLabels[invoice.paymentMethod] ?? invoice.paymentMethod}
-                </TableCell>
-                <TableCell>
-                  <InvoiceStatusBadge status={invoice.status} />
-                </TableCell>
-                <TableCell className="text-right">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Actions pour la commande ${invoice.displayNumber}`}
-                        />
-                      }
-                    >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setViewingInvoice(invoice)}>
-                        <Eye aria-hidden="true" />
-                        Voir détails
-                      </DropdownMenuItem>
-                      {canEdit ? (
-                        <DropdownMenuItem
-                          onClick={() => router.push(`/pos?editSaleId=${invoice.id}`)}
-                        >
-                          <Pencil aria-hidden="true" />
-                          Modifier
-                        </DropdownMenuItem>
-                      ) : null}
-                      {canCancel ? (
-                        <DropdownMenuItem
-                          variant="destructive"
-                          onClick={() => setCancelTarget(invoice)}
-                        >
-                          {isDraft ? (
-                            <Trash2 aria-hidden="true" />
-                          ) : (
-                            <Ban aria-hidden="true" />
-                          )}
-                          {isDraft ? "Supprimer" : "Annuler la facture"}
-                        </DropdownMenuItem>
-                      ) : null}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
+                {columns.map((column) => {
+                  switch (column) {
+                    case "order":
+                      return (
+                        <TableCell key={column} className="font-medium text-foreground">
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            {invoice.displayNumber}
+                            {invoice.hasDiscount ? <InvoiceDiscountBadge amountTTC={invoice.discountTTC} /> : null}
+                          </span>
+                        </TableCell>
+                      );
+                    case "date":
+                      return (
+                        <TableCell key={column} className="text-muted-foreground">
+                          {formatDateTime(invoice.createdAt)}
+                        </TableCell>
+                      );
+                    case "customer":
+                      return (
+                        <TableCell key={column} className="text-muted-foreground">
+                          {invoice.customer?.name ?? "Client comptoir"}
+                        </TableCell>
+                      );
+                    case "user":
+                    case "driverUser":
+                      return (
+                        <TableCell key={column} className="text-muted-foreground">
+                          {invoice.driver?.name ?? invoice.createdByUserName}
+                        </TableCell>
+                      );
+                    case "items":
+                      return (
+                        <TableCell key={column} className="text-right tabular-nums">
+                          {invoice.articleCount}
+                        </TableCell>
+                      );
+                    case "total":
+                      return (
+                        <TableCell key={column} className="text-right tabular-nums">
+                          {formatCurrency(invoice.totalTTC)}
+                        </TableCell>
+                      );
+                    case "net":
+                      return (
+                        <TableCell key={column} className="text-right font-medium tabular-nums">
+                          {formatCurrency(invoice.net)}
+                        </TableCell>
+                      );
+                    case "payment":
+                      return (
+                        <TableCell key={column} className="text-muted-foreground">
+                          {paymentMethodLabels[invoice.paymentMethod] ?? invoice.paymentMethod}
+                        </TableCell>
+                      );
+                    case "status":
+                      return (
+                        <TableCell key={column}>
+                          <InvoiceStatusBadge status={invoice.status} />
+                        </TableCell>
+                      );
+                    case "actions":
+                      return (
+                        <TableCell key={column} className="text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              render={
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label={`Actions pour la commande ${invoice.displayNumber}`}
+                                />
+                              }
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => setViewingInvoice(invoice)}>
+                                <Eye aria-hidden="true" />
+                                Voir détails
+                              </DropdownMenuItem>
+                              {canEdit ? (
+                                <DropdownMenuItem
+                                  onClick={() => router.push(`/pos?editSaleId=${invoice.id}`)}
+                                >
+                                  <Pencil aria-hidden="true" />
+                                  Modifier
+                                </DropdownMenuItem>
+                              ) : null}
+                              {canCancel ? (
+                                <DropdownMenuItem
+                                  variant="destructive"
+                                  onClick={() => setCancelTarget(invoice)}
+                                >
+                                  {isDraft ? (
+                                    <Trash2 aria-hidden="true" />
+                                  ) : (
+                                    <Ban aria-hidden="true" />
+                                  )}
+                                  {isDraft ? "Supprimer" : "Annuler la facture"}
+                                </DropdownMenuItem>
+                              ) : null}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      );
+                    default:
+                      return null;
+                  }
+                })}
                 </TableRow>
                 {expanded ? (
                   <TableRow>
-                    <TableCell colSpan={dailyLayout ? 10 : 11} className="bg-muted/10 p-0">
+                    <TableCell colSpan={columns.length + 1} className="bg-muted/10 p-0">
                       {/* The list is wider than the screen (it scrolls horizontally):
                           the detail keeps the VISIBLE width (100cqw) and stays in view
                           (sticky) instead of spreading over the whole scrolled row. */}

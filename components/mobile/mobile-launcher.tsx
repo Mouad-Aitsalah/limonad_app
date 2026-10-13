@@ -134,7 +134,7 @@ function TileGrid({ items, onNavigate }: { items: LauncherLink[]; onNavigate?: (
   );
 }
 
-export type MobileLauncherCurrentUser = { role: UserRole };
+export type MobileLauncherCurrentUser = { role: UserRole; disabledModules?: readonly string[] };
 
 export function MobileLauncher({
   currentUser: currentUserProp,
@@ -170,7 +170,7 @@ export function MobileLauncher({
   const router = useRouter();
   const liveAuth = useContext(AuthContext);
   const liveCurrentUser: MobileLauncherCurrentUser | null = liveAuth?.currentUser
-    ? { role: liveAuth.currentUser.role }
+    ? { role: liveAuth.currentUser.role, disabledModules: liveAuth.currentUser.disabledModules }
     : null;
   const currentUser = currentUserProp !== undefined ? currentUserProp : liveCurrentUser;
   const [loggingOut, setLoggingOut] = useState(false);
@@ -180,7 +180,7 @@ export function MobileLauncher({
     if (!currentUser) return;
     const desktop = window.matchMedia(DESKTOP_MEDIA_QUERY);
     const returnToDesktop = () => {
-      if (desktop.matches) router.replace(getDefaultRouteForRole(currentUser.role));
+      if (desktop.matches) router.replace(getDefaultRouteForRole(currentUser.role, currentUser.disabledModules));
     };
     returnToDesktop();
     desktop.addEventListener("change", returnToDesktop);
@@ -189,7 +189,7 @@ export function MobileLauncher({
 
   if (!currentUser) return null;
 
-  const links = getNavigationLinks(currentUser.role);
+  const links = getNavigationLinks(currentUser.role, currentUser.disabledModules);
   const featured = links.filter((item) => appearance[item.href]?.order !== undefined)
     .sort((a, b) => appearance[a.href].order! - appearance[b.href].order!);
   const additional = links.filter((item) => appearance[item.href]?.order === undefined);

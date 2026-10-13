@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { SessionsTable } from "@/components/ventes/sessions-table";
+import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
 import { SalesPagination } from "@/components/ventes/sales-pagination";
 import { InvoicesDrilldownDialog } from "@/components/ventes/invoices-drilldown-dialog";
 import type { PosSessionDto } from "@/types/operations-dto";
@@ -23,6 +24,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   return (
     <div className="space-y-5">
+      {/* admin only: renders nothing (and the row is hidden) for another role */}
+      <div className="flex justify-end empty:hidden">
+        <TableColumnsPanel pageKey="salesArchive" table="archiveSessions" tableName="Sessions" />
+      </div>
       <SessionsTable sessions={paginated} onViewOrders={setViewingSession} />
 
       <SalesPagination page={currentPage} totalPages={totalPages} onPageChange={setPage} />

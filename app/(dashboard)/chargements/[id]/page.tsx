@@ -5,6 +5,7 @@ import { LoadingDetailView } from "@/components/loadings/loading-detail-view";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getProductPickerPreload } from "@/lib/server/products";
 import { getLoadingById } from "@/lib/server/truck-loadings";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Detail transfert de stock",
@@ -13,6 +14,7 @@ export const metadata: Metadata = {
 type PageProps = { params: Promise<{ id: string }> };
 
 export default async function ChargementDetailPage({ params }: PageProps) {
+  await requireModulePage("stockTransfers");
   const { id } = await params;
 
   // Phase 3 CRITICAL #1 fix: small bounded preload instead of getProducts()

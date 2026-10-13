@@ -5,12 +5,15 @@ import { validateCreditNote } from "@/lib/server/credit-notes";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type CreditNoteRouteProps = {
   params: Promise<{ id: string }>;
 };
 
 export async function POST(request: Request, { params }: CreditNoteRouteProps) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {

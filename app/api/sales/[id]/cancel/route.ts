@@ -5,6 +5,7 @@ import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { reportUnexpected } from "@/lib/server/report-error";
 import { cancelSale } from "@/lib/server/sale-admin";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -16,6 +17,8 @@ type RouteContext = { params: Promise<{ id: string }> };
  * conservant son numéro. Jamais de suppression physique. Atomique.
  */
 export async function POST(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   const { id } = await context.params;

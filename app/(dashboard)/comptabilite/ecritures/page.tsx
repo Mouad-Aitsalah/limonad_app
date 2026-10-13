@@ -8,6 +8,7 @@ import {
   listAccountingAccountOptions,
   listAccountingDraftEntries,
 } from "@/lib/server/accounting";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Écriture comptable",
@@ -18,6 +19,7 @@ type PageProps = {
 };
 
 export default async function AccountingEntriesPage({ searchParams }: PageProps) {
+  await requireModulePage("accounting");
   const params = await searchParams;
   const reviseId = typeof params.revise === "string" ? params.revise : null;
   const user = await getCurrentSessionUser();

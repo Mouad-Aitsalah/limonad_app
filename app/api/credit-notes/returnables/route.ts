@@ -3,8 +3,11 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getReturnableProductsForCustomer } from "@/lib/server/credit-notes";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const { searchParams } = new URL(request.url);
     const customerId = searchParams.get("customerId");

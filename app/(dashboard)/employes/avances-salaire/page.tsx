@@ -8,6 +8,7 @@ import {
   listEmployeeTransactions,
 } from "@/lib/server/employee-transactions";
 import { getEmployeeOptions } from "@/lib/server/employees";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Avances / Salaire",
@@ -20,6 +21,7 @@ type EmployeePayrollPageProps = {
 export default async function EmployeePayrollPage({
   searchParams,
 }: EmployeePayrollPageProps) {
+  await requireModulePage("employees");
   const params = await searchParams;
   const employees = await getEmployeeOptions();
 

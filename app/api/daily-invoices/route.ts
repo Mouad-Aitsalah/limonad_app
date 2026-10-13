@@ -3,10 +3,13 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getDailyInvoicesPage } from "@/lib/server/daily-invoices";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 // Powers /ventes/journalieres. Read-only; org scoping and every filter are
 // applied inside getDailyInvoicesPage (never trusts a client organizationId).
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const url = new URL(request.url);
     const pageSizeParam = url.searchParams.get("pageSize");

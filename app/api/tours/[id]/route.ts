@@ -4,10 +4,13 @@ import { AuthServiceError, requireSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getTourById, updateDraftTour } from "@/lib/server/tours";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const { id } = await context.params;
   try {
     await requireSessionUser(["admin", "depot_manager"]);
@@ -24,6 +27,8 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   const { id } = await context.params;

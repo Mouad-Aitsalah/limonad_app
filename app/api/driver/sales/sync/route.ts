@@ -10,6 +10,7 @@ import {
 import { OperationsServiceError } from "@/lib/server/depots";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * PHASE 4A - "SYNCHRONISATION SERVEUR DES VENTES OFFLINE CHAUFFEUR".
@@ -37,6 +38,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   const hasBearer = (request.headers.get("authorization") ?? "").toLowerCase().startsWith("bearer ");
   if (!hasBearer) {
     const csrfRejection = rejectUntrustedOrigin(request);

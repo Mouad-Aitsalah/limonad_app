@@ -4,6 +4,7 @@ import { Building2, Package, ShoppingCart, Truck, Users } from "lucide-react";
 
 import { OrganizationConnectionsPanel } from "@/components/organizations/organization-connections-panel";
 import { OrganizationFormDialog } from "@/components/organizations/organization-form-dialog";
+import { OrganizationModulesPanel } from "@/components/organizations/organization-modules-panel";
 import { OrganizationStatusBadge } from "@/components/organizations/organization-status-badge";
 import { AppPageHeader } from "@/components/ui/app-page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,16 +17,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { ModuleState } from "@/lib/modules/settings";
 import type { OrganizationConnectionsSnapshot } from "@/lib/session-activity";
 import type { OrganizationDetailDto } from "@/types/organization";
 
 export function OrganizationDetailView({
   organization,
   initialConnections = null,
+  initialModules = null,
 }: {
   organization: OrganizationDetailDto;
   /** Server-rendered live-connections snapshot (null = unavailable, the panel then polls). */
   initialConnections?: OrganizationConnectionsSnapshot | null;
+  /** Server-rendered "Modules autorisés" (null = unavailable, the panel offers a retry). */
+  initialModules?: ModuleState[] | null;
 }) {
   return (
     <div className="space-y-6">
@@ -114,6 +119,8 @@ export function OrganizationDetailView({
           </CardContent>
         </Card>
       </div>
+
+      <OrganizationModulesPanel organizationId={organization.id} initialModules={initialModules} />
 
       <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
         <CardContent className="space-y-4">

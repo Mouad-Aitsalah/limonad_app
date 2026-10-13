@@ -3,8 +3,11 @@ import { NextResponse } from "next/server";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { createStockAdjustment } from "@/lib/server/stock-movements";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {

@@ -3,11 +3,14 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getSalesOrdersPage } from "@/lib/server/sales-history";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 // Powers /ventes's Commandes tab and the session/month drilldown dialogs -
 // separate from /api/sales (sale creation + getAllSales) to avoid any
 // ambiguity with that existing route's own GET/POST contract.
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const url = new URL(request.url);
     const cursor = url.searchParams.get("cursor");

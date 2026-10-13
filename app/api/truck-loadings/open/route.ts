@@ -3,8 +3,11 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getOpenLoadingForTruck } from "@/lib/server/truck-loadings";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const truckId = new URL(request.url).searchParams.get("truckId");
   if (!truckId) {
     return NextResponse.json({ message: "Le camion est obligatoire." }, { status: 422 });

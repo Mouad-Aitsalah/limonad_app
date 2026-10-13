@@ -8,6 +8,12 @@ import {
 } from "@/components/ui/table";
 import type { StockMovementDto } from "@/types/operations-dto";
 import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
+import { useTableColumns } from "@/components/table-columns/table-columns-provider";
+import type { TableColumnKey } from "@/lib/table-labels/registry";
+
+type MovementColumn = TableColumnKey<"stockMovements">;
+
+const RIGHT_ALIGNED: ReadonlySet<MovementColumn> = new Set(["before", "after", "difference"]);
 
 const movementLabels: Record<string, string> = {
   PURCHASE_ENTRY: "Reception achat",
@@ -28,67 +34,103 @@ export function StockMovementsTable({
   movements: StockMovementDto[];
 }) {
   const label = useColumnLabels("stockMovements");
+  // Columns in the order chosen by the admin; default = the original ones.
+  const { columns } = useTableColumns("stock", "stockMovements");
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{label("date")}</TableHead>
-          <TableHead>{label("number")}</TableHead>
-          <TableHead>{label("product")}</TableHead>
-          <TableHead>{label("location")}</TableHead>
-          <TableHead className="text-right">{label("before")}</TableHead>
-          <TableHead className="text-right">{label("after")}</TableHead>
-          <TableHead className="text-right">{label("difference")}</TableHead>
-          <TableHead>{label("reason")}</TableHead>
-          <TableHead>{label("origin")}</TableHead>
-          <TableHead>{label("destination")}</TableHead>
-          <TableHead>{label("user")}</TableHead>
-          <TableHead>{label("type")}</TableHead>
+          {columns.map((column) => (
+            <TableHead key={column} className={RIGHT_ALIGNED.has(column) ? "text-right" : undefined}>
+              {label(column)}
+            </TableHead>
+          ))}
         </TableRow>
       </TableHeader>
       <TableBody>
         {movements.map((movement) => (
           <TableRow key={movement.id}>
-            <TableCell className="text-muted-foreground">
-              {new Date(movement.createdAt).toLocaleDateString("fr-FR")}
-            </TableCell>
-            <TableCell className="font-medium text-foreground">
-              {movement.movementNumber}
-            </TableCell>
-            <TableCell className="font-medium text-foreground">
-              {movement.productName}
-            </TableCell>
-            <TableCell className="text-muted-foreground">
-              {movement.locationCode ??
-                movement.destinationLocationName ??
-                movement.sourceLocationName ??
-                "-"}
-            </TableCell>
-            <TableCell className="text-right tabular-nums">
-              {movement.beforeQuantity ?? "-"}
-            </TableCell>
-            <TableCell className="text-right tabular-nums">
-              {movement.afterQuantity ?? "-"}
-            </TableCell>
-            <TableCell className="text-right tabular-nums">
-              {formatDelta(movement)}
-            </TableCell>
-            <TableCell className="text-muted-foreground">
-              {movement.reason ?? movement.note ?? "-"}
-            </TableCell>
-            <TableCell className="text-muted-foreground">
-              {movement.sourceLocationName ?? "Externe"}
-            </TableCell>
-            <TableCell className="text-muted-foreground">
-              {movement.destinationLocationName ?? "Externe"}
-            </TableCell>
-            <TableCell>{movement.createdByUserName}</TableCell>
-            <TableCell>{movementLabels[movement.type] ?? movement.type}</TableCell>
+            {columns.map((column) => movementCell(column, movement))}
           </TableRow>
         ))}
       </TableBody>
     </Table>
   );
+}
+
+/** One cell per column, same content and classes as before. */
+function movementCell(column: MovementColumn, movement: StockMovementDto) {
+  switch (column) {
+    case "date":
+      return (
+        <TableCell key={column} className="text-muted-foreground">
+          {new Date(movement.createdAt).toLocaleDateString("fr-FR")}
+        </TableCell>
+      );
+    case "number":
+      return (
+        <TableCell key={column} className="font-medium text-foreground">
+          {movement.movementNumber}
+        </TableCell>
+      );
+    case "product":
+      return (
+        <TableCell key={column} className="font-medium text-foreground">
+          {movement.productName}
+        </TableCell>
+      );
+    case "location":
+      return (
+        <TableCell key={column} className="text-muted-foreground">
+          {movement.locationCode ??
+            movement.destinationLocationName ??
+            movement.sourceLocationName ??
+            "-"}
+        </TableCell>
+      );
+    case "before":
+      return (
+        <TableCell key={column} className="text-right tabular-nums">
+          {movement.beforeQuantity ?? "-"}
+        </TableCell>
+      );
+    case "after":
+      return (
+        <TableCell key={column} className="text-right tabular-nums">
+          {movement.afterQuantity ?? "-"}
+        </TableCell>
+      );
+    case "difference":
+      return (
+        <TableCell key={column} className="text-right tabular-nums">
+          {formatDelta(movement)}
+        </TableCell>
+      );
+    case "reason":
+      return (
+        <TableCell key={column} className="text-muted-foreground">
+          {movement.reason ?? movement.note ?? "-"}
+        </TableCell>
+      );
+    case "origin":
+      return (
+        <TableCell key={column} className="text-muted-foreground">
+          {movement.sourceLocationName ?? "Externe"}
+        </TableCell>
+      );
+    case "destination":
+      return (
+        <TableCell key={column} className="text-muted-foreground">
+          {movement.destinationLocationName ?? "Externe"}
+        </TableCell>
+      );
+    case "user":
+      return <TableCell key={column}>{movement.createdByUserName}</TableCell>;
+    case "type":
+      return <TableCell key={column}>{movementLabels[movement.type] ?? movement.type}</TableCell>;
+    default:
+      return null;
+  }
 }
 
 function formatDelta(movement: StockMovementDto) {

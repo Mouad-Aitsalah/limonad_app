@@ -12,6 +12,7 @@ import {
   type AccountsSortState,
 } from "@/components/comptes/accounts-table";
 import { AccountsToolbar } from "@/components/comptes/accounts-toolbar";
+import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
 import { useAccountsPage } from "@/components/comptes/use-accounts-page";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -150,7 +151,9 @@ export function AccountsView({ initialPage, accountingAccounts, canExport = fals
               Page {pageIndex + 1} &middot; {sortedAccounts.length} compte
               {sortedAccounts.length > 1 ? "s" : ""} sur cette page &middot; {summary.totalCount} au total
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* admin only: renders nothing for another role */}
+              <TableColumnsPanel pageKey="accounts" table="accounts" tableName="Comptes" />
               <Button
                 type="button"
                 variant="outline"

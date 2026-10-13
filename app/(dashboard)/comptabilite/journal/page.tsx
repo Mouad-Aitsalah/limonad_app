@@ -5,6 +5,7 @@ import {
   listAccountingAccountOptions,
   listAccountingJournalLines,
 } from "@/lib/server/accounting";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Journal comptable",
@@ -17,6 +18,7 @@ type JournalPageProps = {
 export default async function AccountingJournalPage({
   searchParams,
 }: JournalPageProps) {
+  await requireModulePage("accounting");
   const params = await searchParams;
   const [lines, accounts] = await Promise.all([
     listAccountingJournalLines(),

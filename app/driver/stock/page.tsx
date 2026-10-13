@@ -8,12 +8,14 @@ import {
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getCurrentDriverTruckStock } from "@/lib/server/driver-stock";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Mon stock",
 };
 
 export default async function DriverStockPage() {
+  await requireModulePage("driverApp");
   const result = await loadDriverStockPageData();
 
   if (result.kind === "auth-error") {

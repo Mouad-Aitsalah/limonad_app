@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "@/lib/server/auth";
 import { getPosProductsByIds } from "@/lib/server/products";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * GET /api/products/pos-by-ids?locationId=...&ids=a,b,c - the POS products
@@ -10,6 +11,8 @@ import { getPosProductsByIds } from "@/lib/server/products";
  * getPosProductsByIds), so such a line is resolved instead of disappearing.
  */
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const url = new URL(request.url);
     const locationId = url.searchParams.get("locationId") ?? "";

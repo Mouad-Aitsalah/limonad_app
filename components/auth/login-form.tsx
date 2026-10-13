@@ -39,7 +39,7 @@ export function LoginForm() {
 
   React.useEffect(() => {
     if (isLoading || !currentUser) return;
-    router.replace(getBrowserHomeRoute(currentUser.role));
+    router.replace(getBrowserHomeRoute(currentUser.role, currentUser.disabledModules));
   }, [isLoading, currentUser, router]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -60,7 +60,7 @@ export function LoginForm() {
         return;
       }
 
-      router.replace(getBrowserHomeRoute(result.user.role));
+      router.replace(getBrowserHomeRoute(result.user.role, result.user.disabledModules));
     } catch {
       setError("Impossible de se connecter.");
       setIsSubmitting(false);

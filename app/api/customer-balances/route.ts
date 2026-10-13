@@ -3,10 +3,13 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getCustomerBalancesPage } from "@/lib/server/customer-balances";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 // Powers /comptabilite/solde-clients. Read-only, org-scoped inside
 // getCustomerBalancesPage (never trusts a client-supplied organizationId).
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const url = new URL(request.url);
     const pageParam = url.searchParams.get("page");

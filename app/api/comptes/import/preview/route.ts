@@ -5,6 +5,7 @@ import { accountImportSchema, classifyAccountImportRows } from "@/lib/server/acc
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * POST /api/comptes/import/preview - read only: what the import would do with
@@ -12,6 +13,8 @@ import { requireOrganizationUser } from "@/lib/server/organization-context";
  * Same roles as the import; employee lines need the admin role (as /employes).
  */
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const input = accountImportSchema.parse(await request.json());
     const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);

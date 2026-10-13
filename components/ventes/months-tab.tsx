@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { MonthsTable } from "@/components/ventes/months-table";
+import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
 import { SalesPagination } from "@/components/ventes/sales-pagination";
 import { InvoicesDrilldownDialog } from "@/components/ventes/invoices-drilldown-dialog";
 import type { SalesMonthDto } from "@/types/operations-dto";
@@ -31,6 +32,10 @@ export function MonthsTab({ months }: MonthsTabProps) {
 
   return (
     <div className="space-y-5">
+      {/* admin only: renders nothing (and the row is hidden) for another role */}
+      <div className="flex justify-end empty:hidden">
+        <TableColumnsPanel pageKey="salesArchive" table="archiveMonths" tableName="Mois" />
+      </div>
       <MonthsTable months={paginated} onSelectMonth={setViewingMonth} />
 
       <SalesPagination page={currentPage} totalPages={totalPages} onPageChange={setPage} />

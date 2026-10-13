@@ -9,6 +9,7 @@ import {
   type OrdersFilters,
 } from "@/components/ventes/orders-toolbar";
 import { InvoicesTable } from "@/components/ventes/invoices-table";
+import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
 import { useSalesOrdersPage } from "@/components/ventes/use-sales-orders-page";
 import type { SaleHistoryOrdersPageDto } from "@/types/operations-dto";
 
@@ -63,7 +64,9 @@ export function OrdersTab({ initialPage }: OrdersTabProps) {
           Page {pageIndex + 1} &middot; {items.length} commande{items.length > 1 ? "s" : ""}{" "}
           affichee{items.length > 1 ? "s" : ""} sur {totalCount} au total.
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* admin only: renders nothing for another role */}
+          <TableColumnsPanel pageKey="salesArchive" table="invoices" tableName="Commandes" />
           <Button
             type="button"
             variant="outline"

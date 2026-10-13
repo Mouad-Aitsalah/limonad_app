@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AnalysisFilterError, parseSalesFilters } from "@/lib/commercial-analysis/filters";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getSalesAnalysis } from "@/lib/server/commercial-analysis";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * GET /api/dashboard/sales-analysis?driverId&month&supplierId&metric&sort&direction
@@ -11,6 +12,8 @@ import { getSalesAnalysis } from "@/lib/server/commercial-analysis";
  * filter is validated: an invalid value is a 422, never silently replaced.
  */
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const filters = parseSalesFilters(new URL(request.url).searchParams);
     return NextResponse.json(await getSalesAnalysis(filters), { headers: { "Cache-Control": "no-store" } });

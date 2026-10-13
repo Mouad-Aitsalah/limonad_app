@@ -4,10 +4,13 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { updateUser } from "@/lib/server/users";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   const { id } = await context.params;

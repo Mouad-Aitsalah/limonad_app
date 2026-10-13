@@ -5,6 +5,7 @@ import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { collectDriverSale } from "@/lib/server/pending-sales";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -13,6 +14,8 @@ type RouteContext = { params: Promise<{ id: string }> };
  * to the signed-in driver's own DRAFT truck sales; idempotent.
  */
 export async function POST(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   const { id } = await context.params;

@@ -4,6 +4,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { getDriverProximityCustomers } from "@/lib/server/driver-customers";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * Phase 3 CRITICAL #2 fix (included extra): bounded companion to
@@ -21,6 +22,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   try {
     return withMobileCors(request, NextResponse.json({ customers: await getDriverProximityCustomers() }));
   } catch (error) {

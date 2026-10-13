@@ -8,10 +8,13 @@ import {
   mapLoadingError,
   updateOpenLoadingLines,
 } from "@/lib/server/truck-loadings";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const { id } = await context.params;
   try {
     return NextResponse.json({ loading: await getLoadingById(id) });
@@ -27,6 +30,8 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   const { id } = await context.params;

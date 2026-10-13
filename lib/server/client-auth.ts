@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { CLIENT_LOGIN_FAILED_MESSAGE, CLIENT_LOGIN_THROTTLED_MESSAGE } from "@/lib/client-portal-rules";
 import { prisma } from "@/lib/prisma";
 import { authenticateClient, resolveClientIdentity } from "@/lib/server/client-portal-core";
+import { isOrganizationModuleEnabled } from "@/lib/server/module-guard";
 import { signClientSessionToken, verifyClientSessionToken } from "@/lib/server/client-session-token";
 import type { ClientSessionDto } from "@/types/client-portal";
 
@@ -24,7 +25,14 @@ import type { ClientSessionDto } from "@/types/client-portal";
  * re-checked against the database on every request (organisation and
  * customer still ACTIVE and still linked) - a blocked customer or a
  * deactivated organisation is logged out immediately.
+ *
+ * MODULES: the Espace client belongs to the "Commandes en ligne" module
+ * (lib/modules). When the SUPER_ADMIN disables it for the organisation, the
+ * login is refused and an open session is no longer recognised - every client
+ * page (redirected to the login) and every /api/client route (401) is closed.
  */
+
+const CLIENT_SPACE_DISABLED_MESSAGE = "L'espace client n'est pas disponible pour cette organisation.";
 
 const CLIENT_SESSION_COOKIE = "comdis.client-session";
 
@@ -49,6 +57,9 @@ export async function loginClient(
   }
 
   const { identity } = result;
+  if (!(await isOrganizationModuleEnabled(identity.organizationId, "customerOrders"))) {
+    throw new ClientAuthError(CLIENT_SPACE_DISABLED_MESSAGE, 403);
+  }
   const { token, maxAgeSeconds } = signClientSessionToken({
     organizationId: identity.organizationId,
     customerId: identity.customerId,
@@ -78,6 +89,7 @@ export async function getCurrentClient(): Promise<ClientSessionDto | null> {
 
   const identity = await resolveClientIdentity(prisma, claims);
   if (!identity) return null;
+  if (!(await isOrganizationModuleEnabled(identity.organizationId, "customerOrders"))) return null;
   return { ...identity, contactPhone: claims.contactPhone };
 }
 

@@ -6,12 +6,14 @@ import {
   getBusinessAccountFormOptions,
   getBusinessAccountsPage,
 } from "@/lib/server/business-accounts";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Comptes",
 };
 
 export default async function ComptesPage() {
+  await requireModulePage("accounts");
   const [initialPage, formOptions, sessionUser] = await Promise.all([
     getBusinessAccountsPage(),
     getBusinessAccountFormOptions(),

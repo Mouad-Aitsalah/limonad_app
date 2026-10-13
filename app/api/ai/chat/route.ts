@@ -33,10 +33,12 @@ import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { getSaleById } from "@/lib/server/driver-sales";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { isAssistantToolAllowed } from "@/lib/modules/settings";
 import { searchProducts } from "@/lib/server/products";
 import { getPurchaseRecommendations } from "@/lib/server/purchase-recommendation";
 import { getSalesOrdersPage } from "@/lib/server/sales-history";
 import { getStockLevelsByProduct } from "@/lib/server/stock-levels";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -336,11 +338,18 @@ function getSalesPeriod(period: z.infer<typeof salesPeriodArgumentsSchema>["peri
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
 
   try {
     const user = await requireOrganizationUser(["admin"]);
+    // Tools reading a module the SUPER_ADMIN disabled for this organisation are
+    // neither offered to the model nor executed (lib/modules ASSISTANT_TOOL_MODULES).
+    const allowedFunctionDeclarations = functionDeclarations.filter((declaration) =>
+      isAssistantToolAllowed(declaration.name, user.disabledModules),
+    );
 
     const parsedBody = bodySchema.safeParse(await request.json());
     if (!parsedBody.success) {
@@ -432,6 +441,9 @@ export async function POST(request: Request) {
     const executeFunctionCall = async (
       functionCall: FunctionCall,
     ): Promise<Record<string, unknown>> => {
+      if (!isAssistantToolAllowed(functionCall.name, user.disabledModules)) {
+        return { error: "Ce module n'est pas activé pour votre organisation." };
+      }
       if (functionCall.name === "get_product_count") {
         if (!noArgumentsSchema.safeParse(functionCall.args ?? {}).success) {
           return { error: "Cette fonction n'accepte aucun paramètre." };
@@ -883,7 +895,7 @@ export async function POST(request: Request) {
       history: geminiHistory,
       config: {
         systemInstruction,
-        tools: [{ functionDeclarations }],
+        tools: [{ functionDeclarations: allowedFunctionDeclarations }],
         toolConfig: {
           functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
         },
@@ -916,7 +928,7 @@ export async function POST(request: Request) {
           "La limite de consultations est atteinte. Réponds maintenant à la question en français uniquement à partir des résultats déjà reçus, sans appeler d'autre fonction.",
         config: {
           systemInstruction,
-          tools: [{ functionDeclarations }],
+          tools: [{ functionDeclarations: allowedFunctionDeclarations }],
           toolConfig: {
             functionCallingConfig: { mode: FunctionCallingConfigMode.NONE },
           },

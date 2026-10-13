@@ -4,6 +4,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getTodaySalesForCurrentDriver } from "@/lib/server/driver-sales";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * ÉTAPE 25D - no endpoint previously existed returning exactly
@@ -19,6 +20,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   try {
     const data = await getTodaySalesForCurrentDriver();
     return withMobileCors(request, NextResponse.json(data));

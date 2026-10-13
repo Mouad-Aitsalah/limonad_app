@@ -4,6 +4,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { resolveCustomerByNumber } from "@/lib/server/customers";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * GET /api/customers/by-number?n=15
@@ -22,6 +23,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   const n = new URL(request.url).searchParams.get("n") ?? "";
   try {
     const customer = await resolveCustomerByNumber(n);

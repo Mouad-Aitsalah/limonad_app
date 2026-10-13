@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getCurrentDriverTruck } from "@/lib/server/drivers";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * GET /api/driver/truck
@@ -19,6 +20,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   try {
     return withMobileCors(request, NextResponse.json({ truck: await getCurrentDriverTruck() }));
   } catch (error) {

@@ -12,6 +12,7 @@ import { StockAdjustmentDialog } from "@/components/stock/stock-adjustment-dialo
 import { StockKpiCards } from "@/components/stock/stock-kpi-cards";
 import { StockMovementsTable } from "@/components/stock/stock-movements-table";
 import { StockToolbar } from "@/components/stock/stock-toolbar";
+import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
 import { TruckStockPanel } from "@/components/stock/truck-stock-panel";
 import { useStockMovementsPage } from "@/components/stock/use-stock-movements-page";
 import { WarehouseStockTable } from "@/components/stock/warehouse-stock-table";
@@ -154,9 +155,15 @@ export function StockView({
               suppliers={suppliers}
               onChange={handleFilterChange}
             />
-            <p className="text-sm text-muted-foreground">
-              {warehouseRows.length} ligne(s) en stock principal
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                {warehouseRows.length} ligne(s) en stock principal
+              </p>
+              {/* admin only, desktop table only (phones show stock cards) */}
+              <div className="max-lg:hidden">
+                <TableColumnsPanel pageKey="stock" table="warehouseStock" tableName="Stock" />
+              </div>
+            </div>
             <div className={STOCK_TABLE_FRAME_CLASS}>
               <WarehouseStockTable rows={warehouseRows} />
             </div>
@@ -181,6 +188,10 @@ export function StockView({
               suppliers={suppliers}
               onChange={handleFilterChange}
             />
+            {/* admin only, desktop table only (phones show stock cards); same columns as "Stock principal" */}
+            <div className="flex justify-end empty:hidden max-lg:hidden">
+              <TableColumnsPanel pageKey="stock" table="warehouseStock" tableName="Stock" />
+            </div>
             <div className={STOCK_TABLE_FRAME_CLASS}>
               <WarehouseStockTable rows={filteredLevels} showLocation />
             </div>
@@ -199,7 +210,9 @@ export function StockView({
               placeholder="Rechercher un numero de mouvement (MV-...)"
               className="max-w-xs"
             />
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* admin only: renders nothing for another role */}
+              <TableColumnsPanel pageKey="stock" table="stockMovements" tableName="Mouvements de stock" />
               <p className="text-sm text-muted-foreground">
                 Page {movementsPageIndex + 1} &middot; {stockMovements.length} sur {movementsTotalCount} au
                 total

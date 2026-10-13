@@ -5,8 +5,11 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { createTour, getTours } from "@/lib/server/tours";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     await requireSessionUser(["admin", "depot_manager"]);
     return NextResponse.json({ tours: await getTours() });
@@ -22,6 +25,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {

@@ -3,8 +3,11 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { createDepot, getDepots, OperationsServiceError } from "@/lib/server/depots";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const activeOnly = new URL(request.url).searchParams.get("active") === "true";
     return NextResponse.json({ depots: await getDepots({ activeOnly }) });
@@ -20,6 +23,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {

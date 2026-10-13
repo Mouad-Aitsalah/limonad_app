@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { getStockMovementsPage } from "@/lib/server/stock-movements";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const url = new URL(request.url);
     const cursor = url.searchParams.get("cursor");

@@ -6,6 +6,7 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { createQuickCustomerForCurrentDriver } from "@/lib/server/driver-customers";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * POST /api/driver/customers/quick
@@ -28,6 +29,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   const csrfRejection = rejectUntrustedCookieOrigin(request);
   if (csrfRejection) return withMobileCors(request, csrfRejection);
   try {

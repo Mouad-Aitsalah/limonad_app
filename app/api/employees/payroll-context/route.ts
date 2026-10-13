@@ -6,8 +6,11 @@ import {
   mapEmployeeTransactionError,
 } from "@/lib/server/employee-transactions";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const url = new URL(request.url);
   const employeeId = url.searchParams.get("employeeId");
   const payrollYear = Number(url.searchParams.get("payrollYear") ?? "");

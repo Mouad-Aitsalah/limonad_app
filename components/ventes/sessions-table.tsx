@@ -13,6 +13,12 @@ import { SessionStatusBadge } from "@/components/ventes/session-status-badge";
 import { formatCurrency } from "@/lib/utils";
 import type { PosSessionDto } from "@/types/operations-dto";
 import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
+import { useTableColumns } from "@/components/table-columns/table-columns-provider";
+import type { TableColumnKey } from "@/lib/table-labels/registry";
+
+type SessionColumn = TableColumnKey<"archiveSessions">;
+
+const RIGHT_ALIGNED: ReadonlySet<SessionColumn> = new Set(["orders", "sales", "refunds", "net", "actions"]);
 
 function formatDateTime(value: string | null) {
   if (!value) return "-";
@@ -32,6 +38,8 @@ type SessionsTableProps = {
 
 export function SessionsTable({ sessions, onViewOrders }: SessionsTableProps) {
   const label = useColumnLabels("archiveSessions");
+  // Columns in the order chosen by the admin ("Personnaliser les colonnes"); default = the original ones.
+  const { columns } = useTableColumns("salesArchive", "archiveSessions");
   if (sessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -43,55 +51,82 @@ export function SessionsTable({ sessions, onViewOrders }: SessionsTableProps) {
     );
   }
 
+  function cell(column: SessionColumn, session: PosSessionDto) {
+    switch (column) {
+      case "session":
+        return (
+          <TableCell key={column} className="font-medium text-foreground">
+            {session.displayNumber}
+          </TableCell>
+        );
+      case "opened":
+        return (
+          <TableCell key={column} className="text-muted-foreground">
+            {formatDateTime(session.openedAt)}
+          </TableCell>
+        );
+      case "closed":
+        return (
+          <TableCell key={column} className="text-muted-foreground">
+            {formatDateTime(session.closedAt)}
+          </TableCell>
+        );
+      case "orders":
+        return <TableCell key={column} className="text-right tabular-nums">{session.ordersCount}</TableCell>;
+      case "sales":
+        return (
+          <TableCell key={column} className="text-right tabular-nums">
+            {formatCurrency(session.totalSales)}
+          </TableCell>
+        );
+      case "refunds":
+        return (
+          <TableCell key={column} className="text-right tabular-nums text-red-600">
+            {session.totalRefunds > 0
+              ? `− ${formatCurrency(session.totalRefunds)}`
+              : formatCurrency(0)}
+          </TableCell>
+        );
+      case "net":
+        return (
+          <TableCell key={column} className="text-right font-medium tabular-nums">
+            {formatCurrency(session.totalNet)}
+          </TableCell>
+        );
+      case "status":
+        return (
+          <TableCell key={column}>
+            <SessionStatusBadge status={session.status} />
+          </TableCell>
+        );
+      case "actions":
+        return (
+          <TableCell key={column} className="text-right">
+            <Button type="button" variant="outline" size="sm" onClick={() => onViewOrders(session)}>
+              <Eye aria-hidden="true" className="h-4 w-4" />
+              Voir commandes
+            </Button>
+          </TableCell>
+        );
+      default:
+        return null;
+    }
+  }
+
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{label("session")}</TableHead>
-          <TableHead>{label("opened")}</TableHead>
-          <TableHead>{label("closed")}</TableHead>
-          <TableHead className="text-right">{label("orders")}</TableHead>
-          <TableHead className="text-right">{label("sales")}</TableHead>
-          <TableHead className="text-right">{label("refunds")}</TableHead>
-          <TableHead className="text-right">{label("net")}</TableHead>
-          <TableHead>{label("status")}</TableHead>
-          <TableHead className="text-right">{label("actions")}</TableHead>
+          {columns.map((column) => (
+            <TableHead key={column} className={RIGHT_ALIGNED.has(column) ? "text-right" : undefined}>
+              {label(column)}
+            </TableHead>
+          ))}
         </TableRow>
       </TableHeader>
       <TableBody>
         {sessions.map((session) => (
-          <TableRow key={session.id}>
-            <TableCell className="font-medium text-foreground">
-              {session.displayNumber}
-            </TableCell>
-            <TableCell className="text-muted-foreground">
-              {formatDateTime(session.openedAt)}
-            </TableCell>
-            <TableCell className="text-muted-foreground">
-              {formatDateTime(session.closedAt)}
-            </TableCell>
-            <TableCell className="text-right tabular-nums">{session.ordersCount}</TableCell>
-            <TableCell className="text-right tabular-nums">
-              {formatCurrency(session.totalSales)}
-            </TableCell>
-            <TableCell className="text-right tabular-nums text-red-600">
-              {session.totalRefunds > 0
-                ? `− ${formatCurrency(session.totalRefunds)}`
-                : formatCurrency(0)}
-            </TableCell>
-            <TableCell className="text-right font-medium tabular-nums">
-              {formatCurrency(session.totalNet)}
-            </TableCell>
-            <TableCell>
-              <SessionStatusBadge status={session.status} />
-            </TableCell>
-            <TableCell className="text-right">
-              <Button type="button" variant="outline" size="sm" onClick={() => onViewOrders(session)}>
-                <Eye aria-hidden="true" className="h-4 w-4" />
-                Voir commandes
-              </Button>
-            </TableCell>
-          </TableRow>
+          <TableRow key={session.id}>{columns.map((column) => cell(column, session))}</TableRow>
         ))}
       </TableBody>
     </Table>

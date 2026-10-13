@@ -4,12 +4,14 @@ import { InventoryView } from "@/components/inventory/inventory-view";
 import { getDepots } from "@/lib/server/depots";
 import { getInventoryHistory } from "@/lib/server/inventories";
 import { getProductPickerPreload } from "@/lib/server/products";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Inventaire",
 };
 
 export default async function InventairePage() {
+  await requireModulePage("inventory");
   // Phase 3 CRITICAL #1 fix: small bounded preload instead of getProducts()
   // (measured 12.5s/56MB at 100k products) - already ACTIVE-only. See
   // InventoryCaptureDialog's product search.

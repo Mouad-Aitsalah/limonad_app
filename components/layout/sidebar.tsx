@@ -28,7 +28,7 @@ export function Sidebar() {
     undefined,
   );
 
-  const visibleNavItems = getVisibleNavItems(currentUser?.role);
+  const visibleNavItems = getVisibleNavItems(currentUser?.role, currentUser?.disabledModules);
 
   const matchesRoute = (href: string) =>
     pathname === href || pathname.startsWith(`${href}/`);

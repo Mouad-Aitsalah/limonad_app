@@ -9,6 +9,7 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { rejectUntrustedCookieOrigin } from "@/lib/server/csrf";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * CORRECTION "CACHE COMPLET CLIENTS CHAUFFEUR": GET is now also called
@@ -25,6 +26,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   try {
     // ?scope=own -> only the customers this driver created (driver POS offline cache).
     const ownOnly = new URL(request.url).searchParams.get("scope") === "own";
@@ -50,6 +53,8 @@ export async function GET(request: Request) {
 // the cookie-CSRF origin check skipped ONLY for a Bearer request (no ambient
 // credential to ride on). The web's cookie + CSRF behavior is unchanged.
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   const csrfRejection = rejectUntrustedCookieOrigin(request);
   if (csrfRejection) return withMobileCors(request, csrfRejection);
   try {

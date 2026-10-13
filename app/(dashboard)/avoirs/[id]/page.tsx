@@ -6,6 +6,7 @@ import { getCurrentSessionUser } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getCreditNoteById } from "@/lib/server/credit-notes";
 import type { CurrentUser, UserRole } from "@/types/auth";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 type CreditNoteDetailPageProps = {
   params: Promise<{ id: string }>;
@@ -22,6 +23,7 @@ const allowedRoles: UserRole[] = ["admin", "depot_manager", "cashier"];
 export default async function CreditNoteDetailPage({
   params,
 }: CreditNoteDetailPageProps) {
+  await requireModulePage("creditNotes");
   const { id } = await params;
   const currentUser = await getCurrentSessionUser();
 

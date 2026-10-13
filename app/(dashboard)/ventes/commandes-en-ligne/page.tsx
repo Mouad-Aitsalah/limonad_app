@@ -4,12 +4,14 @@ import { redirect } from "next/navigation";
 import { CustomerOrdersView } from "@/components/customer-orders/customer-orders-view";
 import { AuthServiceError } from "@/lib/server/auth";
 import { listCustomerOrders } from "@/lib/server/customer-orders";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Commandes en ligne",
 };
 
 export default async function CustomerOrdersPage() {
+  await requireModulePage("customerOrders");
   let initialPage;
   try {
     initialPage = await listCustomerOrders({ status: "SUBMITTED" });

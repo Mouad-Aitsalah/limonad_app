@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { DriverClientsView } from "@/components/driver-clients/driver-clients-view";
 import { getDriverCustomersPage } from "@/lib/server/driver-customers";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Mes clients",
@@ -12,6 +13,7 @@ export default async function DriverClientsPage({
 }: {
   searchParams: Promise<{ customerId?: string }>;
 }) {
+  await requireModulePage("driverApp");
   const params = await searchParams;
   const initialSelectedCustomerId = params.customerId?.trim() || null;
   // CRITICAL #2 follow-up: bounded first page instead of every accessible

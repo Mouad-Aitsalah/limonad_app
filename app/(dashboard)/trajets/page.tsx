@@ -5,6 +5,7 @@ import { TrajetsView } from "@/components/trajets/trajets-view";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import { getTruckRoutesPageData } from "@/lib/server/truck-routes";
 import type { UserRole } from "@/types/auth";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Trajets",
@@ -19,6 +20,7 @@ type TrajetsPageProps = {
 };
 
 export default async function TrajetsPage({ searchParams }: TrajetsPageProps) {
+  await requireModulePage("gps");
   const currentUser = await getCurrentSessionUser();
 
   if (!currentUser) {

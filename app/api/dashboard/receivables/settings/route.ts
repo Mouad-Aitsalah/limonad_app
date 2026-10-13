@@ -5,6 +5,7 @@ import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { updateReceivablesSettings } from "@/lib/server/receivables";
 import { ReceivablesError } from "@/lib/server/receivables-core";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * PUT /api/dashboard/receivables/settings
@@ -12,6 +13,8 @@ import { ReceivablesError } from "@/lib/server/receivables-core";
  * the caller's own organisation only. Audited.
  */
 export async function PUT(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {

@@ -88,8 +88,8 @@ test("the table puts the badge beside the invoice number only when the row is fl
   const table = code("./invoices-table.tsx");
   assert.match(table, /\{invoice\.displayNumber\}\s+\{invoice\.hasDiscount \? <InvoiceDiscountBadge amountTTC=\{invoice\.discountTTC\} \/> : null\}/);
   assert.match(table, /import \{ InvoiceDiscountBadge \} from "@\/components\/ventes\/invoice-discount-badge";/);
-  // no extra column, no layout change: the table header and the colSpan are the ones of the existing tests
-  assert.match(table, /colSpan=\{dailyLayout \? 10 : 11\}/);
+  // no extra column: the detail row spans the chevron + the visible columns (lib/table-columns)
+  assert.match(table, /colSpan=\{columns\.length \+ 1\}/);
   // both pages render this very table
   assert.match(code("./orders-tab.tsx"), /<InvoicesTable invoices=\{items\} onSaleChanged=\{refetch\} \/>/);
   assert.match(code("./daily-invoices-view.tsx"), /<InvoicesTable invoices=\{data\.items\} onSaleChanged=\{refetch\} dailyLayout \/>/);

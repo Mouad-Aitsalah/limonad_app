@@ -38,6 +38,9 @@ import { cn, formatCurrency } from "@/lib/utils";
 import type { StockAdjustmentInput, StockLevelDto, StockLocationDto } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
 import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
+import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
+import { useTableColumns } from "@/components/table-columns/table-columns-provider";
+import type { TableColumnKey } from "@/lib/table-labels/registry";
 
 type TruckStockPanelProps = {
   locations: StockLocationDto[];
@@ -114,6 +117,8 @@ export function TruckStockPanel({
   onAdjusted,
 }: TruckStockPanelProps) {
   const label = useColumnLabels("truckStock");
+  // Desktop table columns, in the order chosen by the admin; default = the original ones.
+  const { columns } = useTableColumns("stock", "truckStock");
   const [selectedLocationId, setSelectedLocationId] = React.useState(
     locations[0]?.id ?? "",
   );
@@ -222,6 +227,66 @@ export function TruckStockPanel({
     toast.success("Ajustement de stock enregistre.");
     onAdjusted();
     closeDialog();
+  }
+
+  // One desktop cell per column, same content and classes as before.
+  function truckStockCell(column: TableColumnKey<"truckStock">, row: (typeof selectedRows)[number]) {
+    switch (column) {
+      case "product":
+        return (
+          <TableCell key={column}>
+            <div className="font-medium text-foreground">{row.productName}</div>
+            <div className="text-xs text-muted-foreground">{row.productReference}</div>
+          </TableCell>
+        );
+      case "quantity":
+        return (
+          <TableCell key={column} className="text-right font-medium tabular-nums">
+            {row.quantity}
+          </TableCell>
+        );
+      case "available":
+        return (
+          <TableCell key={column} className="text-right tabular-nums">
+            {row.availableQuantity}
+          </TableCell>
+        );
+      case "value":
+        return (
+          <TableCell key={column} className="text-right tabular-nums">
+            {formatCurrency(row.stockValue)}
+          </TableCell>
+        );
+      case "updatedAt":
+        return (
+          <TableCell key={column} className="text-right text-muted-foreground">
+            {new Date(row.updatedAt).toLocaleDateString("fr-FR")}
+          </TableCell>
+        );
+      case "actions":
+        return (
+          <TableCell key={column} className="text-right">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                openAdjustmentDialog({
+                  productId: row.productId,
+                  productName: row.productName,
+                  productReference: row.productReference,
+                  currentQuantity: row.quantity,
+                })
+              }
+            >
+              <Pencil className="h-4 w-4" />
+              Ajuster
+            </Button>
+          </TableCell>
+        );
+      default:
+        return null;
+    }
   }
 
   return (
@@ -351,62 +416,33 @@ export function TruckStockPanel({
             )}
           </div>
 
+          {/* admin only, desktop table only: renders nothing (and the row is hidden) otherwise */}
+          <div className="flex justify-end empty:hidden max-lg:hidden">
+            <TableColumnsPanel pageKey="stock" table="truckStock" tableName="Stock camion" />
+          </div>
+
           <div className="max-lg:hidden">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{label("product")}</TableHead>
-                <TableHead className="text-right">{label("quantity")}</TableHead>
-                <TableHead className="text-right">{label("available")}</TableHead>
-                <TableHead className="text-right">{label("value")}</TableHead>
-                <TableHead className="text-right">{label("updatedAt")}</TableHead>
-                <TableHead className="text-right">{label("actions")}</TableHead>
+                {columns.map((column) => (
+                  <TableHead key={column} className={column === "product" ? undefined : "text-right"}>
+                    {label(column)}
+                  </TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
               {selectedRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+                  <TableCell colSpan={columns.length} className="py-10 text-center text-muted-foreground">
                     Aucun produit n&apos;est encore enregistre dans ce camion.
                   </TableCell>
                 </TableRow>
               ) : (
                 selectedRows.map((row) => (
                   <TableRow key={row.id}>
-                    <TableCell>
-                      <div className="font-medium text-foreground">{row.productName}</div>
-                      <div className="text-xs text-muted-foreground">{row.productReference}</div>
-                    </TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">
-                      {row.quantity}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {row.availableQuantity}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(row.stockValue)}
-                    </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
-                      {new Date(row.updatedAt).toLocaleDateString("fr-FR")}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          openAdjustmentDialog({
-                            productId: row.productId,
-                            productName: row.productName,
-                            productReference: row.productReference,
-                            currentQuantity: row.quantity,
-                          })
-                        }
-                      >
-                        <Pencil className="h-4 w-4" />
-                        Ajuster
-                      </Button>
-                    </TableCell>
+                    {columns.map((column) => truckStockCell(column, row))}
                   </TableRow>
                 ))
               )}

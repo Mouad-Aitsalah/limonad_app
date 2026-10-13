@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "crypto";
 import { cookies, headers } from "next/headers";
 import bcrypt from "bcryptjs";
 
+import { disabledModulesFromSettings } from "@/lib/modules/settings";
 import { prisma } from "@/lib/prisma";
 import {
   isSessionValid,
@@ -56,6 +57,9 @@ const userForSessionSelect = {
     select: {
       id: true,
       status: true,
+      // Modules disabled by the SUPER_ADMIN (lib/modules), read with the session
+      // itself so the module checks cost no extra query.
+      moduleSettings: true,
     },
   },
   driverProfile: {
@@ -463,8 +467,10 @@ function mapUserToSession(user: {
   email: string;
   role: string;
   organizationId: string | null;
+  organization?: { moduleSettings?: unknown } | null;
   driverProfile: { id: string; truckId: string | null } | null;
 }): CurrentUser {
+  const disabledModules = disabledModulesFromSettings(user.organization?.moduleSettings);
   return {
     id: user.id,
     firstName: user.firstName,
@@ -475,6 +481,9 @@ function mapUserToSession(user: {
     organizationId: user.organizationId,
     driverId: user.driverProfile?.id,
     truckId: user.driverProfile?.truckId ?? undefined,
+    // Only present when the organisation has disabled modules: the session of
+    // an organisation with every module keeps exactly its previous shape.
+    ...(disabledModules.length ? { disabledModules } : {}),
   };
 }
 

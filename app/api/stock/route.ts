@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "@/lib/server/auth";
 import { getStockLevels, getStockSummary } from "@/lib/server/stock-levels";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const [levels, summary] = await Promise.all([
       getStockLevels(),

@@ -5,12 +5,14 @@ import { DriverTourView } from "@/components/driver-tour/driver-tour-view";
 import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getCurrentDriverTour } from "@/lib/server/driver-tour";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Ma tournee",
 };
 
 export default async function DriverRoutePage() {
+  await requireModulePage("driverApp");
   const currentTour = await loadDriverTourPageData();
   return <DriverTourView currentTour={currentTour} />;
 }

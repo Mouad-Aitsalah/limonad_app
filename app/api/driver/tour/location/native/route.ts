@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { deriveClientPingId } from "@/lib/gps/gps-utils";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { recordDriverLocationForDriver } from "@/lib/server/driver-tour";
+import { rejectDisabledModuleForOrganization } from "@/lib/server/module-guard";
 import { verifyTrackingToken } from "@/lib/server/tracking-token";
 
 /**
@@ -32,6 +33,10 @@ export async function POST(request: Request) {
     if (!claims) {
       return NextResponse.json({ message: "Jeton de suivi invalide ou expire." }, { status: 401 });
     }
+
+    // "Suivi GPS" disabled for the token's organisation: refused, nothing stored.
+    const moduleRejection = await rejectDisabledModuleForOrganization(request, claims.organizationId);
+    if (moduleRejection) return moduleRejection;
 
     const body = await request.json();
     // @capgo/background-geolocation's native POST body: latitude, longitude,

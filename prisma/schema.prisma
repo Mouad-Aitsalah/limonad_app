@@ -384,6 +384,7 @@ model User {
   aiConversations              AiConversation[]      @relation("AiConversationCreatedBy")
   aiPosDrafts                  AiPosDraft[]
   processedCustomerOrders      CustomerOrder[]       @relation("CustomerOrderProcessedBy")
+  tablePreferences             UserTablePreference[]
   createdAt                    DateTime              @default(now())
   updatedAt                    DateTime              @updatedAt
 
@@ -426,6 +427,32 @@ model Session {
   @@index([expiresAt])
 }
 
+/**
+ * One user's column choice for ONE table of ONE page, inside ONE organisation
+ * ("Personnaliser les colonnes", admins only - see lib/table-columns). Display
+ * only: hiding a column never touches the data behind it. Another user's
+ * preferences are never read or written. `settings` is
+ * { "order": [column keys], "hidden": [column keys] } and is sanitised on every
+ * read, so a stale or hand-edited value falls back to the default columns.
+ * onDelete: Cascade - a preference has no meaning without its user or
+ * organisation and is not business data to retain.
+ */
+model UserTablePreference {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // "<page key>.<table key>", e.g. "stock.warehouseStock" (lib/table-columns).
+  tableKey       String
+  settings       Json
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([userId, organizationId, tableKey])
+  @@index([organizationId])
+}
+
 model Organization {
   id                        String                     @id @default(cuid())
   code                      String                     @unique
@@ -449,6 +476,12 @@ model Organization {
   // organisation: { "columns": { "<column-key>": true | false } }. Display
   // only - null = the default columns. See lib/product-columns.ts.
   productColumnSettings     Json?
+  // Modules enabled for this organisation, set by the SUPER_ADMIN only:
+  // { "modules": { "<module key>": true | false } }. NULL or a missing key =
+  // the module's default (enabled), so existing and new organisations keep
+  // every module. Disabling a module never deletes its data. Enforced on the
+  // server (pages + API routes) - see lib/modules.
+  moduleSettings            Json?
   status                    OrganizationStatus         @default(ACTIVE)
   users                     User[]
   depots                    Depot[]
@@ -489,6 +522,7 @@ model Organization {
   aiPosDrafts               AiPosDraft[]
   customerOrders            CustomerOrder[]
   purchaseForecastSnapshots PurchaseForecastSnapshot[]
+  tablePreferences          UserTablePreference[]
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
 }

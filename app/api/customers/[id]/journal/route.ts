@@ -3,10 +3,13 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getCustomerJournal } from "@/lib/server/customer-settlements";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function GET(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const { id } = await context.params;
   const url = new URL(request.url);
   const page = Number(url.searchParams.get("page") ?? "1");

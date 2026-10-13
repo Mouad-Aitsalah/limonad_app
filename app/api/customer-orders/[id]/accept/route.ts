@@ -4,11 +4,14 @@ import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { transitionCustomerOrder } from "@/lib/server/customer-orders";
 
 import { customerOrderErrorResponse } from "../../shared";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 /** POST /api/customer-orders/[id]/accept - SUBMITTED -> ACCEPTED. Status only: no sale, no stock. */
 export async function POST(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   const { id } = await context.params;

@@ -13,6 +13,8 @@ import {
 import { cn, formatCurrency } from "@/lib/utils";
 import type { StockLevelDto } from "@/types/operations-dto";
 import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
+import { useTableColumns } from "@/components/table-columns/table-columns-provider";
+import type { TableColumnKey } from "@/lib/table-labels/registry";
 
 export function WarehouseStockTable({
   rows,
@@ -23,6 +25,8 @@ export function WarehouseStockTable({
   showLocation?: boolean;
 }) {
   const label = useColumnLabels("warehouseStock");
+  // Desktop table columns, in the order chosen by the admin; default = the original ones.
+  const { columns } = useTableColumns("stock", "warehouseStock");
   if (rows.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -57,12 +61,11 @@ export function WarehouseStockTable({
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{label("product")}</TableHead>
-          <TableHead>{label("category")}</TableHead>
-          <TableHead className="text-right">{label("currentStock")}</TableHead>
-          <TableHead className="text-right">{label("minimumStock")}</TableHead>
-          <TableHead className="text-right">{label("value")}</TableHead>
-          <TableHead>{label("status")}</TableHead>
+          {columns.map((column) => (
+            <TableHead key={column} className={RIGHT_ALIGNED.has(column) ? "text-right" : undefined}>
+              {label(column)}
+            </TableHead>
+          ))}
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -71,37 +74,7 @@ export function WarehouseStockTable({
 
           return (
             <TableRow key={row.id}>
-              <TableCell>
-                <div className="font-medium text-foreground">
-                  {row.productName}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {row.productReference}
-                </div>
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {row.categoryName}
-              </TableCell>
-              <TableCell
-                className={cn(
-                  "text-right font-medium tabular-nums",
-                  status.tone === "danger" && "text-red-600",
-                  status.tone === "warning" && "text-amber-600",
-                )}
-              >
-                {row.quantity}
-              </TableCell>
-              <TableCell className="text-right text-muted-foreground tabular-nums">
-                {row.minimumStock}
-              </TableCell>
-              <TableCell className="text-right font-medium tabular-nums">
-                {formatCurrency(row.stockValue)}
-              </TableCell>
-              <TableCell>
-                <Badge className={status.className} variant="outline">
-                  {status.label}
-                </Badge>
-              </TableCell>
+              {columns.map((column) => warehouseStockCell(column, row, status))}
             </TableRow>
           );
         })}
@@ -110,6 +83,72 @@ export function WarehouseStockTable({
     </div>
     </>
   );
+}
+
+type WarehouseStockColumn = TableColumnKey<"warehouseStock">;
+
+const RIGHT_ALIGNED: ReadonlySet<WarehouseStockColumn> = new Set(["currentStock", "minimumStock", "value"]);
+
+/** One desktop cell per column, same content and classes as before. */
+function warehouseStockCell(
+  column: WarehouseStockColumn,
+  row: StockLevelDto,
+  status: ReturnType<typeof getStockStatus>,
+) {
+  switch (column) {
+    case "product":
+      return (
+        <TableCell key={column}>
+          <div className="font-medium text-foreground">
+            {row.productName}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {row.productReference}
+          </div>
+        </TableCell>
+      );
+    case "category":
+      return (
+        <TableCell key={column} className="text-muted-foreground">
+          {row.categoryName}
+        </TableCell>
+      );
+    case "currentStock":
+      return (
+        <TableCell
+          key={column}
+          className={cn(
+            "text-right font-medium tabular-nums",
+            status.tone === "danger" && "text-red-600",
+            status.tone === "warning" && "text-amber-600",
+          )}
+        >
+          {row.quantity}
+        </TableCell>
+      );
+    case "minimumStock":
+      return (
+        <TableCell key={column} className="text-right text-muted-foreground tabular-nums">
+          {row.minimumStock}
+        </TableCell>
+      );
+    case "value":
+      return (
+        <TableCell key={column} className="text-right font-medium tabular-nums">
+          {formatCurrency(row.stockValue)}
+        </TableCell>
+      );
+    case "status":
+      return (
+        <TableCell key={column}>
+          <Badge className={status.className} variant="outline">
+            {status.label}
+          </Badge>
+        </TableCell>
+      );
+    default:
+      return null;
+  }
 }
 
 function getStockStatus(status: StockLevelDto["status"]) {

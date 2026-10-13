@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { exportAccountsPage } from "@/lib/server/data-exports";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * GET /api/comptes/export?type=CUSTOMER|SUPPLIER|EXPENSE|TREASURY|EMPLOYEE&cursor=&gps=1
@@ -10,6 +11,8 @@ import { OperationsServiceError } from "@/lib/server/depots";
  * Business values only - never an internal id, never a balance.
  */
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const url = new URL(request.url);
   try {
     const page = await exportAccountsPage({

@@ -6,11 +6,11 @@ import { Loader2 } from "lucide-react";
 import { getBrowserHomeRoute } from "@/lib/auth/browser-home-route";
 import type { UserRole } from "@/types/auth";
 
-export function HomeRedirect({ role }: { role: UserRole }) {
+export function HomeRedirect({ role, disabledModules }: { role: UserRole; disabledModules?: string[] }) {
   const router = useRouter();
   useEffect(() => {
-    router.replace(getBrowserHomeRoute(role));
-  }, [role, router]);
+    router.replace(getBrowserHomeRoute(role, disabledModules));
+  }, [role, disabledModules, router]);
 
   return (
     <main className="flex min-h-dvh items-center justify-center" aria-label="Ouverture de votre espace">

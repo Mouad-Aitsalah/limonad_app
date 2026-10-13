@@ -18,6 +18,7 @@ import { canViewReceivables } from "@/lib/receivables/access";
 import { canViewForecast } from "@/lib/forecasting/forecast-access";
 import { getCurrentSessionUser } from "@/lib/server/auth";
 import { getDirectionDashboardData } from "@/lib/server/dashboard-direction";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Dashboard Direction",
@@ -36,6 +37,7 @@ type DashboardPageProps = {
 };
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
+  await requireModulePage("dashboard");
   const params = await searchParams;
   const data = await getDirectionDashboardData(params);
   const kpis = data.kpis;

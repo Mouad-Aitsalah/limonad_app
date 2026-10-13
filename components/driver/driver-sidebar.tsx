@@ -42,7 +42,7 @@ export function DriverSidebar() {
         </div>
 
         <nav className="flex-1 space-y-3 overflow-y-auto px-4 py-5">
-          {getVisibleNavItems(currentUser?.role).map((item, index) => {
+          {getVisibleNavItems(currentUser?.role, currentUser?.disabledModules).map((item, index) => {
             if (!item.href) return null;
             const active =
               item.href === "/driver"

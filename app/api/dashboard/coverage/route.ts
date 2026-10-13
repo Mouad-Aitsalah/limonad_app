@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AnalysisFilterError, parseCoverageFilters } from "@/lib/commercial-analysis/filters";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getCoverage } from "@/lib/server/commercial-analysis";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * GET /api/dashboard/coverage?driverId&week
@@ -11,6 +12,8 @@ import { getCoverage } from "@/lib/server/commercial-analysis";
  * only. `week` is any valid day (normalised to its Monday); an invalid value is a 422.
  */
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const filters = parseCoverageFilters(new URL(request.url).searchParams);
     return NextResponse.json(await getCoverage(filters), { headers: { "Cache-Control": "no-store" } });

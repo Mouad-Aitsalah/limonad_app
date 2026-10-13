@@ -12,6 +12,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 // A file of several hundred lines is imported one short transaction at a
 // time (see below); give the handler room past the default serverless limit.
@@ -34,6 +35,8 @@ export const maxDuration = 60;
  * need the admin role, like /employes.
  */
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   try {

@@ -5,12 +5,14 @@ import { getProductPickerPreload } from "@/lib/server/products";
 import { getStockLocations } from "@/lib/server/stock-locations";
 import { getStockLevels, getStockSummary } from "@/lib/server/stock-levels";
 import { getStockMovementsPage } from "@/lib/server/stock-movements";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Stock",
 };
 
 export default async function StockPage() {
+  await requireModulePage("stock");
   // Phase 3 CRITICAL #1 fix: small bounded preload instead of getProducts()
   // (measured 12.5s/56MB at 100k products) - getStockLevels()/
   // getStockSummary() are a separate, already-audited finding, untouched

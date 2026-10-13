@@ -3,6 +3,7 @@ import { handleTranscribeRequest } from "@/lib/server/assistant-transcribe";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { transcribeAudio } from "@/lib/server/speech-to-text";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,8 @@ export const maxDuration = 30;
  * and presses "Envoyer" himself. Only POST exists (any other method: 405).
  */
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   return handleTranscribeRequest(request, {
     rejectUntrustedOrigin,
     requireAdmin: () => requireOrganizationUser(["admin"]),

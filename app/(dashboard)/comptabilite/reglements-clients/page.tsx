@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { CustomerSettlementsView } from "@/components/accounting/customer-settlements-view";
 import { getCustomerById } from "@/lib/server/customers";
 import type { CustomerDto } from "@/types/operations-dto";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Règlements clients",
@@ -15,6 +16,7 @@ type CustomerSettlementsPageProps = {
 export default async function CustomerSettlementsPage({
   searchParams,
 }: CustomerSettlementsPageProps) {
+  await requireModulePage("accounting");
   const params = await searchParams;
   const customerId = typeof params.customerId === "string" ? params.customerId : null;
 

@@ -16,6 +16,10 @@ import { readFileAsDataUrl, validateLogoFile } from "@/lib/logo-validation";
 import { useAuth } from "@/hooks/use-auth";
 import type { BusinessAccountListItem } from "@/types/business-account";
 import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
+import { useTableColumns } from "@/components/table-columns/table-columns-provider";
+import type { TableColumnKey } from "@/lib/table-labels/registry";
+
+type AccountColumn = TableColumnKey<"accounts">;
 
 const typeLabels: Record<BusinessAccountListItem["type"], string> = {
   CUSTOMER: "Client",
@@ -37,15 +41,14 @@ export type AccountsSortState = {
   direction: "asc" | "desc";
 };
 
-const sortableColumns: Array<{
-  key: AccountsSortKey;
-  label: string;
-  align?: "left" | "right";
-}> = [
-  { key: "accountNumber", label: "N° compte" },
-  { key: "name", label: "Nom du compte" },
-  { key: "type", label: "Type de compte" },
-];
+// Columns whose header sorts the current page (unchanged), and their alignment.
+const SORTABLE_COLUMNS: Partial<Record<AccountColumn, { key: AccountsSortKey; align?: "right" }>> = {
+  accountNumber: { key: "accountNumber" },
+  name: { key: "name" },
+  type: { key: "type" },
+  creditLimit: { key: "creditLimit", align: "right" },
+  createdAt: { key: "createdAt" },
+};
 
 type AccountsTableProps = {
   accounts: BusinessAccountListItem[];
@@ -64,6 +67,9 @@ export function AccountsTable({
 }: AccountsTableProps) {
   const { currentUser } = useAuth();
   const label = useColumnLabels("accounts");
+  // Columns in the order chosen by the admin ("Personnaliser les colonnes"); default = the original ones.
+  // Hiding a column never changes the search, the filters, the sort or the export.
+  const { columns } = useTableColumns("accounts", "accounts");
   const canManageSupplierLogo = currentUser?.role === "admin";
   if (accounts.length === 0) {
     return (
@@ -79,115 +85,120 @@ export function AccountsTable({
     );
   }
 
+  function headCell(column: AccountColumn) {
+    const sortable = SORTABLE_COLUMNS[column];
+    if (!sortable) {
+      return (
+        <TableHead key={column} className={column === "actions" ? "text-right" : undefined}>
+          {label(column)}
+        </TableHead>
+      );
+    }
+    return (
+      <TableHead key={column} className={sortable.align === "right" ? "text-right" : undefined}>
+        <button
+          type="button"
+          onClick={() => onSortChange(sortable.key)}
+          className={
+            sortable.align === "right"
+              ? "inline-flex w-full items-center justify-end gap-1 text-left"
+              : "inline-flex items-center gap-1 text-left"
+          }
+        >
+          <span>{label(column)}</span>
+          <SortIcon active={sort.key === sortable.key} direction={sort.direction} />
+        </button>
+      </TableHead>
+    );
+  }
+
+  function cell(column: AccountColumn, account: BusinessAccountListItem) {
+    switch (column) {
+      case "accountNumber":
+        return (
+          <TableCell key={column} className="font-medium text-foreground">
+            {account.accountNumber}
+          </TableCell>
+        );
+      case "name": {
+        const hasGps =
+          account.latitude !== null &&
+          account.latitude !== undefined &&
+          account.longitude !== null &&
+          account.longitude !== undefined;
+        return (
+          <TableCell key={column} className="font-medium text-foreground">
+            <div className="flex items-center gap-3">
+              {account.type === "SUPPLIER" ? (
+                <SupplierLogo account={account} canManage={canManageSupplierLogo} onChanged={onLogoChanged} />
+              ) : null}
+              <div>{account.name}</div>
+            </div>
+            {account.type === "CUSTOMER" ? (
+              <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                <MapPin className={hasGps ? "h-3.5 w-3.5 text-amber-500" : "h-3.5 w-3.5"} />
+                <span>
+                  {hasGps
+                    ? `${account.latitude!.toFixed(5)}, ${account.longitude!.toFixed(5)}`
+                    : "Emplacement GPS non defini"}
+                </span>
+              </div>
+            ) : null}
+          </TableCell>
+        );
+      }
+      case "type":
+        return <TableCell key={column}>{typeLabels[account.type]}</TableCell>;
+      case "phone":
+        return <TableCell key={column}>{account.phone ?? "-"}</TableCell>;
+      case "creditLimit":
+        return (
+          <TableCell key={column} className="text-right">
+            {account.creditLimit === null ? "-" : formatCurrency(account.creditLimit)}
+          </TableCell>
+        );
+      case "createdAt":
+        return <TableCell key={column}>{formatBusinessAccountDate(account.createdAt)}</TableCell>;
+      case "createdBy":
+        return (
+          <TableCell key={column} className="text-muted-foreground">
+            {account.createdByName ?? "-"}
+          </TableCell>
+        );
+      case "actions":
+        return (
+          <TableCell key={column}>
+            <div className="flex justify-end">
+              {account.type === "CUSTOMER" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="Modifier le compte"
+                  onClick={() => onEdit(account)}
+                >
+                  <Pencil aria-hidden="true" />
+                </Button>
+              ) : (
+                <span className="text-xs text-muted-foreground">-</span>
+              )}
+            </div>
+          </TableCell>
+        );
+      default:
+        return null;
+    }
+  }
+
   return (
     <Table>
       <TableHeader>
-        <TableRow>
-          {sortableColumns.map((column) => (
-            <TableHead
-              key={column.key}
-              className={column.align === "right" ? "text-right" : undefined}
-            >
-              <button
-                type="button"
-                onClick={() => onSortChange(column.key)}
-                className={
-                  column.align === "right"
-                    ? "inline-flex w-full items-center justify-end gap-1 text-left"
-                    : "inline-flex items-center gap-1 text-left"
-                }
-              >
-                <span>{label(column.key)}</span>
-                <SortIcon active={sort.key === column.key} direction={sort.direction} />
-              </button>
-            </TableHead>
-          ))}
-          <TableHead>{label("phone")}</TableHead>
-          <TableHead className="text-right">
-            <button
-              type="button"
-              onClick={() => onSortChange("creditLimit")}
-              className="inline-flex w-full items-center justify-end gap-1 text-left"
-            >
-              <span>{label("creditLimit")}</span>
-              <SortIcon active={sort.key === "creditLimit"} direction={sort.direction} />
-            </button>
-          </TableHead>
-          <TableHead>
-            <button
-              type="button"
-              onClick={() => onSortChange("createdAt")}
-              className="inline-flex items-center gap-1 text-left"
-            >
-              <span>{label("createdAt")}</span>
-              <SortIcon active={sort.key === "createdAt"} direction={sort.direction} />
-            </button>
-          </TableHead>
-          <TableHead>{label("createdBy")}</TableHead>
-          <TableHead className="text-right">{label("actions")}</TableHead>
-        </TableRow>
+        <TableRow>{columns.map((column) => headCell(column))}</TableRow>
       </TableHeader>
       <TableBody>
-        {accounts.map((account) => {
-          const hasGps =
-            account.latitude !== null &&
-            account.latitude !== undefined &&
-            account.longitude !== null &&
-            account.longitude !== undefined;
-          const canEdit = account.type === "CUSTOMER";
-
-          return (
-            <TableRow key={account.id}>
-              <TableCell className="font-medium text-foreground">
-                {account.accountNumber}
-              </TableCell>
-              <TableCell className="font-medium text-foreground">
-                <div className="flex items-center gap-3">
-                  {account.type === "SUPPLIER" ? (
-                    <SupplierLogo account={account} canManage={canManageSupplierLogo} onChanged={onLogoChanged} />
-                  ) : null}
-                  <div>{account.name}</div>
-                </div>
-                {account.type === "CUSTOMER" ? (
-                  <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                    <MapPin className={hasGps ? "h-3.5 w-3.5 text-amber-500" : "h-3.5 w-3.5"} />
-                    <span>
-                      {hasGps
-                        ? `${account.latitude!.toFixed(5)}, ${account.longitude!.toFixed(5)}`
-                        : "Emplacement GPS non defini"}
-                    </span>
-                  </div>
-                ) : null}
-              </TableCell>
-              <TableCell>{typeLabels[account.type]}</TableCell>
-              <TableCell>{account.phone ?? "-"}</TableCell>
-              <TableCell className="text-right">
-                {account.creditLimit === null ? "-" : formatCurrency(account.creditLimit)}
-              </TableCell>
-              <TableCell>{formatBusinessAccountDate(account.createdAt)}</TableCell>
-              <TableCell className="text-muted-foreground">
-                {account.createdByName ?? "-"}
-              </TableCell>
-              <TableCell>
-                <div className="flex justify-end">
-                  {canEdit ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon-sm"
-                      aria-label="Modifier le compte"
-                      onClick={() => onEdit(account)}
-                    >
-                      <Pencil aria-hidden="true" />
-                    </Button>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">-</span>
-                  )}
-                </div>
-              </TableCell>
-            </TableRow>
-          );
-        })}
+        {accounts.map((account) => (
+          <TableRow key={account.id}>{columns.map((column) => cell(column, account))}</TableRow>
+        ))}
       </TableBody>
     </Table>
   );

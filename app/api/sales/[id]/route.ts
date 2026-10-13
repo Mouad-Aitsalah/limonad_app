@@ -6,10 +6,13 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { getSaleById } from "@/lib/server/driver-sales";
 import { reportUnexpected } from "@/lib/server/report-error";
 import { reviseSale } from "@/lib/server/sale-admin";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const { id } = await context.params;
   try {
     return NextResponse.json({ sale: await getSaleById(id) });
@@ -28,6 +31,8 @@ export async function GET(_request: Request, context: RouteContext) {
  * contre-passés puis réémis, dette client recalculée. Atomique.
  */
 export async function PATCH(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   const { id } = await context.params;

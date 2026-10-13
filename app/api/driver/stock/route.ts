@@ -4,6 +4,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getCurrentDriverTruckStock } from "@/lib/server/driver-stock";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * ÉTAPE 23 - no endpoint previously existed for /driver/stock (the web page
@@ -19,6 +20,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   try {
     const stock = await getCurrentDriverTruckStock();
     return withMobileCors(request, NextResponse.json({ stock }));

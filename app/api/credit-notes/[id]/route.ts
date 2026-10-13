@@ -3,12 +3,15 @@ import { NextResponse } from "next/server";
 import { AuthServiceError } from "@/lib/server/auth";
 import { getCreditNoteById } from "@/lib/server/credit-notes";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type CreditNoteRouteProps = {
   params: Promise<{ id: string }>;
 };
 
-export async function GET(_request: Request, { params }: CreditNoteRouteProps) {
+export async function GET(request: Request, { params }: CreditNoteRouteProps) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     const { id } = await params;
     return NextResponse.json({ creditNote: await getCreditNoteById(id) });

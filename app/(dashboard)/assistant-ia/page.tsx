@@ -4,12 +4,14 @@ import { redirect } from "next/navigation";
 import { AssistantChat } from "@/components/assistant/assistant-chat";
 import { AuthServiceError } from "@/lib/server/auth";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Assistant IA",
 };
 
 export default async function AssistantIaPage() {
+  await requireModulePage("assistant");
   try {
     await requireOrganizationUser(["admin"]);
   } catch (error) {

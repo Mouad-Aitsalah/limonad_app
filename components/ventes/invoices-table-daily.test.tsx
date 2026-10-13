@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { TABLE_COLUMNS } from "@/lib/table-labels/registry";
+import { pageTableColumns, TABLE_COLUMNS, TABLE_PAGES } from "@/lib/table-labels/registry";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -17,16 +17,29 @@ test("daily layout is an opt-in prop, off by default", () => {
 
 test("daily layout: the user column is titled 'Utilisateur', the Net column and its cells are not rendered", () => {
   const table = read("./invoices-table.tsx");
+  // the prop picks the page whose columns apply (each page keeps its own default
+  // columns and its own "Personnaliser les colonnes" preference)
+  assert.match(table, /useTableColumns\(dailyLayout \? "dailyInvoices" : "salesArchive", "invoices"\)/);
+  const daily = TABLE_PAGES.find((page) => page.key === "dailyInvoices")!.tables.find((entry) => entry.table === "invoices")!;
+  const archive = TABLE_PAGES.find((page) => page.key === "salesArchive")!.tables.find((entry) => entry.table === "invoices")!;
+  assert.deepEqual(
+    pageTableColumns(daily).map((column) => column.key),
+    ["order", "date", "customer", "user", "items", "total", "payment", "status", "actions"],
+  );
+  assert.deepEqual(
+    pageTableColumns(archive).map((column) => column.key),
+    ["order", "date", "customer", "driverUser", "items", "total", "net", "payment", "status", "actions"],
+  );
   // headers go through the organisation's labels (Paramètres -> Personnalisation des tableaux);
   // their defaults are the former texts
-  assert.match(table, /\{dailyLayout \? label\("user"\) : label\("driverUser"\)\}/);
+  assert.match(table, /\{label\(column\)\}/);
   assert.equal(TABLE_COLUMNS.invoices.columns.user, "Utilisateur");
   assert.equal(TABLE_COLUMNS.invoices.columns.driverUser, "Chauffeur / utilisateur");
-  assert.match(table, /\{dailyLayout \? null : <TableHead className="text-right">\{label\("net"\)\}<\/TableHead>\}/);
   assert.equal(TABLE_COLUMNS.invoices.columns.net, "Net");
-  assert.match(table, /\{dailyLayout \? null : \(\s*<TableCell className="text-right font-medium tabular-nums">\s*\{formatCurrency\(invoice\.net\)\}/);
-  // the expanded detail row spans exactly the visible columns: 10 (daily) / 11 (original)
-  assert.match(table, /colSpan=\{dailyLayout \? 10 : 11\}/);
+  // the net cell is rendered only for the "net" column, with its former classes
+  assert.match(table, /case "net":\s*return \(\s*<TableCell key=\{column\} className="text-right font-medium tabular-nums">\s*\{formatCurrency\(invoice\.net\)\}/);
+  // the expanded detail row spans exactly the visible columns + the chevron
+  assert.match(table, /colSpan=\{columns\.length \+ 1\}/);
 });
 
 test("the displayed user is unchanged: the driver's name, otherwise the creating user", () => {
@@ -40,7 +53,8 @@ test("the other columns are all still there", () => {
     ["total", "Total"], ["payment", "Paiement"], ["status", "Statut"], ["actions", "Actions"],
   ];
   for (const [key, head] of heads) {
-    assert.ok(table.includes(`>{label("${key}")}</TableHead>`), head);
+    // every column keeps its own cell renderer (the headers are rendered from the column list)
+    assert.ok(table.includes(`case "${key}":`), head);
     assert.equal(TABLE_COLUMNS.invoices.columns[key], head);
   }
   for (const cell of ["invoice.displayNumber", "formatDateTime(invoice.createdAt)", "invoice.articleCount", "formatCurrency(invoice.totalTTC)", "InvoiceStatusBadge"]) {

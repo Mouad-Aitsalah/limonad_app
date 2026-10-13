@@ -4,6 +4,7 @@ import { applyAiPosDraft } from "@/lib/server/ai-pos-draft-pos";
 import { AuthServiceError } from "@/lib/server/auth";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -13,6 +14,8 @@ type RouteContext = { params: Promise<{ id: string }> };
  * this succeeds. Never creates a Sale, Payment, StockMovement or entry.
  */
 export async function POST(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
   const { id } = await context.params;

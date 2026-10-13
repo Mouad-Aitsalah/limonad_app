@@ -6,12 +6,14 @@ import {
   getSalesOrdersPage,
   getSalesSessionsSummary,
 } from "@/lib/server/sales-history";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Archives des factures",
 };
 
 export default async function VentesPage() {
+  await requireModulePage("salesArchive");
   const [ordersPage, sessions, months] = await Promise.all([
     getSalesOrdersPage(),
     getSalesSessionsSummary(),

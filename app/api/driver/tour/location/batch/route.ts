@@ -8,6 +8,7 @@ import {
   recordDriverLocationBatchForDriver,
 } from "@/lib/server/driver-tour";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { rejectDisabledModule, rejectDisabledModuleForOrganization } from "@/lib/server/module-guard";
 import { reportUnexpected } from "@/lib/server/report-error";
 import { verifyTrackingToken } from "@/lib/server/tracking-token";
 
@@ -61,6 +62,9 @@ export async function POST(request: Request) {
           NextResponse.json({ message: "Jeton de suivi invalide ou expire." }, { status: 401 }),
         );
       }
+      // "Suivi GPS" disabled for the token's organisation: refused, nothing stored.
+      const moduleRejection = await rejectDisabledModuleForOrganization(request, claims.organizationId);
+      if (moduleRejection) return withMobileCors(request, moduleRejection);
       const body = await request.json();
       const result = await recordDriverLocationBatchForDriver(
         claims.organizationId,
@@ -74,6 +78,8 @@ export async function POST(request: Request) {
     // Session-authenticated from here on: a Bearer session (the shell - no
     // ambient cookie, so the cookie-CSRF check does not apply) or the web
     // cookie (CSRF check unchanged).
+    const moduleRejection = await rejectDisabledModule(request);
+    if (moduleRejection) return withMobileCors(request, moduleRejection);
     const csrfRejection = rejectUntrustedCookieOrigin(request);
     if (csrfRejection) return withMobileCors(request, csrfRejection);
 

@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getStockMovementById } from "@/lib/server/stock-movements";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const { id } = await context.params;
   try {
     return NextResponse.json({ movement: await getStockMovementById(id) });

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "@/lib/server/auth";
 import { getFleetSnapshot } from "@/lib/server/fleet-tracking";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * Polled by the admin live fleet map every few seconds. Read-only, and
@@ -9,7 +10,9 @@ import { getFleetSnapshot } from "@/lib/server/fleet-tracking";
  * getFleetSnapshot -> requireOrganizationUser) - the client never supplies
  * an organizationId.
  */
-export async function GET() {
+export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   try {
     return NextResponse.json(await getFleetSnapshot());
   } catch (error) {

@@ -4,12 +4,14 @@ import { DepotRequiredNotice } from "@/components/pos/depot-required-notice";
 import { PosLayout } from "@/components/pos/pos-layout";
 import { getCounterPosContext } from "@/lib/server/counter-sales";
 import { OperationsServiceError } from "@/lib/server/depots";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Point de Vente",
 };
 
 export default async function PosPage() {
+  await requireModulePage("pos");
   let context;
   try {
     context = await getCounterPosContext();

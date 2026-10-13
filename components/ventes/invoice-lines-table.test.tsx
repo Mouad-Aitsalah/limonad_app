@@ -131,7 +131,7 @@ test("mobile: the four columns stay visible (nothing hidden), tighter paddings a
 test("the inline detail keeps the visible width of the scrollable invoice list, with tighter paddings on a phone", () => {
   const list = read("./invoices-table.tsx");
   assert.match(list, /<div className="@container">\s*<Table>/);
-  assert.match(list, /<TableCell colSpan=\{dailyLayout \? 10 : 11\} className="bg-muted\/10 p-0">/);
+  assert.match(list, /<TableCell colSpan=\{columns\.length \+ 1\} className="bg-muted\/10 p-0">/);
   assert.match(list, /<div className="sticky left-0 w-\[100cqw\] p-2 whitespace-normal sm:p-4">/);
   assert.match(read("./invoice-detail-inline.tsx"), /rounded-2xl border border-border bg-muted\/20 p-3 sm:p-5/);
 });

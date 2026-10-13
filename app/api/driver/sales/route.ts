@@ -5,6 +5,7 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { createDriverSale, getSalesForCurrentDriver } from "@/lib/server/driver-sales";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * INTÉGRATION POS SHELL - also called by the mobile driver shell (Bearer,
@@ -17,6 +18,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   try {
     return withMobileCors(request, NextResponse.json({ sales: await getSalesForCurrentDriver() }));
   } catch (error) {
@@ -28,6 +31,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   // A Bearer-authenticated request (the shell) carries no ambient cookie -
   // nothing for a forged cross-site request to exploit, so the cookie-CSRF
   // check does not apply to it (same reasoning as /api/mobile/auth/login).

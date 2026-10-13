@@ -6,6 +6,7 @@ import { createAndStartTourForCurrentDriver } from "@/lib/server/tours";
 import { rejectUntrustedCookieOrigin } from "@/lib/server/csrf";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 // ÉTAPE 28A - Bearer/CORS for the mobile shell; the cookie-CSRF check is
 // unchanged for every request without a Bearer header (see
@@ -15,6 +16,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   const csrfRejection = rejectUntrustedCookieOrigin(request);
   if (csrfRejection) return withMobileCors(request, csrfRejection);
   try {

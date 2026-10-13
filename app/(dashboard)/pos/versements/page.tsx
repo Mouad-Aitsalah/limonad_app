@@ -4,12 +4,14 @@ import { CashDepositsView } from "@/components/cash-deposits/cash-deposits-view"
 import { DepotRequiredNotice } from "@/components/pos/depot-required-notice";
 import { getDepots, OperationsServiceError } from "@/lib/server/depots";
 import { getCashDepositContext, getCashDepositHistory } from "@/lib/server/cash-deposits";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Versements",
 };
 
 export default async function VersementsPage() {
+  await requireModulePage("deposits");
   let context;
   let history;
   let depots;

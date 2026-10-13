@@ -4,6 +4,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getCurrentDriverTour } from "@/lib/server/driver-tour";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * ÉTAPE 28A - also called by the mobile driver shell (Bearer, cross-origin).
@@ -17,6 +18,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   try {
     return withMobileCors(request, NextResponse.json({ currentTour: await getCurrentDriverTour() }));
   } catch (error) {

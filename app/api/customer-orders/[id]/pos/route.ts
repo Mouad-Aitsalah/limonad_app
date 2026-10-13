@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getCustomerOrderForPos } from "@/lib/server/customer-orders";
 
 import { customerOrderErrorResponse } from "../../shared";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -11,7 +12,9 @@ type RouteContext = { params: Promise<{ id: string }> };
  * POS cart (products + customer). Read-only: nothing is created and the
  * order stays ACCEPTED until the POS sale links it.
  */
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const { id } = await context.params;
   try {
     return NextResponse.json({ order: await getCustomerOrderForPos(id) });

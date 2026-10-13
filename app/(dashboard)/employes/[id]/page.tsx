@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { EmployeeDetailView } from "@/components/employees/employee-detail-view";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { getEmployeeDetail } from "@/lib/server/employees";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 type EmployeeDetailPageProps = {
   params: Promise<{ id: string }>;
@@ -16,6 +17,7 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function EmployeeDetailPage({ params }: EmployeeDetailPageProps) {
+  await requireModulePage("employees");
   const { id } = await params;
   const detail = await loadEmployeeDetail(id);
 

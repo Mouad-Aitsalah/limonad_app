@@ -9,6 +9,7 @@ import { getProductPickerPreload } from "@/lib/server/products";
 import { getStockLocations } from "@/lib/server/stock-locations";
 import { getSupplierPartners } from "@/lib/server/suppliers";
 import type { UserRole } from "@/types/auth";
+import { requireModulePage } from "@/lib/server/module-guard";
 
 export const metadata: Metadata = {
   title: "Avoir client / fournisseur",
@@ -19,6 +20,7 @@ export const dynamic = "force-dynamic";
 const allowedRoles: UserRole[] = ["admin", "depot_manager", "cashier"];
 
 export default async function AvoirsPage() {
+  await requireModulePage("creditNotes");
   const currentUser = await getCurrentSessionUser();
 
   if (!currentUser) {

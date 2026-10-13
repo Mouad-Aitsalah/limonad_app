@@ -2,6 +2,7 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { searchCustomers } from "@/lib/server/customers";
 import { handleMobilePreflight, withMobileCors } from "@/lib/server/mobile-cors";
 import { handleStaffSearchRoute } from "@/lib/staff-search-route";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * Phase 3: GET /api/customers/search?q=...&limit=20 - fast, organization-
@@ -22,6 +23,8 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return withMobileCors(request, moduleRejection);
   // No staff session -> 401 (403 for a role not allowed); any other error
   // stays a 500 - see handleStaffSearchRoute. Every response, errors
   // included, keeps the mobile-shell CORS headers as before.

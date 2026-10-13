@@ -8,6 +8,7 @@ import {
 } from "@/lib/server/counter-sales-sync";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
 import { reportUnexpected } from "@/lib/server/report-error";
+import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
  * PHASE 5 - receives ONE offline counter-POS sale and creates the real sale
@@ -16,6 +17,8 @@ import { reportUnexpected } from "@/lib/server/report-error";
  * and an explicit `retryable` flag so the client never has to guess.
  */
 export async function POST(request: Request) {
+  const moduleRejection = await rejectDisabledModule(request);
+  if (moduleRejection) return moduleRejection;
   const csrfRejection = rejectUntrustedOrigin(request);
   if (csrfRejection) return csrfRejection;
 

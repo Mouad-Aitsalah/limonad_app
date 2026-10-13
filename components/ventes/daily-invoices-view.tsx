@@ -5,6 +5,7 @@ import * as React from "react";
 import { DailyKpiCards } from "@/components/ventes/daily-kpi-cards";
 import { DailyInvoicesUserFilter } from "@/components/ventes/daily-invoices-user-filter";
 import { InvoicesTable } from "@/components/ventes/invoices-table";
+import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
 import { paymentMethodOptions } from "@/components/ventes/orders-toolbar";
 import { useDailyInvoicesPage } from "@/components/ventes/use-daily-invoices-page";
 import { Button } from "@/components/ui/button";
@@ -112,7 +113,9 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
               Journée du {data.dayLabel} · page {pageIndex + 1} · {data.items.length} sur{" "}
               {data.totalCount} facture{data.totalCount > 1 ? "s" : ""}
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* admin only: renders nothing for another role */}
+              <TableColumnsPanel pageKey="dailyInvoices" table="invoices" tableName="Factures" />
               <Button
                 type="button"
                 variant="outline"
