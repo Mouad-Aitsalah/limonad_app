@@ -298,14 +298,102 @@ test("recharge ADDS to the truck stock: 100 + 30 = 130, never a replacement (no 
     assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 130);
     const reprises = (await movementsOf(tx, fiche.id)).filter((m) => m.reason === INITIAL_LOAD_REPRISE_REASON);
     assert.equal(reprises.length, 1);
-    // a recharge typed BEFORE the initial load is kept: only the old stock is taken back
+    // charge initiale 0 + recharge 30 first, then the initial raised to 100: one reprise only
     const world2 = await makeWorld(tx);
     await setStock(tx, world2, world2.truckA.locationId, world2.p1, 50);
     const fiche2 = await openFiche(tx, world2, world2.truckA);
     await saveLines(tx, world2, world2.truckA, fiche2.id, [{ productId: world2.p1, initial: 0, reload: 30 }]);
-    assert.equal(await stockOf(tx, world2.truckA.locationId, world2.p1), 80, "recharge alone adds");
+    assert.equal(await stockOf(tx, world2.truckA.locationId, world2.p1), 30, "the initial 0 replaces the old 50, the recharge 30 is added");
     await saveLines(tx, world2, world2.truckA, fiche2.id, [{ productId: world2.p1, initial: 100, reload: 30 }]);
-    assert.equal(await stockOf(tx, world2.truckA.locationId, world2.p1), 130, "initial 100 replaces the old 50, the recharge 30 stays");
+    assert.equal(await stockOf(tx, world2.truckA.locationId, world2.p1), 130, "+100, the old stock is not taken a second time");
+    assert.equal((await movementsOf(tx, fiche2.id)).filter((m) => m.reason === INITIAL_LOAD_REPRISE_REASON).length, 1);
+  });
+});
+
+// charge initiale = 0 --------------------------------------------------------------------------
+test("charge initiale 0 is a real value: it replaces the truck stock too (50 -> 0, 50 -> 100, 120 -> 15, 0 + recharge 30), depot movements consistent, never applied twice", async (t) => {
+  if (skipUnlessDb(t)) return;
+  await inRollback(async (tx) => {
+    /** Depot balance of a fiche's movements: what came into the depot minus what left it. */
+    const depotBalance = async (world: World, loadingId: string) =>
+      (await movementsOf(tx, loadingId)).reduce(
+        (sum, m) => sum + (m.destinationLocationId === world.depotLocationId ? m.quantity : 0) - (m.sourceLocationId === world.depotLocationId ? m.quantity : 0),
+        0,
+      );
+    for (const { old, initial, reload, truck, reasons } of [
+      { old: 50, initial: 0, reload: 0, truck: 0, reasons: [[INITIAL_LOAD_REPRISE_REASON, 50]] },
+      { old: 50, initial: 100, reload: 0, truck: 100, reasons: [[INITIAL_LOAD_REPRISE_REASON, 50], ["Chargement brouillon applique", 100]] },
+      { old: 120, initial: 15, reload: 0, truck: 15, reasons: [[INITIAL_LOAD_REPRISE_REASON, 120], ["Chargement brouillon applique", 15]] },
+      // the application's order: the replacement (reprise) first, then the load (charge initiale + recharge)
+      { old: 50, initial: 0, reload: 30, truck: 30, reasons: [[INITIAL_LOAD_REPRISE_REASON, 50], ["Chargement brouillon applique", 30]] },
+      // nothing in the truck, charge 0: no movement at all
+      { old: 0, initial: 0, reload: 0, truck: 0, reasons: [] },
+    ] as const) {
+      const world = await makeWorld(tx);
+      await setStock(tx, world, world.truckA.locationId, world.p1, old);
+      await setStock(tx, world, world.depotLocationId, world.p1, 500);
+      const fiche = await openFiche(tx, world, world.truckA);
+      const lines = [{ productId: world.p1, initial, reload }];
+      await saveLines(tx, world, world.truckA, fiche.id, lines);
+      const label = `old ${old}, initial ${initial}, recharge ${reload}`;
+      assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), truck, label);
+      // depot = 500 + old stock taken back - what was loaded; exactly what the movements say
+      const depot = await stockOf(tx, world.depotLocationId, world.p1);
+      assert.equal(depot, 500 + old - (initial + reload), `${label}: depot`);
+      assert.equal(await depotBalance(world, fiche.id), depot - 500, `${label}: movements match the depot stock`);
+      assert.deepEqual((await movementsOf(tx, fiche.id)).map((m) => [m.reason, m.quantity]), reasons, `${label}: movements`);
+      // the same save again (double submission), a sale, then a re-save and the close: never zeroed again, no duplicate
+      await saveLines(tx, world, world.truckA, fiche.id, lines);
+      if (truck > 0) await sell(tx, world, world.truckA, world.p1, 1);
+      await saveLines(tx, world, world.truckA, fiche.id, lines);
+      await closeFiche(tx, world.truckA, fiche.id, {});
+      assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), truck > 0 ? truck - 1 : truck, `${label}: not replaced a second time`);
+      assert.deepEqual((await movementsOf(tx, fiche.id)).map((m) => [m.reason, m.quantity]), reasons, `${label}: no movement added`);
+    }
+  });
+});
+
+test("charge initiale 0 then raised, line removed and re-added, prefilled 0 lines: one replacement per product, the old stock given back only when the product leaves the fiche", async (t) => {
+  if (skipUnlessDb(t)) return;
+  await inRollback(async (tx) => {
+    const world = await makeWorld(tx);
+    await setStock(tx, world, world.truckA.locationId, world.p1, 50);
+    await setStock(tx, world, world.truckA.locationId, world.p2, 9);
+    await setStock(tx, world, world.depotLocationId, world.p1, 500);
+    const fiche = await openFiche(tx, world, world.truckA);
+    // the driver's usual product, prefilled at 0 when the fiche was created (no stock moved yet)
+    await tx.truckLoadingLine.create({ data: { loadingId: fiche.id, productId: world.p2, quantity: 0, reloadedQuantity: 0 } });
+    assert.equal(await stockOf(tx, world.truckA.locationId, world.p2), 9, "creating the prefilled line moves nothing");
+    // first save: P1 at 0, the prefilled P2 left at 0 -> both replaced by 0, old stocks back in the depot
+    await saveLines(tx, world, world.truckA, fiche.id, [
+      { productId: world.p1, initial: 0, reload: 0 },
+      { productId: world.p2, initial: 0, reload: 0 },
+    ]);
+    assert.deepEqual([await stockOf(tx, world.truckA.locationId, world.p1), await stockOf(tx, world.truckA.locationId, world.p2)], [0, 0]);
+    // raised later: +100 only, the old 50 is not taken twice
+    await saveLines(tx, world, world.truckA, fiche.id, [
+      { productId: world.p1, initial: 100, reload: 0 },
+      { productId: world.p2, initial: 0, reload: 0 },
+    ]);
+    assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 100);
+    // back to 0: the truck goes to 0, the old stock is NOT given back (0 replaces)
+    await saveLines(tx, world, world.truckA, fiche.id, [
+      { productId: world.p1, initial: 0, reload: 0 },
+      { productId: world.p2, initial: 0, reload: 0 },
+    ]);
+    assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 0);
+    assert.equal(await stockOf(tx, world.depotLocationId, world.p1), 550, "the old 50 stays in the depot");
+    // P1 removed from the fiche: its old stock comes back exactly
+    await saveLines(tx, world, world.truckA, fiche.id, [{ productId: world.p2, initial: 0, reload: 0 }]);
+    assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 50);
+    assert.equal(await stockOf(tx, world.depotLocationId, world.p1), 500);
+    const p1Moves = (await movementsOf(tx, fiche.id)).filter((m) => m.productId === world.p1).map((m) => [m.reason, m.quantity]);
+    assert.deepEqual(p1Moves, [
+      [INITIAL_LOAD_REPRISE_REASON, 50],
+      ["Chargement brouillon applique", 100],
+      ["Correction de chargement brouillon", 100],
+      [INITIAL_LOAD_REPRISE_REVERSAL_REASON, 50],
+    ]);
   });
 });
 
@@ -380,7 +468,7 @@ test("draft edited several times then closed: one reprise, only the differences 
 });
 
 // 9 ------------------------------------------------------------------------------------------
-test("cancellation / removing the initial load gives the old stock back exactly; a closed fiche is corrected by differences only (never a new reprise)", async (t) => {
+test("cancellation / removing the product gives the old stock back exactly (an initial back to 0 does not); a closed fiche is corrected by differences only (never a new reprise)", async (t) => {
   if (skipUnlessDb(t)) return;
   await inRollback(async (tx) => {
     const world = await makeWorld(tx);
@@ -401,12 +489,15 @@ test("cancellation / removing the initial load gives the old stock back exactly;
         ["Correction de chargement brouillon", 100],
       ],
     );
-    // initial zeroed on a draft after 10 sold: old stock given back first, then the load leaves
+    // initial brought back to 0 on a draft: 0 is a charge initiale too - the truck goes to 0, the reprise stays
     const draft = await openFiche(tx, world, world.truckA);
     await saveLines(tx, world, world.truckA, draft.id, [{ productId: world.p1, initial: 100, reload: 0 }]);
-    await sell(tx, world, world.truckA, world.p1, 10);
     await saveLines(tx, world, world.truckA, draft.id, [{ productId: world.p1, initial: 0, reload: 0 }]);
-    assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 40, "old 50 - 10 sold");
+    assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 0);
+    // the product removed from the draft: its old stock is given back exactly
+    await saveLines(tx, world, world.truckA, draft.id, []);
+    assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 50);
+    assert.equal(await stockOf(tx, world.depotLocationId, world.p1), 500);
     // re-entered: a NEW reprise of what the truck holds now
     await saveLines(tx, world, world.truckA, draft.id, [{ productId: world.p1, initial: 60, reload: 0 }]);
     assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 60);
@@ -449,7 +540,7 @@ test("several products and several trucks: a fiche only touches its own truck an
     ]);
     assert.equal(await stockOf(tx, world.truckA.locationId, world.p1), 100);
     assert.equal(await stockOf(tx, world.truckA.locationId, world.p2), 8, "product not on fiche A: untouched");
-    assert.equal(await stockOf(tx, world.truckB.locationId, world.p1), 38, "truck B: recharge only, added");
+    assert.equal(await stockOf(tx, world.truckB.locationId, world.p1), 5, "truck B: charge initiale 0 replaces the 33, recharge 5 added");
     assert.equal(await stockOf(tx, world.truckB.locationId, world.p2), 12, "truck B: initial 12 on an empty stock");
     assert.equal(await stockOf(tx, other.truckA.locationId, other.p1), 50, "other organisation untouched");
     const ficheMovements = await tx.stockMovement.findMany({ where: { referenceId: ficheA.id }, select: { sourceLocationId: true, destinationLocationId: true, productId: true } });

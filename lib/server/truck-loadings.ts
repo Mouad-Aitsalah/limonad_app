@@ -552,11 +552,12 @@ export async function createOrReuseOpenLoading(
         const { year, sequence } = await nextLoadingSequence(tx, user.organizationId);
 
         // Prefill the fresh fiche with this driver's usual products,
-        // quantities reset to 0. A pre-shown line is UI-only: it removes no
-        // depot stock, adds no truck stock and records no StockMovement -
-        // charge initiale / rechargee still apply exactly as before, only
-        // once a real quantity is saved/closed through the normal flow
-        // (items 3 & 4). Never runs on the reused-open-fiche path above.
+        // quantities reset to 0. Creating them moves no stock; like any line,
+        // they apply at the fiche's first save - a charge initiale of 0 then
+        // REPLACES the truck stock of that product (old stock taken back to
+        // the depot, see truck-loading-stock-core.ts): a leftover to keep in
+        // the truck is entered as its charge initiale. Never runs on the
+        // reused-open-fiche path above.
         const prefillProductIds = await resolveDriverUsualProductIds(
           tx,
           user.organizationId,

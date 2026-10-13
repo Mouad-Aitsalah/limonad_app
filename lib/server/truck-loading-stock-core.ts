@@ -11,16 +11,20 @@ import { OperationsServiceError } from "@/lib/server/service-error";
  * re-reads, so a retry or a double click never applies a quantity twice.
  *
  * Rules (per product of a fiche):
- *  - Charge initiale REPLACES the truck stock. The first time a non-zero
- *    initial load is applied on an OPEN fiche, the truck's previous stock of
+ *  - Charge initiale REPLACES the truck stock, ZERO INCLUDED (0 is an explicit
+ *    value, never "no input"). The first time a product of an OPEN fiche is
+ *    applied - whatever its charge initiale - the truck's previous stock of
  *    that product (what the truck holds that this fiche did not bring) is taken
  *    back to the depot ("reprise", one movement truck -> depot), then the load
  *    itself moves depot -> truck as before. Ex.: truck 50, initial 100 ->
- *    reprise 50, load 100, truck 100, depot net -50.
- *  - Recharge is ADDED to the truck stock (plain depot -> truck delta).
- *  - Editing an applied initial load only moves the difference (100 -> 120:
- *    +20); the reprise is never repeated. Bringing it back to 0 (line removed,
- *    fiche cancelled) gives the reprise back exactly.
+ *    reprise 50, load 100, truck 100, depot net -50; truck 50, initial 0 ->
+ *    reprise 50 only, truck 0, depot +50.
+ *  - Recharge is ADDED to the truck stock (plain depot -> truck delta), after
+ *    the replacement: truck 50, initial 0 + recharge 30 -> truck 30.
+ *  - Later saves of the product only move the difference (100 -> 120: +20,
+ *    100 -> 0: -100, truck 0); the reprise is never repeated. Only removing
+ *    the product from the fiche (or cancelling the fiche) gives the reprise
+ *    back exactly.
  *  - A CLOSED fiche is never "replaced" again: correcting it moves plain
  *    differences only, so an old fiche can never wipe today's truck stock.
  *  - Restant reel is a COUNT only: recorded with the theoretical stock of the
@@ -89,15 +93,17 @@ export async function applyLoadingStockDelta(tx: Db, input: StockDeltaInput) {
     const previousLine = previousLineByProductId.get(productId);
     const nextLine = nextLineByProductId.get(productId);
     const previousAppliedQuantity = input.stockAlreadyApplied ? (previousLine?.quantity ?? 0) : 0;
-    const previousAppliedInitial = input.stockAlreadyApplied && previousLine ? initialQuantityOf(previousLine) : 0;
-    const nextInitial = nextLine?.initialQuantity ?? 0;
+    // The product was already applied on this fiche (its line existed at the last applied save).
+    const alreadyAppliedOnFiche = input.stockAlreadyApplied && previousLine !== undefined;
 
-    // The reprise (or giving it back) always comes BEFORE the load delta: when an
-    // initial load is removed, the truck first gets its old stock back, then the
-    // load leaves - so a truck that sold part of the day can still be corrected.
-    if (input.replaceInitial && previousAppliedInitial === 0 && nextInitial > 0) {
+    // The replacement happens on the product's FIRST application on the open
+    // fiche, whatever its charge initiale - 0 included, never skipped as "empty".
+    // The reprise (or giving it back) always comes BEFORE the load delta: when a
+    // product is removed, the truck first gets its old stock back, then the load
+    // leaves - so a truck that sold part of the day can still be corrected.
+    if (input.replaceInitial && !alreadyAppliedOnFiche && nextLine) {
       await takeBackOldTruckStock(tx, input, productId, previousAppliedQuantity);
-    } else if (input.replaceInitial && previousAppliedInitial > 0 && nextInitial === 0) {
+    } else if (input.replaceInitial && alreadyAppliedOnFiche && !nextLine) {
       await giveBackOldTruckStock(tx, input, productId);
     }
 

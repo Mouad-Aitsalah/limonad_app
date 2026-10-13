@@ -864,9 +864,9 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
                         du camion et du depot.
                       </p>
                       <p className="text-sm text-muted-foreground">
-                        La charge initiale remplace le stock du camion (l&apos;ancien stock est repris au
-                        depot), la recharge s&apos;y ajoute. Le restant reel est un comptage : il ne
-                        modifie aucun stock.
+                        La charge initiale remplace le stock du camion, meme a 0 (l&apos;ancien stock est
+                        repris au depot), la recharge s&apos;y ajoute. Le restant reel est un comptage : il
+                        ne modifie aucun stock.
                       </p>
                       <p className="text-sm font-medium text-foreground" data-loading="counted">
                         Produits comptes : {countedSummary(draftLines).counted} / {draftLines.length}
