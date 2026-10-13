@@ -50,6 +50,7 @@ import type { ProductDto } from "@/types/product-dto";
 import type { LoadingTicketInput } from "@/lib/escpos-loading";
 import { buildSupplierOptions, filterBySupplier, productMatchesSupplier } from "@/lib/loading-supplier-filter";
 import { computePriceTTC } from "@/lib/product-pricing";
+import { countedSummary, formatGap, gapTitle, gapTone, remainingGap, theoreticalRemaining } from "@/lib/truck-loading-remaining";
 import { printLoadingTicket } from "@/lib/thermal-loading-print";
 import { isThermalPrinterAvailable } from "@/lib/thermal-printer";
 import { formatCurrency } from "@/lib/utils";
@@ -113,6 +114,8 @@ type DraftLoadingLine = {
   initialLoadQuantity: number;
   reloadedQuantity: number;
   actualRemainingQuantity: number | null;
+  /** Live truck stock of the product (= restant theorique of the open fiche), from the last save. */
+  truckCurrentQuantity: number | null;
 };
 
 type ProductSuggestion = {
@@ -220,6 +223,18 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
   }, [selectedTruck]);
 
   const openLoadingLoaded = !selectedTruck || loadedForTruckId === selectedTruck.id;
+  // Restant theorique of the open fiche = the truck stock read at the last save
+  // (charge initiale + recharges - sales +/- other movements, each once); a line
+  // not saved yet falls back to the truck stock loaded with the page.
+  const lineTheoretical = (line: DraftLoadingLine) =>
+    theoreticalRemaining(
+      {
+        theoreticalRemainingQuantity: null,
+        truckCurrentQuantity: line.truckCurrentQuantity ?? truckLevelsByProductId[line.productId] ?? 0,
+        actualRemainingQuantity: line.actualRemainingQuantity,
+      },
+      "DRAFT",
+    );
   const openLoading = openLoadingLoaded ? (selectedTruck ? rawOpenLoading : null) : null;
   const loadingIsLocked = openLoading?.status !== "DRAFT";
 
@@ -253,6 +268,7 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
             initialLoadQuantity: line.initialQuantity,
             reloadedQuantity: line.reloadedQuantity,
             actualRemainingQuantity: line.actualRemainingQuantity,
+            truckCurrentQuantity: line.truckCurrentQuantity,
           }))
         : [],
     );
@@ -434,6 +450,7 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
       initialLoadQuantity: parseInteger(initialLoadInput, 0),
       reloadedQuantity: parseInteger(reloadedInput, 0),
       actualRemainingQuantity: parseIntegerOrNull(actualRemainingInput),
+      truckCurrentQuantity: existingLineTruckQuantity(draftLines, selectedProduct.product.id) ?? selectedProduct.truckCurrentQuantity,
     };
 
     setDraftLines((current) =>
@@ -622,6 +639,8 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
           productName: line.productName,
           initialQuantity: line.initialLoadQuantity,
           reloadedQuantity: line.reloadedQuantity,
+          theoreticalQuantity: lineTheoretical(line),
+          actualQuantity: line.actualRemainingQuantity,
         })),
       }
     : null;
@@ -660,10 +679,15 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
 
   async function closeLoading() {
     if (!openLoading) return;
-    // Item 9: 0 is a valid count; only null / empty blocks the close.
-    const missingLine = draftLines.find((line) => line.actualRemainingQuantity === null);
-    if (missingLine) {
-      toast.error("Veuillez saisir la quantite restante reelle pour tous les produits.");
+    // The count is optional (0 is a real count, empty = not counted): a product
+    // not counted keeps "-" and no decalage. Nothing here moves stock.
+    const { counted, total } = countedSummary(draftLines);
+    if (
+      counted < total &&
+      !window.confirm(
+        `${total - counted} produit(s) sans restant reel (${counted} / ${total} comptes). Fermer quand meme ? Ils resteront non comptes, sans decalage.`,
+      )
+    ) {
       return;
     }
 
@@ -839,6 +863,14 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
                         L&apos;enregistrement du brouillon met immediatement a jour le stock reel
                         du camion et du depot.
                       </p>
+                      <p className="text-sm text-muted-foreground">
+                        La charge initiale remplace le stock du camion (l&apos;ancien stock est repris au
+                        depot), la recharge s&apos;y ajoute. Le restant reel est un comptage : il ne
+                        modifie aucun stock.
+                      </p>
+                      <p className="text-sm font-medium text-foreground" data-loading="counted">
+                        Produits comptes : {countedSummary(draftLines).counted} / {draftLines.length}
+                      </p>
                     </div>
 
                     <div className="max-w-sm">
@@ -871,20 +903,21 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
                             <TableHead className={`text-right ${MOBILE_HEAD} max-lg:w-[22%] max-lg:text-center`}>
                               <ResponsiveText desktop={lineLabel("actualRemaining")} mobile={lineLabel.custom("actualRemaining") ?? "Stock réel"} />
                             </TableHead>
+                            <TableHead className="text-right max-lg:hidden">{lineLabel("gap")}</TableHead>
                             <TableHead className="text-right max-lg:hidden">{lineLabel("action")}</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {draftLines.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                              <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
                                 Aucun produit ajoute. Utilisez la zone d&apos;ajout ci-dessous
                                 pour remplir la fiche.
                               </TableCell>
                             </TableRow>
                           ) : visibleDraftLines.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                              <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
                                 Aucun produit de ce fournisseur sur cette fiche.
                               </TableCell>
                             </TableRow>
@@ -951,7 +984,7 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
                                   />
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums max-lg:hidden">
-                                  {truckLevelsByProductId[line.productId] ?? 0}
+                                  {lineTheoretical(line) ?? "—"}
                                 </TableCell>
                                 <TableCell className="w-[160px] max-lg:w-auto max-lg:px-1 max-lg:py-2">
                                   <Input
@@ -975,6 +1008,7 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
                                     }
                                   />
                                 </TableCell>
+                                <GapCell gap={remainingGap(line.actualRemainingQuantity, lineTheoretical(line))} />
                                 <TableCell className="text-right max-lg:hidden">
                                   <Button
                                     type="button"
@@ -1325,6 +1359,28 @@ export function LoadingsView({ trucks, drivers, products, suppliers, initialHist
         />
       ) : null}
     </div>
+  );
+}
+
+function existingLineTruckQuantity(lines: DraftLoadingLine[], productId: string): number | null {
+  return lines.find((line) => line.productId === productId)?.truckCurrentQuantity ?? null;
+}
+
+/** Decalage = restant reel - restant theorique: "—" when not counted, signed and coloured otherwise. */
+function GapCell({ gap }: { gap: number | null }) {
+  const tone = gapTone(gap);
+  const toneClass =
+    tone === "shortage"
+      ? " font-semibold text-destructive"
+      : tone === "surplus"
+        ? " font-semibold text-amber-700"
+        : tone === "match"
+          ? " text-emerald-700"
+          : " text-muted-foreground";
+  return (
+    <TableCell className={"text-right tabular-nums max-lg:hidden" + toneClass} title={gapTitle(gap)} data-gap={tone}>
+      {formatGap(gap)}
+    </TableCell>
   );
 }
 

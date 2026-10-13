@@ -10,6 +10,12 @@ import { AuthServiceError } from "@/lib/server/auth";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import {
+  INITIAL_LOAD_REPRISE_REASON,
+  INITIAL_LOAD_REPRISE_REVERSAL_REASON,
+  isInitialLoadRepriseReason,
+  openingQuantitiesByProduct,
+} from "@/lib/server/truck-loading-stock-core";
 import { getClaimableLoadingForTruck, getLoadingByTourId } from "@/lib/server/truck-loadings";
 import type {
   DiscrepancyDto,
@@ -1360,7 +1366,10 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
   const tourStartedAt = tour.createdAt;
   const ownLoadingId = tour.loading?.id ?? null;
 
-  const [loadingLines, openingMovements, reloadingMovements, saleLines, driverReturnLines, stockCounts, currentLevels] =
+  // The charge initiale REPLACES the truck stock: its "reprise" (old truck
+  // stock taken back to the depot, or given back) belongs to the opening
+  // figure whenever it happened - see openingQuantitiesByProduct.
+  const [loadingLines, openingMovements, reloadingMovements, saleLines, driverReturnLines, stockCounts, currentLevels, ownLoadingReprises] =
     await Promise.all([
       tour.loading?.id
         ? prisma.truckLoadingLine.findMany({
@@ -1402,6 +1411,7 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
           productId: true,
           quantity: true,
           referenceId: true,
+          reason: true,
         },
       }),
       prisma.saleLine.findMany({
@@ -1454,17 +1464,26 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
         },
         select: { productId: true, quantity: true },
       }),
+      ownLoadingId
+        ? prisma.stockMovement.findMany({
+            where: {
+              organizationId: tour.organizationId,
+              status: "VALIDATED",
+              referenceType: "TRUCK_LOADING",
+              referenceId: ownLoadingId,
+              reason: { in: [INITIAL_LOAD_REPRISE_REASON, INITIAL_LOAD_REPRISE_REVERSAL_REASON] },
+            },
+            select: { productId: true, quantity: true, sourceLocationId: true, destinationLocationId: true },
+          })
+        : Promise.resolve([]),
     ]);
 
-  const initialQuantities = new Map<string, number>();
-  for (const movement of openingMovements) {
-    if (movement.referenceId && movement.referenceId === ownLoadingId) continue;
-    const current = initialQuantities.get(movement.productId) ?? 0;
-    const delta =
-      (movement.destinationLocationId === truckLocation.id ? movement.quantity : 0) -
-      (movement.sourceLocationId === truckLocation.id ? movement.quantity : 0);
-    initialQuantities.set(movement.productId, current + delta);
-  }
+  const initialQuantities = openingQuantitiesByProduct({
+    truckLocationId: truckLocation.id,
+    ownLoadingId,
+    movementsBeforeTour: openingMovements,
+    ownLoadingReprises,
+  });
 
   const loadedQuantities = new Map<string, number>();
   for (const line of loadingLines) {
@@ -1485,6 +1504,8 @@ async function getTourStockSheet(tour: TourWithRelations): Promise<TourStockShee
   }
   for (const movement of reloadingMovements) {
     if (movement.referenceId && movement.referenceId === tour.loading?.id) continue;
+    // a reprise given back (depot -> truck) is the old stock returning, not a recharge
+    if (isInitialLoadRepriseReason(movement.reason)) continue;
     reloadedQuantities.set(
       movement.productId,
       (reloadedQuantities.get(movement.productId) ?? 0) + movement.quantity,

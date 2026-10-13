@@ -10,7 +10,15 @@ import { OperationsServiceError } from "@/lib/server/depots";
 import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-sequence";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { nextMovementNumber } from "@/lib/server/sales-shared";
+import {
+  applyLoadingStockDelta,
+  recordRemainingCounts,
+  shiftedTheoreticalSnapshots,
+  type LoadingSequences,
+  type NormalizedLoadingLineInput,
+} from "@/lib/server/truck-loading-stock-core";
 import type {
+  TruckLoadingCloseInput,
   TruckLoadingCreateInput,
   TruckLoadingDto,
   TruckLoadingEditInput,
@@ -124,22 +132,26 @@ const truckLoadingEditSchema = z.object({
     .default([]),
 });
 
-type NormalizedLoadingLineInput = {
-  productId: string;
-  initialQuantity: number;
-  reloadedQuantity: number;
-  quantity: number;
-  /** "Restante reelle" typed on a still-open fiche; null/omitted = not counted
-   * yet (kept distinct from a real 0). Only the standalone /chargements save
-   * path (validateLoadingLines -> updateOpenLoadingLines) carries it; the
-   * stock-delta helpers ignore it. */
-  actualRemainingQuantity?: number | null;
-};
+// "Fermer le chargement": the count is optional per product - null / omitted =
+// not counted (shown "-", no gap), a real 0 stays 0. It never moves stock.
+const truckLoadingCloseSchema = z.object({
+  lines: z
+    .array(
+      z.object({
+        productId: z.string().trim().min(1, "Le produit est obligatoire."),
+        actualRemainingQuantity: z.coerce
+          .number()
+          .int("La quantite reelle doit etre un nombre entier.")
+          .min(0, "La quantite reelle ne peut pas etre negative.")
+          .nullish(),
+      }),
+    )
+    .default([]),
+});
 
-type PersistedLoadingLine = {
-  productId: string;
-  quantity: number;
-  reloadedQuantity: number;
+/** The real StockMovement numbering, injected into the stock core (lib/server/truck-loading-stock-core.ts). */
+const LOADING_SEQUENCES: LoadingSequences = {
+  nextMovementNumber: (tx, organizationId) => nextMovementNumber(tx, organizationId),
 };
 
 export async function mapTruckLoadingToDto(
@@ -651,6 +663,8 @@ export async function updateOpenLoadingLines(
           previousLines: current.lines,
           nextLines: lines,
           stockAlreadyApplied: Boolean(current.stockAppliedAt),
+          replaceInitial: true,
+          sequences: LOADING_SEQUENCES,
           organizationId: user.organizationId,
           userId: user.id,
         });
@@ -686,19 +700,20 @@ export async function updateOpenLoadingLines(
 }
 
 /**
- * "Fermer le chargement": persists the final lines (theoretical + real
- * counted quantity, directly on TruckLoadingLine so this never depends on a
- * Tour existing), sets the truck's official StockLevel to the counted
- * quantity, records an INVENTORY_ADJUSTMENT movement only when there is an
- * actual gap, then flips the fiche OPEN -> CLOSED with closedAt. A
- * second call on an already-closed fiche is rejected, never re-applied.
+ * "Fermer le chargement": records, on each line of the fiche, the theoretical
+ * remaining stock of the moment (the truck StockLevel) next to the "restant
+ * reel" counted - which is OPTIONAL: a product not counted keeps null (shown
+ * "-", no gap). The count is a comparison only: it never writes StockLevel nor
+ * StockMovement (see lib/server/truck-loading-stock-core.ts). Then flips the
+ * fiche OPEN -> CLOSED with closedAt. A second call on an already-closed fiche
+ * is rejected, never re-applied.
  */
 export async function closeLoading(
   loadingId: string,
-  input: TruckLoadingValidationInput,
+  input: TruckLoadingCloseInput,
 ): Promise<TruckLoadingDto> {
   const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
-  const parsed = truckLoadingValidationSchema.safeParse(input);
+  const parsed = truckLoadingCloseSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
       "Certains champs sont invalides.",
@@ -717,7 +732,7 @@ export async function closeLoading(
   // conflict either safely re-runs the same close on a still-DRAFT loading,
   // or - if the other concurrent request's close already committed -
   // cleanly hits the "Ce transfert de stock est deja ferme." 409 below instead of
-  // double-applying the stock adjustment. Reuses withLoadingSerializableRetry
+  // closing twice. Reuses withLoadingSerializableRetry
   // (see createOrReuseOpenLoading above).
   const loading = await withLoadingSerializableRetry(() =>
     prisma.$transaction(
@@ -735,7 +750,7 @@ export async function closeLoading(
           status: true,
           stockAppliedAt: true,
           lines: {
-            select: { productId: true, quantity: true, reloadedQuantity: true },
+            select: { productId: true, quantity: true, reloadedQuantity: true, actualRemainingQuantity: true },
           },
         },
       });
@@ -774,6 +789,8 @@ export async function closeLoading(
             quantity: line.quantity,
           })),
           stockAlreadyApplied: false,
+          replaceInitial: true,
+          sequences: LOADING_SEQUENCES,
           organizationId: user.organizationId,
           userId: user.id,
         });
@@ -784,41 +801,19 @@ export async function closeLoading(
         });
       }
 
-      // Closing a standalone /chargements fiche only requires a real count
-      // for the products ON THIS fiche - NOT for every product physically on
-      // the truck. The old rule (fiche lines UNION every truck StockLevel
-      // with quantity > 0) made a 2-line fiche impossible to close whenever
-      // the truck still held residual stock from earlier fiches/tours (e.g.
-      // 15 leftover products), throwing "Veuillez saisir la quantite restante
-      // reelle pour tous les produits." even though both fiche lines had been
-      // counted. Residual stock in products this fiche never loaded is left
-      // untouched - it belongs to whatever fiche/tour put it there. The
-      // tour-scoped close paths (updateLoadingLines / validateLoading) keep
-      // their own full-truck reconciliation rules.
-      const requiredProductIds = new Set(current.lines.map((line) => line.productId));
-      const missingProductIds = [...requiredProductIds].filter(
-        (productId) => !providedByProductId.has(productId),
-      );
-      if (missingProductIds.length > 0) {
-        throw new OperationsServiceError(
-          "Veuillez saisir la quantite restante reelle pour tous les produits.",
-          422,
-          Object.fromEntries(
-            missingProductIds.map((productId) => [
-              productId,
-              "Quantite restante reelle manquante.",
-            ]),
-          ),
-        );
-      }
-
-      await applyActualRemainingQuantitiesOnLine(tx, {
+      // The count covers the products ON THIS fiche only (residual truck stock of
+      // products it never loaded belongs to whatever fiche/tour put it there).
+      // Each one is optional: the value sent with the close, else the one saved
+      // on the draft, else null = not counted. Never a stock write.
+      await recordRemainingCounts(tx, {
         loadingId: current.id,
-        loadingNumber: current.loadingNumber,
         truckLocationId,
-        organizationId: user.organizationId,
-        lines: parsed.data.lines,
-        userId: user.id,
+        lines: current.lines.map((line) => ({
+          productId: line.productId,
+          actualRemainingQuantity: providedByProductId.has(line.productId)
+            ? (providedByProductId.get(line.productId) ?? null)
+            : line.actualRemainingQuantity,
+        })),
       });
 
       return tx.truckLoading.update({
@@ -852,12 +847,14 @@ export async function closeLoading(
  *    and what is submitted (see its own doc above) - reused unchanged here,
  *    so editing 20 -> 25 moves +5, never re-creates +25, whether the fiche
  *    is open or already closed.
- *  - Restante reelle (closed fiches only, where it is the source of truth
- *    for StockLevel): reusing applyActualRemainingQuantitiesOnLine is safe
- *    to call again after an initial close, because it always compares the
- *    new value against the CURRENT live StockLevel (which already reflects
- *    any prior correction) - so a second edit only ever applies the
- *    incremental difference, never re-applies the full amount.
+ *  - On an OPEN fiche, a newly applied charge initiale replaces the truck
+ *    stock (reprise to the depot, see truck-loading-stock-core.ts); on a
+ *    CLOSED fiche corrections are plain differences only - never a reprise,
+ *    so an old fiche can never wipe today's truck stock.
+ *  - Restant reel is a count only (optional, null = not counted): stored as
+ *    given, it never writes stock. On a closed fiche the theoretical figured
+ *    at the close follows the corrected quantities (see
+ *    shiftedTheoreticalSnapshots), never today's live truck stock.
  *  - A line omitted from the submitted set is removed: its full quantity is
  *    reversed depot<-truck by applyLoadingStockDelta, which itself refuses
  *    the removal (409) if the truck no longer has enough stock to reverse
@@ -912,7 +909,7 @@ export async function updateLoadingLines(
           status: true,
           stockAppliedAt: true,
           lines: {
-            select: { productId: true, quantity: true, reloadedQuantity: true },
+            select: { productId: true, quantity: true, reloadedQuantity: true, theoreticalRemainingQuantity: true },
           },
         },
       });
@@ -926,24 +923,6 @@ export async function updateLoadingLines(
         parsed.data.lines.map((line) => line.productId),
         user.organizationId,
       );
-
-      if (current.status === "VALIDATED") {
-        const missingProductIds = parsed.data.lines
-          .filter((line) => line.actualRemainingQuantity == null)
-          .map((line) => line.productId);
-        if (missingProductIds.length > 0) {
-          throw new OperationsServiceError(
-            "Veuillez saisir la quantite restante reelle pour tous les produits.",
-            422,
-            Object.fromEntries(
-              missingProductIds.map((productId) => [
-                productId,
-                "Quantite restante reelle manquante.",
-              ]),
-            ),
-          );
-        }
-      }
 
       const { depotLocationId, truckLocationId } = await resolveLoadingLocationIds(
         tx,
@@ -964,12 +943,27 @@ export async function updateLoadingLines(
         loadingNumber: current.loadingNumber,
         depotLocationId,
         truckLocationId,
-        previousLines: current.lines,
+        previousLines: current.lines.map(({ productId, quantity, reloadedQuantity }) => ({ productId, quantity, reloadedQuantity })),
         nextLines,
         stockAlreadyApplied: Boolean(current.stockAppliedAt),
+        replaceInitial: current.status === "DRAFT",
+        sequences: LOADING_SEQUENCES,
         organizationId: user.organizationId,
         userId: user.id,
       });
+
+      // Closed fiche: the close-time theoretical follows the corrected
+      // quantities; a product added now takes the truck stock of now.
+      let theoreticalByProductId = new Map<string, number>();
+      if (current.status === "VALIDATED") {
+        const liveLevels = await tx.stockLevel.findMany({
+          where: { locationId: truckLocationId, productId: { in: nextLines.map((line) => line.productId) } },
+          select: { productId: true, quantity: true },
+        });
+        const liveByProductId = new Map(liveLevels.map((level) => [level.productId, level.quantity]));
+        theoreticalByProductId = shiftedTheoreticalSnapshots(current.lines, nextLines, (productId) => liveByProductId.get(productId) ?? 0);
+      }
+      const actualByProductId = new Map(parsed.data.lines.map((line) => [line.productId, line.actualRemainingQuantity ?? null]));
 
       await tx.truckLoadingLine.deleteMany({ where: { loadingId: current.id } });
       await tx.truckLoadingLine.createMany({
@@ -978,32 +972,11 @@ export async function updateLoadingLines(
           productId: line.productId,
           quantity: line.quantity,
           reloadedQuantity: line.reloadedQuantity,
+          // count only - null = not counted, never a stock write
+          actualRemainingQuantity: actualByProductId.get(line.productId) ?? null,
+          theoreticalRemainingQuantity: theoreticalByProductId.get(line.productId) ?? null,
         })),
       });
-
-      if (current.status === "VALIDATED") {
-        await applyActualRemainingQuantitiesOnLine(tx, {
-          loadingId: current.id,
-          loadingNumber: current.loadingNumber,
-          truckLocationId,
-          organizationId: user.organizationId,
-          lines: parsed.data.lines.map((line) => ({
-            productId: line.productId,
-            actualRemainingQuantity: line.actualRemainingQuantity as number,
-          })),
-          userId: user.id,
-        });
-      } else {
-        for (const line of parsed.data.lines) {
-          if (line.actualRemainingQuantity == null) continue;
-          await tx.truckLoadingLine.update({
-            where: {
-              loadingId_productId: { loadingId: current.id, productId: line.productId },
-            },
-            data: { actualRemainingQuantity: line.actualRemainingQuantity },
-          });
-        }
-      }
 
       await tx.auditLog.create({
         data: {
@@ -1031,95 +1004,6 @@ export async function updateLoadingLines(
   );
 
   return mapTruckLoadingToDto(loading);
-}
-
-async function applyActualRemainingQuantitiesOnLine(
-  tx: Pick<typeof prisma, "stockLevel" | "stockMovement" | "truckLoadingLine" | "$queryRaw">,
-  input: {
-    loadingId: string;
-    loadingNumber: string;
-    truckLocationId: string;
-    organizationId: string;
-    lines: { productId: string; actualRemainingQuantity: number }[];
-    userId: string;
-  },
-) {
-  for (const line of input.lines) {
-    const level = await tx.stockLevel.findUnique({
-      where: {
-        productId_locationId: { productId: line.productId, locationId: input.truckLocationId },
-      },
-      select: { id: true, quantity: true },
-    });
-
-    const theoreticalQuantity = level?.quantity ?? 0;
-    const actualQuantity = line.actualRemainingQuantity;
-    const difference = actualQuantity - theoreticalQuantity;
-
-    if (difference !== 0) {
-      await tx.stockLevel.upsert({
-        where: {
-          productId_locationId: { productId: line.productId, locationId: input.truckLocationId },
-        },
-        update: { quantity: actualQuantity },
-        create: {
-          organizationId: input.organizationId,
-          productId: line.productId,
-          locationId: input.truckLocationId,
-          quantity: actualQuantity,
-          reservedQuantity: 0,
-        },
-      });
-
-      await tx.stockMovement.create({
-        data: {
-          organizationId: input.organizationId,
-          movementNumber: await nextMovementNumber(tx, input.organizationId),
-          type: "INVENTORY_ADJUSTMENT",
-          productId: line.productId,
-          quantity: Math.abs(difference),
-          sourceLocationId: difference < 0 ? input.truckLocationId : null,
-          destinationLocationId: difference > 0 ? input.truckLocationId : null,
-          referenceType: "TRUCK_LOADING",
-          referenceId: input.loadingId,
-          reason: "Cloture chargement - ajustement stock reel",
-          note: JSON.stringify({
-            loadingNumber: input.loadingNumber,
-            theoreticalQuantity,
-            actualQuantity,
-            difference,
-          }),
-          createdByUserId: input.userId,
-          status: "VALIDATED",
-        },
-      });
-    }
-
-    // Every product with truck stock must be counted to close (see the
-    // missingProductIds check above), but not all of them are necessarily a
-    // line on THIS fiche - a product already on the truck from a previous
-    // loading, never re-charged/reloaded here, has no TruckLoadingLine row
-    // yet. Upsert (not update) so counting it doesn't throw P2025; a newly
-    // created line correctly shows quantity/reloadedQuantity 0, since this
-    // fiche never loaded it.
-    await tx.truckLoadingLine.upsert({
-      where: {
-        loadingId_productId: { loadingId: input.loadingId, productId: line.productId },
-      },
-      update: {
-        theoreticalRemainingQuantity: theoreticalQuantity,
-        actualRemainingQuantity: actualQuantity,
-      },
-      create: {
-        loadingId: input.loadingId,
-        productId: line.productId,
-        quantity: 0,
-        reloadedQuantity: 0,
-        theoreticalRemainingQuantity: theoreticalQuantity,
-        actualRemainingQuantity: actualQuantity,
-      },
-    });
-  }
 }
 
 async function nextLoadingSequence(
@@ -1239,6 +1123,8 @@ export async function createLoading(
         previousLines: [],
         nextLines: lines,
         stockAlreadyApplied: false,
+        replaceInitial: true,
+        sequences: LOADING_SEQUENCES,
         organizationId: user.organizationId,
         userId: user.id,
       });
@@ -1325,6 +1211,8 @@ export async function updateDraftLoading(
         previousLines: current.lines,
         nextLines: lines,
         stockAlreadyApplied: Boolean(current.stockAppliedAt),
+        replaceInitial: true,
+        sequences: LOADING_SEQUENCES,
         organizationId: user.organizationId,
         userId: user.id,
       });
@@ -1409,6 +1297,8 @@ export async function cancelDraftLoading(tourId: string): Promise<TruckLoadingDt
           previousLines: current.lines,
           nextLines: [],
           stockAlreadyApplied: true,
+          replaceInitial: true,
+          sequences: LOADING_SEQUENCES,
           organizationId: user.organizationId,
           userId: user.id,
         });
@@ -1516,6 +1406,8 @@ export async function validateLoading(
             quantity: line.quantity,
           })),
           stockAlreadyApplied: false,
+          replaceInitial: true,
+          sequences: LOADING_SEQUENCES,
           organizationId: user.organizationId,
           userId: user.id,
         });
@@ -1559,11 +1451,7 @@ export async function validateLoading(
       }
 
       await applyActualRemainingQuantities(tx, {
-        loadingId: current.id,
-        loadingNumber: current.loadingNumber,
         tourId: current.tour.id,
-        truckLocationId,
-        organizationId: user.organizationId,
         lines: parsed.data.lines,
         userId: user.id,
       });
@@ -1598,24 +1486,17 @@ export async function validateLoading(
 }
 
 /**
- * The truth of "Valider le transfert": the theoretical quantity is whatever
- * StockLevel currently holds for the truck (it already reflects charge +
- * recharge + real-time sales — see the module doc above applyLoadingStockDelta
- * and driver-sales.ts). The physically-counted "restante reelle" becomes the
- * new official StockLevel; the gap is recorded as an immutable
- * INVENTORY_ADJUSTMENT movement so the correction is auditable, and the count
- * itself is kept in TourStockCount (the same model already used by the
- * /tournees stock-count screen) so theoreticalQuantity/actualQuantity stay
- * queryable as history via getTourStockSheet.
+ * "Valider le transfert" of a tour loading: the physically-counted "restante
+ * reelle" is kept in TourStockCount (the model the /tournees stock sheet
+ * already reads, which compares it with its own theoretical figure). It is a
+ * count only: it never writes StockLevel nor StockMovement - the truck stock
+ * stays the theoretical one (charge initiale, recharges, sales and the other
+ * recorded movements).
  */
 async function applyActualRemainingQuantities(
-  tx: Pick<typeof prisma, "stockLevel" | "stockMovement" | "tourStockCount" | "$queryRaw">,
+  tx: Pick<typeof prisma, "tourStockCount">,
   input: {
-    loadingId: string;
-    loadingNumber: string;
     tourId: string;
-    truckLocationId: string;
-    organizationId: string;
     lines: { productId: string; actualRemainingQuantity: number }[];
     userId: string;
   },
@@ -1623,62 +1504,7 @@ async function applyActualRemainingQuantities(
   const now = new Date();
 
   for (const line of input.lines) {
-    const level = await tx.stockLevel.findUnique({
-      where: {
-        productId_locationId: {
-          productId: line.productId,
-          locationId: input.truckLocationId,
-        },
-      },
-      select: { id: true, quantity: true },
-    });
-
-    const theoreticalQuantity = level?.quantity ?? 0;
     const actualQuantity = line.actualRemainingQuantity;
-    const difference = actualQuantity - theoreticalQuantity;
-
-    if (difference !== 0) {
-      await tx.stockLevel.upsert({
-        where: {
-          productId_locationId: {
-            productId: line.productId,
-            locationId: input.truckLocationId,
-          },
-        },
-        update: { quantity: actualQuantity },
-        create: {
-          organizationId: input.organizationId,
-          productId: line.productId,
-          locationId: input.truckLocationId,
-          quantity: actualQuantity,
-          reservedQuantity: 0,
-        },
-      });
-
-      await tx.stockMovement.create({
-        data: {
-          organizationId: input.organizationId,
-          movementNumber: await nextMovementNumber(tx, input.organizationId),
-          type: "INVENTORY_ADJUSTMENT",
-          productId: line.productId,
-          quantity: Math.abs(difference),
-          sourceLocationId: difference < 0 ? input.truckLocationId : null,
-          destinationLocationId: difference > 0 ? input.truckLocationId : null,
-          referenceType: "TRUCK_LOADING",
-          referenceId: input.loadingId,
-          reason: "Cloture chargement - ajustement stock reel",
-          note: JSON.stringify({
-            loadingNumber: input.loadingNumber,
-            theoreticalQuantity,
-            actualQuantity,
-            difference,
-          }),
-          createdByUserId: input.userId,
-          status: "VALIDATED",
-        },
-      });
-    }
-
     await tx.tourStockCount.upsert({
       where: {
         tourId_productId: {
@@ -1823,182 +1649,6 @@ async function resolveLoadingLocationIds(
     depotLocationId: depotLocation.id,
     truckLocationId: truckLocation.id,
   };
-}
-
-async function applyLoadingStockDelta(
-  tx: Pick<typeof prisma, "stockLevel" | "stockMovement" | "$queryRaw">,
-  input: {
-    loadingId: string;
-    loadingNumber: string;
-    depotLocationId: string;
-    truckLocationId: string;
-    previousLines: PersistedLoadingLine[];
-    nextLines: NormalizedLoadingLineInput[];
-    stockAlreadyApplied: boolean;
-    organizationId: string;
-    userId: string;
-  },
-) {
-  const previousLineByProductId = new Map(
-    input.previousLines.map((line) => [line.productId, line]),
-  );
-  const nextLineByProductId = new Map(
-    input.nextLines.map((line) => [line.productId, line]),
-  );
-  const productIds = [...new Set([...previousLineByProductId.keys(), ...nextLineByProductId.keys()])];
-
-  for (const productId of productIds) {
-    const previousLine = previousLineByProductId.get(productId);
-    const nextLine = nextLineByProductId.get(productId);
-    const previousAppliedQuantity = input.stockAlreadyApplied
-      ? (previousLine?.quantity ?? 0)
-      : 0;
-    const nextQuantity = nextLine?.quantity ?? 0;
-    const deltaQuantity = nextQuantity - previousAppliedQuantity;
-
-    if (deltaQuantity === 0) {
-      continue;
-    }
-
-    const truckLevel = await tx.stockLevel.findUnique({
-      where: {
-        productId_locationId: {
-          productId,
-          locationId: input.truckLocationId,
-        },
-      },
-    });
-
-    if (deltaQuantity > 0) {
-      // A depot -> truck loading is never blocked by low/zero/negative depot
-      // stock: the depot StockLevel is allowed to go negative (it is only an
-      // anomaly to flag, not an invariant). Same signed Int column the
-      // counter POS already drives negative. The reverse move (deltaQuantity
-      // < 0 below) keeps its own guard - reducing a loading still requires
-      // the truck to actually hold the stock being sent back.
-      await tx.stockLevel.upsert({
-        where: {
-          productId_locationId: {
-            productId,
-            locationId: input.depotLocationId,
-          },
-        },
-        update: { quantity: { decrement: deltaQuantity } },
-        create: {
-          organizationId: input.organizationId,
-          productId,
-          locationId: input.depotLocationId,
-          quantity: -deltaQuantity,
-          reservedQuantity: 0,
-        },
-      });
-      await tx.stockLevel.upsert({
-        where: {
-          productId_locationId: {
-            productId,
-            locationId: input.truckLocationId,
-          },
-        },
-        update: { quantity: { increment: deltaQuantity } },
-        create: {
-          organizationId: input.organizationId,
-          productId,
-          locationId: input.truckLocationId,
-          quantity: deltaQuantity,
-          reservedQuantity: 0,
-        },
-      });
-    } else {
-      const reverseQuantity = Math.abs(deltaQuantity);
-      const truckAvailable =
-        (truckLevel?.quantity ?? 0) - (truckLevel?.reservedQuantity ?? 0);
-
-      if (!truckLevel || truckAvailable < reverseQuantity) {
-        throw new OperationsServiceError(
-          "Le camion ne possede pas assez de stock pour reduire ce transfert de stock.",
-          422,
-          {
-            [productId]:
-              "Le camion ne possede pas assez de stock pour reduire ce transfert de stock.",
-          },
-        );
-      }
-
-      await tx.stockLevel.update({
-        where: { id: truckLevel.id },
-        data: { quantity: { decrement: reverseQuantity } },
-      });
-      await tx.stockLevel.upsert({
-        where: {
-          productId_locationId: {
-            productId,
-            locationId: input.depotLocationId,
-          },
-        },
-        update: { quantity: { increment: reverseQuantity } },
-        create: {
-          organizationId: input.organizationId,
-          productId,
-          locationId: input.depotLocationId,
-          quantity: reverseQuantity,
-          reservedQuantity: 0,
-        },
-      });
-    }
-
-    await tx.stockMovement.create({
-      data: {
-        organizationId: input.organizationId,
-        movementNumber: await nextMovementNumber(tx, input.organizationId),
-        type: "TRUCK_LOADING",
-        productId,
-        quantity: Math.abs(deltaQuantity),
-        sourceLocationId:
-          deltaQuantity > 0 ? input.depotLocationId : input.truckLocationId,
-        destinationLocationId:
-          deltaQuantity > 0 ? input.truckLocationId : input.depotLocationId,
-        referenceType: "TRUCK_LOADING",
-        referenceId: input.loadingId,
-        reason:
-          deltaQuantity > 0
-            ? "Chargement brouillon applique"
-            : "Correction de chargement brouillon",
-        note: buildLoadingMovementNote({
-          loadingNumber: input.loadingNumber,
-          previousLine,
-          nextLine,
-          deltaQuantity,
-        }),
-        createdByUserId: input.userId,
-        status: "VALIDATED",
-      },
-    });
-  }
-}
-
-function buildLoadingMovementNote({
-  loadingNumber,
-  previousLine,
-  nextLine,
-  deltaQuantity,
-}: {
-  loadingNumber: string;
-  previousLine?: PersistedLoadingLine;
-  nextLine?: NormalizedLoadingLineInput;
-  deltaQuantity: number;
-}) {
-  const previousInitialQuantity = previousLine
-    ? Math.max(0, previousLine.quantity - previousLine.reloadedQuantity)
-    : 0;
-
-  return JSON.stringify({
-    loadingNumber,
-    previousInitialQuantity,
-    previousReloadedQuantity: previousLine?.reloadedQuantity ?? 0,
-    nextInitialQuantity: nextLine?.initialQuantity ?? 0,
-    nextReloadedQuantity: nextLine?.reloadedQuantity ?? 0,
-    deltaQuantity,
-  });
 }
 
 export function mapLoadingError(error: unknown) {

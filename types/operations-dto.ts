@@ -538,6 +538,14 @@ export type TruckLoadingValidationInput = {
   }[];
 };
 
+/** "Fermer le transfert de stock": the restant reel is optional (null / omitted = not counted). */
+export type TruckLoadingCloseInput = {
+  lines: {
+    productId: string;
+    actualRemainingQuantity?: number | null;
+  }[];
+};
+
 export interface CustomerDto {
   id: string;
   /** Stored account code, e.g. "34211" (never change this - it is the unique key). */

@@ -20,6 +20,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  countedSummary,
+  formatGap,
+  gapTitle,
+  gapTone,
+  remainingGap,
+  theoreticalRemaining,
+} from "@/lib/truck-loading-remaining";
 import type { TruckLoadingDto } from "@/types/operations-dto";
 import type { ProductDto } from "@/types/product-dto";
 import { useColumnLabels } from "@/components/table-labels/table-labels-provider";
@@ -40,7 +48,9 @@ type EditableLine = {
   initialLoadQuantity: number;
   reloadedQuantity: number;
   actualRemainingQuantity: number | null;
-  theoreticalDisplay: number;
+  /** Frozen at the close (null on an open fiche or a product added since). */
+  theoreticalRemainingQuantity: number | null;
+  truckCurrentQuantity: number | null;
 };
 
 type ProductSuggestion = { product: ProductDto };
@@ -56,7 +66,8 @@ function buildLinesFromLoading(loading: TruckLoadingDto): EditableLine[] {
     initialLoadQuantity: line.initialQuantity,
     reloadedQuantity: line.reloadedQuantity,
     actualRemainingQuantity: line.actualRemainingQuantity,
-    theoreticalDisplay: line.theoreticalRemainingQuantity ?? line.truckCurrentQuantity,
+    theoreticalRemainingQuantity: line.theoreticalRemainingQuantity,
+    truckCurrentQuantity: line.truckCurrentQuantity,
   }));
 }
 
@@ -152,7 +163,8 @@ export function LoadingDetailView({
         initialLoadQuantity: 0,
         reloadedQuantity: 0,
         actualRemainingQuantity: null,
-        theoreticalDisplay: 0,
+        theoreticalRemainingQuantity: null,
+        truckCurrentQuantity: null,
       },
     ]);
     setProductSearch("");
@@ -197,13 +209,8 @@ export function LoadingDetailView({
       toast.error("Ajoutez au moins un produit.");
       return;
     }
-    if (loading.status === "VALIDATED") {
-      const missing = lines.find((line) => line.actualRemainingQuantity === null);
-      if (missing) {
-        toast.error("Veuillez saisir la quantite restante reelle pour tous les produits.");
-        return;
-      }
-    }
+    // The restant reel stays optional (empty = not counted, "—", no decalage);
+    // it is a count only and never moves stock.
 
     setBusy(true);
     try {
@@ -304,6 +311,7 @@ export function LoadingDetailView({
               }
             />
             <InfoItem label="Nombre de produits" value={String(lines.length)} />
+            <InfoItem label="Produits comptes" value={`${countedSummary(lines).counted} / ${lines.length}`} />
           </div>
         </CardContent>
       </Card>
@@ -325,6 +333,7 @@ export function LoadingDetailView({
                   <TableHead className="text-right">{label("reload")}</TableHead>
                   <TableHead className="text-right">{label("theoreticalRemaining")}</TableHead>
                   <TableHead className="text-right">{label("actualRemaining")}</TableHead>
+                  <TableHead className="text-right">{label("gap")}</TableHead>
                   {mode === "edit" ? <TableHead className="text-right">{label("action")}</TableHead> : null}
                 </TableRow>
               </TableHeader>
@@ -332,14 +341,17 @@ export function LoadingDetailView({
                 {lines.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={mode === "edit" ? 7 : 6}
+                      colSpan={mode === "edit" ? 8 : 7}
                       className="py-8 text-center text-muted-foreground"
                     >
                       Aucun produit dans ce transfert de stock.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  lines.map((line) => (
+                  lines.map((line) => {
+                    const theoretical = theoreticalRemaining(line, loading.status);
+                    const gap = remainingGap(line.actualRemainingQuantity, theoretical);
+                    return (
                     <TableRow key={line.productId}>
                       <TableCell>
                         <div className="font-medium">{line.productName}</div>
@@ -398,7 +410,7 @@ export function LoadingDetailView({
                         )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {line.theoreticalDisplay}
+                        {theoretical ?? "—"}
                       </TableCell>
                       <TableCell className="w-[130px] text-right tabular-nums">
                         {mode === "edit" ? (
@@ -419,8 +431,24 @@ export function LoadingDetailView({
                             }
                           />
                         ) : (
-                          (line.actualRemainingQuantity ?? "-")
+                          (line.actualRemainingQuantity ?? "—")
                         )}
+                      </TableCell>
+                      <TableCell
+                        className={
+                          "text-right tabular-nums" +
+                          (gapTone(gap) === "shortage"
+                            ? " font-semibold text-destructive"
+                            : gapTone(gap) === "surplus"
+                              ? " font-semibold text-amber-700"
+                              : gapTone(gap) === "match"
+                                ? " text-emerald-700"
+                                : " text-muted-foreground")
+                        }
+                        title={gapTitle(gap)}
+                        data-gap={gapTone(gap)}
+                      >
+                        {formatGap(gap)}
                       </TableCell>
                       {mode === "edit" ? (
                         <TableCell className="text-right">
@@ -435,7 +463,8 @@ export function LoadingDetailView({
                         </TableCell>
                       ) : null}
                     </TableRow>
-                  ))
+                    );
+                  })
                 )}
               </TableBody>
             </Table>

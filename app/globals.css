@@ -607,6 +607,53 @@ body {
     border-top: 1px dashed #000;
   }
 
+  /* Transfert de stock (components/loadings/loading-receipt-print.tsx), 80mm:
+     Produit / Charge init. / Recharge / Restant theo. / Restant reel /
+     Decalage. Same dashed look as the separators above: a DASHED vertical rule
+     between the columns and a DASHED horizontal rule under the titles and
+     under every product (borders, so they always print). Quantities are
+     right-aligned tabular figures; the name clips at two lines. A shortage is
+     bold, a surplus bold-italic, so the sign is never the only cue. */
+  .receipt-print-area[data-document="loading"] {
+    box-sizing: border-box !important;
+  }
+
+  .receipt-print-loading-table {
+    border-top: 1px dashed #000;
+  }
+
+  .receipt-print-loading-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(5, 9.6mm);
+    align-items: stretch;
+    border-bottom: 1px dashed #000;
+    font-size: 11px;
+  }
+
+  .receipt-print-loading-row > span {
+    padding: 0.7mm 0.6mm;
+  }
+
+  .receipt-print-loading-row > span + span {
+    border-left: 1px dashed #000;
+  }
+
+  .receipt-print-loading-head {
+    align-items: end;
+    font-size: 7.5px;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+
+  .receipt-print-loading-row[data-gap="shortage"] .receipt-print-loading-gap {
+    font-weight: 800;
+  }
+
+  .receipt-print-loading-row[data-gap="surplus"] .receipt-print-loading-gap {
+    font-weight: 800;
+    font-style: italic;
+  }
+
   /* Product columns, left to right: Qte / Designation / Prix TTC / Montant
      (see components/pos/receipt-print.tsx - shared by POS admin and POS
      chauffeur). Designation gets the flexible remainder; Qte stays a small

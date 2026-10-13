@@ -1,12 +1,14 @@
 "use client";
 
-import type { LoadingTicketInput } from "@/lib/escpos-loading";
+import { LOADING_TICKET_TITLES, loadingTicketCells, type LoadingTicketInput } from "@/lib/escpos-loading";
+import { countedSummary, gapTone, remainingGap } from "@/lib/truck-loading-remaining";
 
 /**
  * Browser / PC fallback of the "Imprimer" button of a loading: an 80 mm ticket
  * with the same content as the Bluetooth ticket (lib/escpos-loading.ts),
  * printed with window.print(). Hidden on screen; the shared print stylesheet
- * (app/globals.css, .receipt-print-area) shows only this area when printing.
+ * (app/globals.css, .receipt-print-area) shows only this area when printing,
+ * and draws the dashed column / row separators of [data-document="loading"].
  * The invoice ticket is not involved.
  */
 export function LoadingReceiptPrint({ ticket }: { ticket: LoadingTicketInput | null }) {
@@ -15,7 +17,7 @@ export function LoadingReceiptPrint({ ticket }: { ticket: LoadingTicketInput | n
   const dateLabel = Number.isNaN(date.getTime())
     ? ticket.date
     : new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
-  const grid = { display: "grid", gridTemplateColumns: "minmax(0, 1fr) 16mm 20mm", gap: "1mm" } as const;
+  const { counted, total } = countedSummary(ticket.lines.map((line) => ({ actualRemainingQuantity: line.actualQuantity ?? null })));
 
   return (
     <section aria-hidden="true" className="receipt-print-area hidden" data-paper="80" data-document="loading">
@@ -29,22 +31,40 @@ export function LoadingReceiptPrint({ ticket }: { ticket: LoadingTicketInput | n
         {ticket.driverName ? <div>Chauffeur : {ticket.driverName}</div> : null}
         {ticket.truckLabel ? <div>Camion : {ticket.truckLabel}</div> : null}
         <div className="receipt-print-separator" />
-        <div style={{ ...grid, fontWeight: 700 }}>
-          <span>PRODUIT</span>
-          <span className="receipt-print-number">CHARGE</span>
-          <span className="receipt-print-number">RECHARGE</span>
+        <div className="receipt-print-loading-table">
+          <div className="receipt-print-loading-row receipt-print-loading-head">
+            <span>PRODUIT</span>
+            {LOADING_TICKET_TITLES.map(([first, second]) => (
+              <span key={`${first}-${second}`} className="receipt-print-number">
+                {first ? (
+                  <>
+                    {first}
+                    <br />
+                  </>
+                ) : null}
+                {second}
+              </span>
+            ))}
+          </div>
+          {ticket.lines.map((line, index) => {
+            const cells = loadingTicketCells(line);
+            const tone = gapTone(remainingGap(line.actualQuantity ?? null, line.theoreticalQuantity ?? null));
+            return (
+              <div key={`${line.productName}-${index}`} className="receipt-print-loading-row" data-gap={tone}>
+                <span className="receipt-print-product">{line.productName}</span>
+                {cells.map((cell, column) => (
+                  <span key={column} className={column === 4 ? "receipt-print-number receipt-print-loading-gap" : "receipt-print-number"}>
+                    {cell}
+                  </span>
+                ))}
+              </div>
+            );
+          })}
         </div>
-        <div className="receipt-print-separator" />
-        <div className="receipt-print-lines">
-          {ticket.lines.map((line, index) => (
-            <div key={`${line.productName}-${index}`} style={{ ...grid, fontSize: "13px" }}>
-              <span className="receipt-print-product">{line.productName}</span>
-              <span className="receipt-print-number">{line.initialQuantity}</span>
-              <span className="receipt-print-number">{line.reloadedQuantity}</span>
-            </div>
-          ))}
+        <div style={{ marginTop: "1.5mm" }}>
+          Produits comptés : {counted} / {total}
         </div>
-        <div className="receipt-print-separator" />
+        <div style={{ fontSize: "8px" }}>Décalage = restant réel - restant théorique (- manque, + surplus)</div>
       </div>
     </section>
   );

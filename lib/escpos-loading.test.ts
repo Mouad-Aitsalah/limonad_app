@@ -27,9 +27,10 @@ const input: LoadingTicketInput = {
   driverName: "Ahmed Chauffeur",
   truckLabel: "CAM-01 - 12345-A-1",
   lines: [
-    { productName: "Produit 1", initialQuantity: 100, reloadedQuantity: 200 },
-    { productName: "Produit 2", initialQuantity: 0, reloadedQuantity: 0 },
-    { productName: "Produit 3", initialQuantity: 50, reloadedQuantity: 0 },
+    { productName: "Produit 1", initialQuantity: 100, reloadedQuantity: 30, theoreticalQuantity: 125, actualQuantity: 120 },
+    { productName: "Produit 2", initialQuantity: 0, reloadedQuantity: 0, theoreticalQuantity: 0, actualQuantity: 0 },
+    { productName: "Produit 3", initialQuantity: 50, reloadedQuantity: 0, theoreticalQuantity: 40, actualQuantity: null },
+    { productName: "Produit 4", initialQuantity: 10, reloadedQuantity: 5, theoreticalQuantity: 12, actualQuantity: 15 },
   ],
 };
 
@@ -41,29 +42,36 @@ function hasSequence(bytes: Uint8Array, sequence: number[]): boolean {
   return false;
 }
 
-/** [name, charge, recharge] of every product row. */
+const isSeparator = (cell: { text: string }) => cell.text === "¦";
+
+/** Product rows (font A, name + 5 separators + 5 quantities): [name, charge, recharge, theorique, reel, decalage]. */
 function rows(lines: ReceiptLine[]) {
-  const texts = textLines(lines);
-  const rules = texts.map((t, i) => (/^-+$/.test(t.text) ? i : -1)).filter((i) => i >= 0);
-  const out: string[][] = [];
-  for (const t of texts.slice(rules[2] + 1, rules[3])) {
-    const match = t.text.trim().match(/^(.*?) +(\d+) +(\d+)$/);
-    if (match) out.push([match[1], match[2], match[3]]);
-  }
-  return out;
+  return textLines(lines)
+    .filter((t) => t.font === "A" && t.cells && t.cells.length === 11)
+    .map((t) => t.cells!.filter((c) => !isSeparator(c)).map((c) => c.text));
 }
 
-test("ticket content: brand, TRANSFERT DE STOCK, date, driver, truck, and the three products with CHARGE / RECHARGE only", () => {
+test("ticket content: brand, title, date, driver, truck, the 6 columns and the counted products", () => {
   const lines = buildLoadingReceiptLines(input);
   const text = allText(lines);
-  for (const expected of ["AITSALAH STORE", "TRANSFERT DE STOCK", "Date : 26/09/2026", "Chauffeur : Ahmed Chauffeur", "Camion : CAM-01 - 12345-A-1", "PRODUIT", "CHARGE", "RECHARGE"]) {
+  for (const expected of ["AITSALAH STORE", "TRANSFERT DE STOCK", "Date : 26/09/2026", "Chauffeur : Ahmed Chauffeur", "Camion : CAM-01 - 12345-A-1", "PRODUIT", "CHARGE", "INIT.", "RECH.", "THÉO.", "RÉEL", "DÉCAL."]) {
     assert.ok(text.includes(expected), expected);
   }
-  assert.deepEqual(rows(lines), [["Produit 1", "100", "200"], ["Produit 2", "0", "0"], ["Produit 3", "50", "0"]]);
-  // nothing else is printed
-  // (the title « TRANSFERT DE STOCK » itself is the only place the word STOCK may appear)
-  const body = text.replace("TRANSFERT DE STOCK", "");
-  for (const forbidden of ["STOCK", "DEPOT", "THEORIQUE", "REELLE", "Prix"]) assert.equal(body.toUpperCase().includes(forbidden.toUpperCase()), false, forbidden);
+  assert.deepEqual(rows(lines), [
+    ["Produit 1", "100", "30", "125", "120", "-5"],
+    ["Produit 2", "0", "0", "0", "0", "0"],
+    ["Produit 3", "50", "0", "40", "-", "-"],
+    ["Produit 4", "10", "5", "12", "15", "+3"],
+  ]);
+  assert.ok(text.includes("Produits comptés : 3 / 4"));
+  assert.ok(text.includes("Décalage = restant réel - restant théorique"));
+  for (const forbidden of ["DEPOT", "Prix"]) assert.equal(text.toUpperCase().includes(forbidden.toUpperCase()), false, forbidden);
+});
+
+test("an older caller without theoretical / real figures prints dashes, never a made-up 0 or gap", () => {
+  const lines = buildLoadingReceiptLines({ ...input, lines: [{ productName: "Eau", initialQuantity: 12, reloadedQuantity: 3 }] });
+  assert.deepEqual(rows(lines), [["Eau", "12", "3", "-", "-", "-"]]);
+  assert.ok(allText(lines).includes("Produits comptés : 0 / 1"));
 });
 
 test("driver and truck lines are optional", () => {
@@ -73,39 +81,52 @@ test("driver and truck lines are optional", () => {
   assert.ok(text.includes("Date : 26/09/2026"));
 });
 
-test("columns: PRODUIT at the left margin, CHARGE and RECHARGE right-aligned under their titles (ESC $ positions)", () => {
-  for (const sample of [input, { ...input, lines: [{ productName: "Eau", initialQuantity: 123456, reloadedQuantity: 9876543 }] }]) {
-    const lines = textLines(buildLoadingReceiptLines(sample));
-    const head = lines.find((t) => t.text.includes("PRODUIT"))!;
-    assert.equal(head.font, "B");
-    const [produit, charge, recharge] = head.cells!;
-    assert.equal(produit.x, 0);
-    assert.equal(recharge.x + recharge.text.length * 9, 576, "RECHARGE ends at the paper edge");
-    const chargeEdge = charge.x + charge.text.length * 9;
-    let productRows = 0;
-    for (const row of lines.filter((t) => t.cells && t.cells.length === 3 && t.font === "A")) {
-      const [name, c, r] = row.cells!;
-      assert.equal(name.x, 0, "name at the left margin");
-      assert.equal(c.x + c.text.length * 12, chargeEdge, "charge value ends where CHARGE ends");
-      assert.equal(r.x + r.text.length * 12, 576, "recharge value ends at the paper edge");
-      assert.ok(name.x + name.text.length * 12 < c.x, "the name never touches the quantities");
-      productRows += 1;
+test("layout: dashed vertical separators at the same place on every line, values right-aligned under their titles, a dashed rule under each product", () => {
+  const wide: LoadingTicketInput = { ...input, lines: [{ productName: "Eau", initialQuantity: 123456, reloadedQuantity: 9876543, theoreticalQuantity: -40, actualQuantity: 1000000 }] };
+  for (const sample of [input, wide]) {
+    const lines = buildLoadingReceiptLines(sample);
+    const texts = textLines(lines);
+    const titles = texts.filter((t) => t.font === "B" && t.cells && t.cells.some(isSeparator));
+    assert.equal(titles.length, 2, "two title lines");
+    const separatorXs = (t: TextLine) => t.cells!.filter(isSeparator).map((c) => c.x);
+    const reference = separatorXs(titles[0]);
+    assert.equal(reference.length, 5, "one separator before each of the 5 quantity columns");
+    assert.deepEqual(separatorXs(titles[1]), reference);
+    assert.equal(titles[1].cells![0].text, "PRODUIT");
+    assert.equal(titles[1].cells![0].x, 0);
+    const titleRight = titles[1].cells!.filter((c) => !isSeparator(c) && c.text !== "PRODUIT").map((c) => c.x + c.text.length * 9);
+    assert.equal(titleRight.at(-1), 576, "DÉCAL. ends at the paper edge");
+    const productRows = texts.filter((t) => t.font === "A" && t.cells && t.cells.length === 11);
+    assert.equal(productRows.length, sample.lines.length);
+    for (const row of productRows) {
+      assert.deepEqual(separatorXs(row), reference, "separators aligned with the titles");
+      const values = row.cells!.filter((c) => !isSeparator(c)).slice(1);
+      values.forEach((value, column) => assert.equal(value.x + value.text.length * 12, titleRight[column], "value ends where its title ends"));
+      const name = row.cells![0];
+      assert.equal(name.x, 0);
+      assert.ok(name.x + name.text.length * 12 <= reference[0], "the name never reaches the first separator");
+      // a dashed rule right after the product (after its wrapped second line if any)
+      const index = lines.indexOf(row);
+      const next = lines[index + 1] as TextLine;
+      const rule = /^-+$/.test(next.text) ? next : (lines[index + 2] as TextLine);
+      assert.match(rule.text, /^-+$/);
     }
-    assert.equal(productRows, sample.lines.length);
-    for (const t of lines) assert.ok(t.text.length <= COLUMNS_FONT_A * 4 / 3, t.text);
+    for (const t of texts) assert.ok(t.text.length <= (COLUMNS_FONT_A * 4) / 3, t.text);
   }
+  // wide numbers widen their column, never lose digits
+  assert.deepEqual(rows(buildLoadingReceiptLines(wide)), [["Eau", "123456", "9876543", "-40", "1000000", "+1000040"]]);
 });
 
-test("a long name wraps on 2 lines with the quantities on the first one; accents are native text", () => {
+test("a long name wraps on 2 lines with the quantities on the first one, separators on both; accents are native text", () => {
   const lines = buildLoadingReceiptLines({
     ...input,
-    lines: [{ productName: "Eau minérale gazeuse naturelle en bouteille 1,5L pack économique", initialQuantity: 12, reloadedQuantity: 3 }],
+    lines: [{ productName: "Eau minérale gazeuse naturelle en bouteille 1,5L pack économique", initialQuantity: 12, reloadedQuantity: 3, theoreticalQuantity: 15, actualQuantity: 15 }],
   });
   const texts = textLines(lines);
-  const first = texts.find((t) => t.cells && t.cells.length === 3 && t.font === "A")!;
+  const first = texts.find((t) => t.cells && t.cells.length === 11 && t.font === "A")!;
   assert.match(first.cells![0].text, /^Eau minérale/);
   const second = texts[texts.indexOf(first) + 1];
-  assert.equal(second.cells!.length, 1);
+  assert.equal(second.cells!.length, 6, "name + the 5 separators, no quantity");
   assert.equal(second.cells![0].x, 0);
   assert.equal(lines.filter((l) => l.kind === "raster" || l.kind === "rasterCells").length, 0);
 });
@@ -113,15 +134,25 @@ test("a long name wraps on 2 lines with the quantities on the first one; accents
 const fakeCells: RasterCellsRenderer = (_cells, { widthDots }) => ({ width: widthDots, height: 36, data: new Uint8Array(Math.ceil(widthDots / 8) * 36).fill(1) });
 
 test("an Arabic product name: its WHOLE row is one image line (name never separated from its quantities)", () => {
-  const sample: LoadingTicketInput = { ...input, lines: [{ productName: "مشروب غازي", initialQuantity: 10, reloadedQuantity: 5 }, { productName: "Coca", initialQuantity: 1, reloadedQuantity: 2 }] };
+  const sample: LoadingTicketInput = {
+    ...input,
+    lines: [
+      { productName: "مشروب غازي", initialQuantity: 10, reloadedQuantity: 5, theoreticalQuantity: 9, actualQuantity: 7 },
+      { productName: "Coca", initialQuantity: 1, reloadedQuantity: 2, theoreticalQuantity: 3, actualQuantity: null },
+    ],
+  };
   const lines = buildLoadingReceiptLines(sample);
   const arabic = lines.filter((l) => l.kind === "rasterCells");
   assert.equal(arabic.length, 1);
   assert.equal(lines.filter((l) => l.kind === "raster").length, 0);
   const cells = (arabic[0] as Extract<ReceiptLine, { kind: "rasterCells" }>).cells;
-  assert.deepEqual(cells.map((c) => [c.text, c.align]), [["مشروب غازي", "left"], ["10", "right"], ["5", "right"]]);
+  assert.deepEqual(
+    cells.filter((c) => !isSeparator(c)).map((c) => [c.text, c.align]),
+    [["مشروب غازي", "left"], ["10", "right"], ["5", "right"], ["9", "right"], ["7", "right"], ["-2", "right"]],
+  );
+  assert.equal(cells.filter(isSeparator).length, 5);
   assert.equal(cells[0].at, 0);
-  assert.equal(cells[2].at, 576);
+  assert.equal(cells.at(-1)!.at, 576);
   const encoded = buildLoadingEscPos(sample, { rasterCells: fakeCells });
   assert.equal(encoded.rasterLines, 1);
   assert.ok(hasSequence(encoded.bytes, [0x1d, 0x76, 0x30, 0x00]));
@@ -132,13 +163,14 @@ test("an Arabic product name: its WHOLE row is one image line (name never separa
   assert.ok(asText.includes("(non imprimable)") && asText.includes("10") && asText.includes("Coca"));
 });
 
-test("ESC/POS stream: init, motion unit, code page, fonts, ESC $ columns, cut", () => {
+test("ESC/POS stream: init, motion unit, code page, fonts, ESC $ columns, the dashed separator character, cut", () => {
   const { bytes } = buildLoadingEscPos(input);
   assert.deepEqual([bytes[0], bytes[1]], [0x1b, 0x40]);
   assert.ok(hasSequence(bytes, [0x1d, 0x50, 203, 203]));
   assert.ok(hasSequence(bytes, [0x1b, 0x74, 19]));
   assert.ok(hasSequence(bytes, [0x1b, 0x4d, 0x01]), "font B titles");
   assert.ok(hasSequence(bytes, [0x1b, 0x24, 0, 0]), "ESC $ 0 0 : PRODUIT / names at the left margin");
+  assert.ok(bytes.includes(0xdd), "¦ printed natively (cp858 0xDD)");
   assert.deepEqual(Array.from(bytes.slice(-4)), [0x1d, 0x56, 0x42, 0x00]);
 });
 

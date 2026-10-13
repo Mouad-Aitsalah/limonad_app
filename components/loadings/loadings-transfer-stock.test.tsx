@@ -89,11 +89,15 @@ test("rename: the visible labels say « Transfert(s) de Stock »; routes, API pa
     leftovers.map((line) => line.trim()),
     ['<p className="text-sm text-muted-foreground">Chargement en cours...</p>', "render={<Link href={`/chargements/${loading.id}`} />}"],
   );
-  const server = read("../../lib/server/truck-loadings.ts");
   const serverCode = code("../../lib/server/truck-loadings.ts");
-  assert.match(server, /reason: "Cloture chargement - ajustement stock reel"/, "stored movement reason untouched");
-  assert.match(server, /"Chargement brouillon applique"/, "stored movement note untouched");
-  assert.equal(/"[^"\n]*[Cc]hargement[^"\n]*"/.test(serverCode.replace(/"Cloture chargement - ajustement stock reel"|"Chargement brouillon applique"|"Correction de chargement brouillon"/g, "")), false);
+  // the loading movement reasons are unchanged (written by the stock core since the
+  // "charge initiale remplace" change); the close no longer writes any adjustment
+  // (the restant reel is a count only), so its old reason only stays on past movements
+  const stockCore = read("../../lib/server/truck-loading-stock-core.ts");
+  assert.match(stockCore, /LOADING_APPLIED_REASON = "Chargement brouillon applique"/, "stored movement reason untouched");
+  assert.match(stockCore, /LOADING_CORRECTION_REASON = "Correction de chargement brouillon"/, "stored movement reason untouched");
+  assert.equal(/Cloture chargement - ajustement stock reel/.test(serverCode), false);
+  assert.equal(/"[^"\n]*[Cc]hargement[^"\n]*"/.test(serverCode), false);
   // no model / route / api path renamed
   assert.match(read("../../components/loadings/loading-detail-view.tsx"), /href="\/chargements"/);
 });
