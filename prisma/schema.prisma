@@ -979,6 +979,20 @@ model Product {
   minimumStock              Int                        @default(0)
   status                    ProductStatus              @default(ACTIVE)
   imageUrl                  String?
+  // Products imported WITH VARIANTS. A variant is a real product (own reference,
+  // barcode, prices, stock); these four columns only describe how it is grouped.
+  // All four are NULL for an ordinary product, or all four are set and not blank,
+  // variantAttributes being a non-empty JSON array (CHECK constraints
+  // Product_variant_all_or_none_check and Product_variant_values_check, added by
+  // hand in the migration: Prisma cannot express them). See lib/products-import-variants.ts.
+  //   variantParentName  the parent product as written ("Arsenal Survêtements")
+  //   variantGroupKey    that name in comparison form (normalizeKey)
+  //   variantAttributes  the ordered attributes, [{ "name": "TAILLE", "value": "S" }]
+  //   variantKey         the order-insensitive signature ("couleur=noir;taille=s")
+  variantParentName         String?
+  variantGroupKey           String?
+  variantAttributes         Json?
+  variantKey                String?
   stockLevels               StockLevel[]
   stockMovements            StockMovement[]
   loadingLines              TruckLoadingLine[]
@@ -995,6 +1009,10 @@ model Product {
 
   @@unique([organizationId, reference])
   @@unique([organizationId, barcode])
+  // One variant combination exists once per parent and category. The name is explicit:
+  // the generated one would exceed the 63-character identifier limit of PostgreSQL
+  // and be silently truncated. NULL columns (every ordinary product) never conflict.
+  @@unique([organizationId, categoryId, variantGroupKey, variantKey], map: "Product_variant_identity_key")
   @@index([organizationId])
   @@index([categoryId])
   @@index([brandId])

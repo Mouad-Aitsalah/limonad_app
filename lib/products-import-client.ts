@@ -29,6 +29,14 @@ export type ServerPreviewRow = {
   status: ServerStatus;
   message: string;
   changes: Record<string, ServerChange>;
+  /** Variants format only: index in ServerPreview.groups. */
+  variantGroupIndex?: number;
+  /** The line belongs to a group blocked by an invalid variant: not importable. */
+  groupBlocked?: boolean;
+  /** A line blocked ONLY because of its group: what it would have been. */
+  wouldBe?: ServerStatus;
+  /** The VAT of the page's creation defaults, when it was used for this NEW line. */
+  appliedTaxRate?: number;
 };
 
 export type ServerSummary = {
@@ -38,12 +46,37 @@ export type ServerSummary = {
   update: number;
   conflicts: number;
   errors: number;
+  /** Variants format only: lines blocked ONLY because another variant of their group is invalid. */
+  blocked?: number;
+};
+
+/** One parent product of the variants format, as the server grouped it. */
+export type ServerVariantGroup = {
+  parentName: string;
+  categoryName: string | null;
+  variants: number;
+  new: number;
+  update: number;
+  unchanged: number;
+  problems: number;
+  blockedRows: number;
+  blocked: boolean;
+  /** « ligne 12 : … » for a blocked group. */
+  reason: string | null;
 };
 
 export type ServerPreview = {
   depot: { name: string; code: string };
   summary: ServerSummary;
   rows: ServerPreviewRow[];
+  /** Variants format only. */
+  groups?: ServerVariantGroup[];
+};
+
+/** Variants format: values for the NEW products (no supplier / VAT column in that file) and the lines that blocked a group before reaching the server. */
+export type PreviewVariantOptions = {
+  creationDefaults?: { supplierId?: string; taxRate?: number };
+  externalErrors?: Array<{ groupKey: string; excelRow: number; message: string }>;
 };
 
 async function readJson<T>(response: Response, whatFailed: string): Promise<T> {
@@ -82,13 +115,39 @@ async function post<T>(url: string, payload: unknown, whatFailed: string): Promi
  * Read-only check of the WHOLE file against the database (one request).
  * `applyStock`: the user's explicit choice to apply QuantiteStock (off by default).
  */
-export function postProductImportPreview(rows: ImportLineInput[], options: { applyStock: boolean } = { applyStock: false }): Promise<ServerPreview> {
-  return post<ServerPreview>("/api/produits/import/preview", { rows, applyStock: options.applyStock }, "Vérification impossible");
+export function postProductImportPreview(
+  rows: ImportLineInput[],
+  options: { applyStock: boolean } & PreviewVariantOptions = { applyStock: false },
+): Promise<ServerPreview> {
+  return post<ServerPreview>(
+    "/api/produits/import/preview",
+    {
+      rows,
+      applyStock: options.applyStock,
+      // sent only by the variants format: a historical request is byte-for-byte what it was
+      ...(options.creationDefaults ? { creationDefaults: options.creationDefaults } : {}),
+      ...(options.externalErrors?.length ? { externalErrors: options.externalErrors } : {}),
+    },
+    "Vérification impossible",
+  );
 }
 
 /** The real write of ONE batch of lines. */
-export function postProductImportBatch(rows: ImportLineInput[], options: { applyStock: boolean } = { applyStock: false }): Promise<BatchResponse> {
-  return post<BatchResponse>("/api/produits/import", { rows, applyStock: options.applyStock }, "Import du lot impossible");
+export function postProductImportBatch(
+  rows: ImportLineInput[],
+  options: { applyStock: boolean } & PreviewVariantOptions = { applyStock: false },
+): Promise<BatchResponse> {
+  return post<BatchResponse>(
+    "/api/produits/import",
+    {
+      rows,
+      applyStock: options.applyStock,
+      // variants format only: the supplier / VAT of the new products, and the browser-refused lines of the batch's groups
+      ...(options.creationDefaults ? { creationDefaults: options.creationDefaults } : {}),
+      ...(options.externalErrors?.length ? { externalErrors: options.externalErrors } : {}),
+    },
+    "Import du lot impossible",
+  );
 }
 
 export type PhotoUploadResult = { reference: string; status: "UPDATED" | "UNCHANGED" | "NOT_FOUND" | "INVALID"; message: string };

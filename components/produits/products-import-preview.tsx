@@ -5,6 +5,7 @@ import * as React from "react";
 import { ProductsImportPager } from "@/components/produits/products-import-pager";
 import { ProductsImportProgress } from "@/components/produits/products-import-progress";
 import { ProductsImportReport } from "@/components/produits/products-import-report";
+import { ProductsImportVariantsPanel, type VariantSupplierOption } from "@/components/produits/products-import-variants-panel";
 import { Button } from "@/components/ui/button";
 import { readProductImportFile, photoUploadBatches, type LinePhoto } from "@/lib/import-export/product-import-file";
 import { PRODUCT_STATUS_LABELS, type ProductImportLine } from "@/lib/import-export/products-format";
@@ -24,6 +25,7 @@ import {
   type PhotoUploadResult,
   type ServerPreviewRow,
   type ServerSummary,
+  type ServerVariantGroup,
 } from "@/lib/products-import-client";
 import {
   PRODUCT_IMPORT_MAX_ROWS,
@@ -32,9 +34,20 @@ import {
   isImportableStatus,
   paginateRows,
 } from "@/lib/products-import-shared";
+import {
+  DEFAULT_VARIANT_TAX_RATE,
+  confirmedCreationDefaults,
+  describeVariantAttributes,
+  externalErrorsForBatch,
+  externalVariantErrors,
+  selectLinesToWrite,
+  variantGroupKeyOfLine,
+  withVariantGroupSizes,
+  type VariantDefaultsForm,
+} from "@/lib/products-import-variant-ui";
 
 type LocalStatus = "VALID" | "ERROR";
-type FilterKey = "ALL" | "NEW" | "UPDATE" | "UNCHANGED" | "ERROR" | "CONFLICT";
+type FilterKey = "ALL" | "NEW" | "UPDATE" | "UNCHANGED" | "ERROR" | "CONFLICT" | "BLOCKED";
 
 type Row = {
   line: number;
@@ -44,6 +57,8 @@ type Row = {
   photoIssue?: string;
   status: LocalStatus;
   message: string;
+  /** Suspicious but not blocking (variants format: a barcode that may have lost a leading zero). */
+  warnings: string[];
 };
 
 const FILE_ACCEPT =
@@ -82,11 +97,14 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "UNCHANGED", label: "Inchangés" },
   { key: "ERROR", label: "Erreurs" },
   { key: "CONFLICT", label: "Conflits" },
+  // variants format only: valid lines blocked because another variant of their group is invalid
+  { key: "BLOCKED", label: "Bloqués (groupe)" },
 ];
 
 function effectiveFilter(row: Row, server?: ServerPreviewRow): Exclude<FilterKey, "ALL"> | "PENDING" {
   if (row.status === "ERROR") return "ERROR";
   if (!server) return "PENDING";
+  if (server.wouldBe) return "BLOCKED";
   switch (server.status) {
     case "NEW":
       return "NEW";
@@ -125,6 +143,14 @@ export function ProductsImportPreview() {
   const [serverError, setServerError] = React.useState("");
   const [serverSummary, setServerSummary] = React.useState<ServerSummary | null>(null);
   const [depot, setDepot] = React.useState<{ name: string; code: string } | null>(null);
+  // Products-with-variants format: preview only (the write of variants is not available yet).
+  const [variantMode, setVariantMode] = React.useState<{ columnsNotice?: string } | null>(null);
+  const [groups, setGroups] = React.useState<ServerVariantGroup[] | null>(null);
+  const [suppliers, setSuppliers] = React.useState<VariantSupplierOption[]>([]);
+  const [suppliersError, setSuppliersError] = React.useState("");
+  const [defaultsForm, setDefaultsForm] = React.useState<VariantDefaultsForm>({ supplierId: "", taxRateText: String(DEFAULT_VARIANT_TAX_RATE), confirmed: false });
+  // The supplier / VAT last sent to the server for the NEW products (null = none confirmed yet).
+  const [appliedDefaults, setAppliedDefaults] = React.useState<{ supplierId: string; supplierName: string; taxRate: number } | null>(null);
   const [filter, setFilter] = React.useState<FilterKey>("ALL");
   const [page, setPage] = React.useState(1);
   const [importing, setImporting] = React.useState(false);
@@ -150,22 +176,34 @@ export function ProductsImportPreview() {
   }, [importing]);
 
   /** The whole file, in ONE read-only request, so a reference used twice is a conflict file-wide. */
-  async function checkWithDatabase(localRows: Row[], withStock: boolean = applyStock) {
+  async function checkWithDatabase(localRows: Row[], withStock: boolean = applyStock, defaults: typeof appliedDefaults = appliedDefaults) {
     const validRows = localRows.filter((row) => row.status !== "ERROR").map(toLine);
     if (!validRows.length) {
       setServerRows(new Map());
       setServerSummary(null);
+      setGroups(null);
       return;
     }
+    // Variants format: the supplier / VAT of the NEW products, and the lines refused here that still block their group.
+    const variantsFile = validRows.some((line) => line.referenceSource !== undefined);
     setServerLoading(true);
     setServerError("");
     try {
-      const body = await postProductImportPreview(validRows, { applyStock: withStock });
+      // A historical file: the very same request as ever.
+      const body = variantsFile
+        ? await postProductImportPreview(validRows, {
+            applyStock: withStock,
+            ...(defaults ? { creationDefaults: { supplierId: defaults.supplierId, taxRate: defaults.taxRate } } : {}),
+            externalErrors: externalVariantErrors(localRows),
+          })
+        : await postProductImportPreview(validRows, { applyStock: withStock });
       setServerRows(new Map(body.rows.map((row) => [row.excelRow, row])));
       setServerSummary(body.summary);
+      setGroups(body.groups ?? null);
       setDepot(body.depot);
     } catch (caught) {
       // No server answer: no counters (they would be zeros that mean nothing).
+      setGroups(null);
       setServerRows(new Map());
       setServerSummary(null);
       setServerError(
@@ -196,8 +234,13 @@ export function ProductsImportPreview() {
     setPhotoReport(null);
     setArchiveInfo(null);
     setApplyStock(false);
+    setVariantMode(null);
+    setGroups(null);
+    setAppliedDefaults(null);
+    setDefaultsForm({ supplierId: "", taxRateText: String(DEFAULT_VARIANT_TAX_RATE), confirmed: false });
     try {
-      const content = readProductImportFile(new Uint8Array(await file.arrayBuffer()), file.name);
+      // variantFormat: also recognise the products-with-variants format; a historical file is read exactly as before.
+      const content = readProductImportFile(new Uint8Array(await file.arrayBuffer()), file.name, { variantFormat: true });
       if (content.parsed.fatal) {
         setRows([]);
         setServerRows(new Map());
@@ -205,6 +248,7 @@ export function ProductsImportPreview() {
         setError(content.parsed.fatal);
         return;
       }
+      setVariantMode(content.parsed.format === "variants" ? { columnsNotice: content.parsed.columnsNotice } : null);
       if (content.archive) {
         setArchiveInfo({
           dataFileName: content.dataFileName,
@@ -215,13 +259,14 @@ export function ProductsImportPreview() {
       }
       setHasStockColumn(content.parsed.present.has("targetStock"));
 
-      const parsed: Row[] = content.parsed.lines.map(({ line, errors }) => ({
+      const parsed: Row[] = content.parsed.lines.map(({ line, errors, warnings }) => ({
         line: line.excelRow,
         values: line,
         photo: content.photos.get(line.excelRow),
         photoIssue: content.photoIssues.get(line.excelRow),
         status: errors.length ? "ERROR" : "VALID",
         message: errors.join(" ; ") || "Valide",
+        warnings: warnings ?? [],
       }));
 
       // A file over the limit is refused here, with the real numbers, before
@@ -241,7 +286,7 @@ export function ProductsImportPreview() {
       setServerSummary(null);
       setFilter("ALL");
       setPage(1);
-      void checkWithDatabase(parsed, false);
+      void checkWithDatabase(parsed, false, null);
     } catch (caught) {
       setRows([]);
       setError(caught instanceof TableFileError || (caught instanceof Error && /ZIP|Archive/.test(caught.message)) ? caught.message : "Impossible de lire le fichier.");
@@ -249,7 +294,7 @@ export function ProductsImportPreview() {
   }
 
   const counts = React.useMemo(() => {
-    const totals: Record<FilterKey, number> = { ALL: rows.length, NEW: 0, UPDATE: 0, UNCHANGED: 0, ERROR: 0, CONFLICT: 0 };
+    const totals: Record<FilterKey, number> = { ALL: rows.length, NEW: 0, UPDATE: 0, UNCHANGED: 0, ERROR: 0, CONFLICT: 0, BLOCKED: 0 };
     for (const row of rows) {
       const key = effectiveFilter(row, serverRows.get(row.line));
       if (key !== "PENDING") totals[key] += 1;
@@ -266,14 +311,18 @@ export function ProductsImportPreview() {
     return countsReady ? formatImportCount(counts[key]) : "—";
   }
 
-  const importableRows = React.useMemo(
-    () =>
-      rows.filter((row) => {
-        if (row.status === "ERROR") return false;
-        return isImportableStatus(serverRows.get(row.line)?.status);
-      }),
-    [rows, serverRows],
-  );
+  const importableRows = React.useMemo(() => {
+    if (variantMode) {
+      // A variants group is written whole or not at all: it goes complete (its unchanged lines too) when one of its
+      // lines is new or to update, and never when a line of it is blocked, in error or in conflict.
+      const chosen = new Set(selectLinesToWrite(rows.filter((row) => row.status !== "ERROR").map(toLine), serverRows).map((line) => line.excelRow));
+      return rows.filter((row) => chosen.has(row.line));
+    }
+    return rows.filter((row) => {
+      if (row.status === "ERROR") return false;
+      return isImportableStatus(serverRows.get(row.line)?.status);
+    });
+  }, [rows, serverRows, variantMode]);
   // Photos of the ZIP for the lines the import keeps (new / updated / unchanged products).
   const photoRows = React.useMemo(
     () =>
@@ -284,7 +333,8 @@ export function ProductsImportPreview() {
       }),
     [rows, serverRows],
   );
-  const canImport = countsReady && (importableRows.length > 0 || photoRows.length > 0) && !importing;
+  // A products-with-variants file is written only once the supplier and the VAT of its new products are confirmed.
+  const canImport = countsReady && (importableRows.length > 0 || photoRows.length > 0) && !importing && (!variantMode || appliedDefaults !== null);
 
   // Distinct ref_fournisseur the import will create (each one once, whatever the number of lines).
   const suppliersToCreate = React.useMemo(
@@ -293,6 +343,31 @@ export function ProductsImportPreview() {
   );
   // Lines whose depot stock differs from QuantiteStock while "apply stock" is off.
   const pendingStockCount = React.useMemo(() => rows.filter((row) => serverRows.get(row.line)?.pendingStock).length, [rows, serverRows]);
+
+  // The variants format has no supplier / VAT column: load the organisation's suppliers once, to choose the one of the NEW products.
+  React.useEffect(() => {
+    if (!variantMode || suppliers.length > 0) return;
+    let cancelled = false;
+    fetch("/api/suppliers")
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status))))
+      .then((body: { suppliers?: Array<{ id: string; name: string }> }) => {
+        if (!cancelled) setSuppliers((body.suppliers ?? []).map((supplier) => ({ id: supplier.id, name: supplier.name })));
+      })
+      .catch(() => {
+        if (!cancelled) setSuppliersError("Impossible de charger les fournisseurs.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [variantMode, suppliers.length]);
+
+  function applyVariantDefaults() {
+    const confirmed = confirmedCreationDefaults(defaultsForm);
+    if (!confirmed) return;
+    const next = { ...confirmed, supplierName: suppliers.find((supplier) => supplier.id === confirmed.supplierId)?.name ?? "" };
+    setAppliedDefaults(next);
+    void checkWithDatabase(rows, applyStock, next);
+  }
 
   async function sendPhotos(): Promise<PhotoReport> {
     const report: PhotoReport = { sent: 0, updated: 0, unchanged: 0, rejected: [] };
@@ -320,7 +395,8 @@ export function ProductsImportPreview() {
     if (!canImport) return;
     // What the preview already set aside (not sent): the final report adds it up.
     const leftovers = { unchanged: counts.UNCHANGED, conflicts: counts.CONFLICT, errors: counts.ERROR };
-    const lines = importableRows.map(toLine);
+    // Variants: each line carries the size of its file group (unreadable lines included) so the server can refuse a short group.
+    const lines = variantMode ? withVariantGroupSizes(importableRows.map(toLine), rows) : importableRows.map(toLine);
     stopRequestedRef.current = false;
     setStopping(false);
     setImporting(true);
@@ -341,12 +417,27 @@ export function ProductsImportPreview() {
     });
     try {
       // Batches of 200 lines, sent strictly one after the other.
-      const result = await runBatchedImport({
-        rows: lines,
-        sendBatch: (batch) => postProductImportBatch(batch, { applyStock }),
-        onProgress: setImportProgress,
-        shouldStop: () => stopRequestedRef.current,
-      });
+      const result =
+        variantMode && appliedDefaults
+          ? await runBatchedImport({
+              rows: lines,
+              // The lines of a group travel together: a batch is cut only between two groups.
+              groupOf: variantGroupKeyOfLine,
+              sendBatch: (batch) =>
+                postProductImportBatch(batch, {
+                  applyStock,
+                  creationDefaults: { supplierId: appliedDefaults.supplierId, taxRate: appliedDefaults.taxRate },
+                  externalErrors: externalErrorsForBatch(batch, rows),
+                }),
+              onProgress: setImportProgress,
+              shouldStop: () => stopRequestedRef.current,
+            })
+          : await runBatchedImport({
+              rows: lines,
+              sendBatch: (batch) => postProductImportBatch(batch, { applyStock }),
+              onProgress: setImportProgress,
+              shouldStop: () => stopRequestedRef.current,
+            });
       setImportResult({ report: buildImportReport(result, leftovers), problemRows: result.problemRows });
       // Then the photos of the ZIP, a few at a time (the products exist now).
       if (photoRows.length && !stopRequestedRef.current) setPhotoReport(await sendPhotos());
@@ -387,6 +478,10 @@ export function ProductsImportPreview() {
           <code className="ml-1">QuantiteStock</code> est le stock <span className="font-medium text-foreground">cible</span> du dépôt (pas un ajout),
           appliqué seulement si vous le confirmez. Jusqu&apos;à {formatImportCount(PRODUCT_IMPORT_MAX_ROWS)} lignes par fichier.
         </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Un fichier avec variantes (7 colonnes sans en-tête : désignation, code-barres, catégorie, prix d&apos;achat TTC, prix de vente TTC, stock,
+          variantes <code>TAILLE: S | COULEUR: NOIR</code>) est reconnu automatiquement et affiché en aperçu groupé.
+        </p>
         {depot && (
           <p className="mt-1 text-sm">
             Dépôt cible : <span className="font-medium text-foreground">{depot.name}</span> ({depot.code})
@@ -425,6 +520,20 @@ export function ProductsImportPreview() {
         </div>
       )}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+
+      {rows.length > 0 && variantMode ? (
+        <ProductsImportVariantsPanel
+          columnsNotice={variantMode.columnsNotice}
+          suppliers={suppliers}
+          suppliersError={suppliersError}
+          form={defaultsForm}
+          applied={appliedDefaults ? { supplierName: appliedDefaults.supplierName, taxRate: appliedDefaults.taxRate } : null}
+          loading={serverLoading}
+          groups={groups}
+          onChange={setDefaultsForm}
+          onApply={applyVariantDefaults}
+        />
+      ) : null}
 
       {rows.length > 0 && hasStockColumn ? (
         <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" data-import="stock">
@@ -513,7 +622,9 @@ export function ProductsImportPreview() {
                     row.status === "ERROR"
                       ? "Erreur"
                       : server
-                        ? { NEW: "Nouveau", EXISTING_UNCHANGED: "Inchangé", EXISTING_UPDATE: "À mettre à jour", CONFLICT: "Conflit", ERROR: "Erreur" }[server.status]
+                        ? server.wouldBe
+                          ? "Bloqué (groupe)"
+                          : { NEW: "Nouveau", EXISTING_UNCHANGED: "Inchangé", EXISTING_UPDATE: "À mettre à jour", CONFLICT: "Conflit", ERROR: "Erreur" }[server.status]
                         : serverError
                           ? "Non vérifié"
                           : "…";
@@ -524,6 +635,11 @@ export function ProductsImportPreview() {
                       <td className="p-2">{values.reference}</td>
                       <td className="p-2">
                         {show(values.name)}
+                        {values.variantAttributes ? (
+                          <span className="block text-[0.7rem] text-muted-foreground">
+                            {values.variantParentName} · {describeVariantAttributes(values.variantAttributes)}
+                          </span>
+                        ) : null}
                         {values.productStatus ? <span className="block text-[0.7rem] text-muted-foreground">{PRODUCT_STATUS_LABELS[values.productStatus]}</span> : null}
                       </td>
                       <td className="p-2">
@@ -546,7 +662,9 @@ export function ProductsImportPreview() {
                       </td>
                       <td className="p-2 text-right tabular-nums">{show(values.purchasePriceTTC)}</td>
                       <td className="p-2 text-right tabular-nums">{show(values.salePriceTTC)}</td>
-                      <td className="p-2 text-right tabular-nums">{values.taxRate === undefined ? "—" : `${values.taxRate}%`}</td>
+                      <td className="p-2 text-right tabular-nums">
+                        {values.taxRate !== undefined ? `${values.taxRate}%` : server?.appliedTaxRate !== undefined ? `${server.appliedTaxRate}%` : "—"}
+                      </td>
                       <td className="p-2 text-right tabular-nums">{server?.currentStock ?? "—"}</td>
                       <td className="p-2 text-right tabular-nums">
                         {show(values.targetStock)}
@@ -560,6 +678,11 @@ export function ProductsImportPreview() {
                       <td className="p-2">{statusLabel}</td>
                       <td className="p-2 text-muted-foreground">
                         {row.status === "ERROR" ? row.message : server ? `${server.message}${changes ? ` — ${changes}` : ""}` : ""}
+                        {row.warnings.map((warning) => (
+                          <span key={warning} className="block text-[0.7rem] text-amber-700">
+                            {warning}
+                          </span>
+                        ))}
                       </td>
                     </tr>
                   );
@@ -581,6 +704,9 @@ export function ProductsImportPreview() {
             <Button type="button" onClick={runImport} disabled={!canImport} data-import="run">
               {importing ? "Importation en cours..." : "Importer les produits"}
             </Button>
+            {variantMode && !appliedDefaults ? (
+              <span className="text-sm text-amber-700">Confirmez le fournisseur et la TVA des nouveaux produits (cadre ci-dessus) pour pouvoir importer.</span>
+            ) : null}
             {!importing && countsReady && (
               <span className="text-sm text-muted-foreground">
                 {importableRows.length > 0

@@ -3,6 +3,9 @@ import {
   PRODUCT_IMPORT_MAX_CONSECUTIVE_FAILURES,
   PRODUCT_IMPORT_MIN_BATCH_SIZE,
   chunkRows,
+  countBatches,
+  nextBatchLength,
+  orderByGroup,
 } from "@/lib/products-import-shared";
 
 /**
@@ -36,6 +39,10 @@ export type BatchResponse = {
   /** Suppliers created by this batch (a new ref_fournisseur, once). */
   suppliersCreated?: number;
   stockMovementsCreated?: number;
+  /** Variants groups written whole / rolled back / refused by this batch. */
+  groupsWritten?: number;
+  groupsRolledBack?: number;
+  groupsRefused?: number;
 };
 
 export type BatchFailure = {
@@ -70,6 +77,9 @@ export type BatchedImportResult = {
   /** For the WHOLE file: the sum of the batches, each new supplier being created once. */
   suppliersCreated: number;
   stockMovementsCreated: number;
+  groupsWritten: number;
+  groupsRolledBack: number;
+  groupsRefused: number;
   failures: BatchFailure[];
   /** CONFLICT / ERROR lines the server reported, for the report. */
   problemRows: BatchRowResult[];
@@ -86,6 +96,13 @@ export type RunBatchedImportOptions<T extends { excelRow: number }> = {
   shouldStop?: () => boolean;
   batchSize?: number;
   maxConsecutiveFailures?: number;
+  /**
+   * The group key of a line (variants format), null for an ordinary line. The lines of a
+   * group are written in ONE transaction, so they always travel in the SAME batch: the
+   * lines are gathered by group first, and a batch is cut only between two groups - also
+   * when a slow server makes the batches shrink. Absent = the historical batching.
+   */
+  groupOf?: (row: T) => string | null;
 };
 
 export async function runBatchedImport<T extends { excelRow: number }>(
@@ -96,7 +113,8 @@ export async function runBatchedImport<T extends { excelRow: number }>(
   const total = options.rows.length;
 
   // The rows still to send, in file order. Deferred rows go back to the front.
-  const queue: T[] = [...options.rows];
+  const groupOf = options.groupOf;
+  const queue: T[] = groupOf ? orderByGroup(options.rows, groupOf) : [...options.rows];
   const progress: ImportProgress = {
     total,
     processed: 0,
@@ -107,16 +125,20 @@ export async function runBatchedImport<T extends { excelRow: number }>(
     conflicts: 0,
     errors: 0,
     batchesDone: 0,
-    batchesTotal: chunkRows(queue, batchSize).length,
+    batchesTotal: groupOf ? countBatches(queue, batchSize, groupOf) : chunkRows(queue, batchSize).length,
   };
   const failures: BatchFailure[] = [];
   const problemRows: BatchRowResult[] = [];
   let categoriesCreated = 0;
   let suppliersCreated = 0;
   let stockMovementsCreated = 0;
+  let groupsWritten = 0;
+  let groupsRolledBack = 0;
+  let groupsRefused = 0;
   let consecutiveFailures = 0;
   let stopped: BatchedImportResult["stopped"] = "completed";
 
+  const remainingBatches = () => (groupOf ? countBatches(queue, batchSize, groupOf) : chunkRows(queue, batchSize).length);
   const report = () => options.onProgress?.({ ...progress });
   report();
 
@@ -130,7 +152,7 @@ export async function runBatchedImport<T extends { excelRow: number }>(
       break;
     }
 
-    const batch = queue.splice(0, batchSize);
+    const batch = queue.splice(0, nextBatchLength(queue, batchSize, groupOf));
     const batchNumber = progress.batchesDone + 1;
     progress.batchesDone = batchNumber;
 
@@ -152,7 +174,7 @@ export async function runBatchedImport<T extends { excelRow: number }>(
     } catch (error) {
       fail(error instanceof Error && error.message ? error.message : "Le lot n'a pas pu être envoyé.", batch);
       consecutiveFailures += 1;
-      progress.batchesTotal = progress.batchesDone + chunkRows(queue, batchSize).length;
+      progress.batchesTotal = progress.batchesDone + remainingBatches();
       report();
       continue;
     }
@@ -172,6 +194,9 @@ export async function runBatchedImport<T extends { excelRow: number }>(
     categoriesCreated += response.categoriesCreated ?? 0;
     suppliersCreated += response.suppliersCreated ?? 0;
     stockMovementsCreated += response.stockMovementsCreated ?? 0;
+    groupsWritten += response.groupsWritten ?? 0;
+    groupsRolledBack += response.groupsRolledBack ?? 0;
+    groupsRefused += response.groupsRefused ?? 0;
 
     // Lines the server handed back (time budget): send them again, first, and
     // shrink the next batches so they fit the budget.
@@ -195,7 +220,7 @@ export async function runBatchedImport<T extends { excelRow: number }>(
       batchSize = Math.max(PRODUCT_IMPORT_MIN_BATCH_SIZE, Math.min(batchSize, answered.size));
     }
 
-    progress.batchesTotal = progress.batchesDone + chunkRows(queue, batchSize).length;
+    progress.batchesTotal = progress.batchesDone + remainingBatches();
     report();
   }
 
@@ -204,6 +229,9 @@ export async function runBatchedImport<T extends { excelRow: number }>(
     categoriesCreated,
     suppliersCreated,
     stockMovementsCreated,
+    groupsWritten,
+    groupsRolledBack,
+    groupsRefused,
     failures,
     problemRows,
     notSent: queue.length,
@@ -230,6 +258,10 @@ export type ImportReportView = {
   categoriesCreated: number;
   suppliersCreated: number;
   stockMovementsCreated: number;
+  /** Variants format only (absent for a historical import). */
+  groupsWritten?: number;
+  groupsRolledBack?: number;
+  groupsRefused?: number;
 };
 
 /**
@@ -260,6 +292,9 @@ export function buildImportReport(result: BatchedImportResult, leftovers: Previe
     categoriesCreated: result.categoriesCreated,
     suppliersCreated: result.suppliersCreated,
     stockMovementsCreated: result.stockMovementsCreated,
+    ...(result.groupsWritten + result.groupsRolledBack + result.groupsRefused > 0
+      ? { groupsWritten: result.groupsWritten, groupsRolledBack: result.groupsRolledBack, groupsRefused: result.groupsRefused }
+      : {}),
   };
 }
 

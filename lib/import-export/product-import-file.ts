@@ -1,6 +1,6 @@
 import { checkPhotoBytes, photoDataUrl, MAX_PHOTO_BYTES, type PhotoMime } from "@/lib/import-export/images";
-import { PRODUCT_SHEET_NAME, parseProductTable, type ParsedProductTable } from "@/lib/import-export/products-format";
-import { fileKind, readTableFile, TableFileError } from "@/lib/import-export/tabular";
+import { PRODUCT_SHEET_NAME, parseProductGrid, parseProductTable, type ParsedProductTable } from "@/lib/import-export/products-format";
+import { fileKind, readTableFile, readTableGrid, TableFileError } from "@/lib/import-export/tabular";
 import { findArchiveEntry, MAX_DATA_FILE_BYTES, readArchive } from "@/lib/import-export/zip";
 
 /**
@@ -47,13 +47,28 @@ function findDataFile(files: ReadonlyMap<string, Uint8Array>): { name: string; d
   return { name: preferred, data: files.get(preferred)! };
 }
 
-export function readProductImportFile(bytes: Uint8Array, fileName: string): ProductImportFile {
+export type ReadProductImportOptions = {
+  /**
+   * Also recognise the products-with-variants format (see parseProductGrid).
+   * Off (the default) = the file is read exactly as it always was: ref_produit
+   * required, a first row that is the header, no other format.
+   */
+  variantFormat?: boolean;
+};
+
+/** The data file's bytes -> parsed lines, by the historical reader or - with variantFormat - by the format-recognising one. */
+function parseDataFile(bytes: Uint8Array, fileName: string, options: ReadProductImportOptions): ParsedProductTable {
+  if (options.variantFormat) return parseProductGrid(readTableGrid(bytes, fileName, PRODUCT_SHEET_NAME));
+  const table = readTableFile(bytes, fileName, PRODUCT_SHEET_NAME);
+  return parseProductTable(table.headers, table.rows);
+}
+
+export function readProductImportFile(bytes: Uint8Array, fileName: string, options: ReadProductImportOptions = {}): ProductImportFile {
   const photos = new Map<number, LinePhoto>();
   const photoIssues = new Map<number, string>();
 
   if (fileKind(fileName) !== "zip") {
-    const table = readTableFile(bytes, fileName, PRODUCT_SHEET_NAME);
-    const parsed = parseProductTable(table.headers, table.rows);
+    const parsed = parseDataFile(bytes, fileName, options);
     for (const { line, photoPath } of parsed.lines) {
       if (photoPath) photoIssues.set(line.excelRow, "Photo ignorée : les images ne sont lues que dans une archive ZIP (fichier de données + dossier photos/).");
     }
@@ -62,8 +77,7 @@ export function readProductImportFile(bytes: Uint8Array, fileName: string): Prod
 
   const archive = readArchive(bytes, (path) => (DATA_FILE_RE.test(path) && !path.includes("/") ? MAX_DATA_FILE_BYTES : MAX_PHOTO_BYTES));
   const data = findDataFile(archive.files);
-  const table = readTableFile(data.data, data.name, PRODUCT_SHEET_NAME);
-  const parsed = parseProductTable(table.headers, table.rows);
+  const parsed = parseDataFile(data.data, data.name, options);
   const tooLarge = new Set(archive.tooLarge.map((entry) => entry.path.toLowerCase()));
   const usedPaths = new Map<string, number>();
 

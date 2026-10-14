@@ -40,6 +40,12 @@ export function ProductsImportReport({ report, problemRows }: ProductsImportRepo
         {formatImportCount(report.categoriesCreated)} · Stock — mouvements créés :{" "}
         {formatImportCount(report.stockMovementsCreated)}
       </p>
+      {report.groupsWritten !== undefined ? (
+        <p className="text-muted-foreground" data-import="groups-report">
+          Groupes de variantes — écrits : {formatImportCount(report.groupsWritten)} · annulés (aucune variante écrite) :{" "}
+          {formatImportCount(report.groupsRolledBack ?? 0)} · refusés avant écriture : {formatImportCount(report.groupsRefused ?? 0)}
+        </p>
+      ) : null}
 
       {report.failures.length > 0 ? (
         <div className="space-y-1">

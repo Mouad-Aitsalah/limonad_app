@@ -13,6 +13,7 @@ import {
   importBatchLimitMessage,
   importRowLimitMessage,
 } from "@/lib/products-import-shared";
+import { VARIANT_LIMITS, variantGroupKeyOf, variantKeyOf, type VariantAttribute } from "@/lib/products-import-variants";
 
 /**
  * The business rules of the products import (feuille "produits", CSV, or the
@@ -65,18 +66,66 @@ export const productImportRowSchema = z.object({
   productStatus: z.enum(["ACTIVE", "INACTIVE", "DISCONTINUED"]).optional(),
   // An external http(s) photo URL only (a ZIP photo is sent separately, see /api/produits/import/photos).
   imageUrl: z.string().trim().url().max(2000).regex(/^https?:\/\//i).optional(),
+  // ---- products-with-variants format only (never sent for a historical file) ----
+  // The parent product and the ordered attributes of the variant. The server
+  // RECOMPUTES the designation, the reference and the keys from them
+  // (lib/products-import-variant-groups.ts) and refuses a line whose values differ.
+  variantParentName: optionalText(200),
+  variantAttributes: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(VARIANT_LIMITS.maxNameLength),
+        value: z.string().trim().min(1).max(VARIANT_LIMITS.maxValueLength),
+      }),
+    )
+    .min(1)
+    .max(VARIANT_LIMITS.maxAttributes)
+    .optional(),
+  // How the reference was obtained: the barcode itself, or generated (no reference column in that format).
+  referenceSource: z.enum(["barcode", "generated"]).optional(),
+  // The number of lines the FILE has in this variant's group - the lines the browser itself
+  // refused included. The write is all-or-nothing per group, so the server checks that the
+  // request carries exactly that many (lib/products-import-variant-groups.ts): a group
+  // some of whose lines were hidden, or cut by a batch, is refused whole.
+  variantGroupSize: z.number().int().min(1).max(PRODUCT_IMPORT_MAX_ROWS).optional(),
+});
+
+/**
+ * Values applied ONLY to the lines the classification finds NEW and that carry
+ * no such value themselves (the variants format has no supplier and no VAT
+ * column): an existing product never receives them. The supplier is an existing
+ * active supplier of the organisation, chosen on the import page.
+ */
+export const creationDefaultsSchema = z.object({
+  supplierId: z.string().trim().min(1).max(100).optional(),
+  taxRate: z.number().finite().min(0).max(100).optional(),
+});
+
+/** A line of the file that never reached the server (invalid in the browser) but belongs to a variants group: it blocks the group. */
+export const externalVariantErrorSchema = z.object({
+  groupKey: z.string().min(1).max(600),
+  excelRow: z.number().int().positive(),
+  message: z.string().trim().min(1).max(500),
 });
 
 /** The whole file, for the read-only preview (global conflict detection). */
 export const productImportSchema = z.object({
   rows: z.array(productImportRowSchema).max(PRODUCT_IMPORT_MAX_ROWS),
   applyStock: z.boolean().optional(),
+  creationDefaults: creationDefaultsSchema.optional(),
+  externalErrors: z.array(externalVariantErrorSchema).max(PRODUCT_IMPORT_MAX_ROWS).optional(),
 });
 
-/** One batch of the real write: a few hundred lines, never the whole file. */
+/**
+ * One batch of the real write: a few hundred lines, never the whole file. For the variants
+ * format it also carries the page's supplier / VAT for the NEW products and the lines of the
+ * batch's groups that the browser refused itself (they are counted in the group's size and block it).
+ */
 export const productImportBatchSchema = z.object({
   rows: z.array(productImportRowSchema).max(PRODUCT_IMPORT_BATCH_MAX_ROWS),
   applyStock: z.boolean().optional(),
+  creationDefaults: creationDefaultsSchema.optional(),
+  externalErrors: z.array(externalVariantErrorSchema).max(PRODUCT_IMPORT_BATCH_MAX_ROWS).optional(),
 });
 
 /**
@@ -108,6 +157,19 @@ export function describeImportValidationError(
 }
 
 export type ProductImportRow = z.infer<typeof productImportRowSchema>;
+
+/** The creation defaults once the server has resolved the supplier id to its code. */
+export type ResolvedCreationDefaults = { supplierCode?: string; taxRate?: number };
+
+/** The unique identity of a variant in the database: (category, parent, combination) - the key of Product_variant_identity_key. */
+export function variantIdentityKey(categoryId: string, groupKey: string, key: string): string {
+  return [categoryId, groupKey, key].join("\u001f");
+}
+
+/** A line of the products-with-variants format (any of its fields). */
+export function rowCarriesVariantData(row: Pick<ProductImportRow, "variantParentName" | "variantAttributes" | "referenceSource">): boolean {
+  return row.variantParentName !== undefined || row.variantAttributes !== undefined || row.referenceSource !== undefined;
+}
 
 export type ProductImportStatus =
   | "NEW"
@@ -149,6 +211,22 @@ export type ClassifiedProductRow = ProductImportRow & {
   status: ProductImportStatus;
   message: string;
   changes: Record<string, ProductImportChange>;
+  /** Index of the variants group (VariantGroupSummary order) the line belongs to. */
+  variantGroupIndex?: number;
+  /** The line is part of a group blocked by an invalid variant: it is NOT importable (status ERROR/CONFLICT). */
+  groupBlocked?: boolean;
+  /** For a line blocked only because of its group: what it would have been (NEW, EXISTING_UPDATE, ...). */
+  wouldBe?: ProductImportStatus;
+  /** The VAT of the creation defaults, when it was used for this NEW line. */
+  appliedTaxRate?: number;
+  /** Variants format: the identity this line writes (display parent, normalised keys, ordered attributes). */
+  variantIdentity?: { parentName: string; groupKey: string; key: string; attributes: VariantAttribute[] };
+  /** The variant identity the EXISTING product of that reference already carries: null = an ordinary product; absent = not looked up. */
+  existingVariant?: { groupKey: string; key: string } | null;
+  /** ANOTHER product of the same category that already holds this variant identity (so it exists under a different reference). */
+  variantOwner?: { id: string; reference: string; name: string };
+  /** The existing ordinary product receives this line's variant identity (reference, designation and category matched exactly). */
+  attachVariant?: boolean;
 };
 
 export type ProductImportSummary = {
@@ -158,6 +236,8 @@ export type ProductImportSummary = {
   update: number;
   conflicts: number;
   errors: number;
+  /** Variants format only: lines blocked ONLY because another variant of their group is invalid. */
+  blocked?: number;
 };
 
 /**
@@ -244,7 +324,11 @@ export type ProductImportPreload = {
     status?: string;
     /** Loaded only for products whose line carries an external photo URL. */
     imageUrl?: string | null;
+    /** The variant identity stored on the product (null = ordinary product); absent = not loaded. */
+    variant?: { groupKey: string; key: string } | null;
   }[];
+  /** Variants format: products holding a variant identity of the file, keyed by variantIdentityKey(categoryId, groupKey, key). */
+  variantOwners?: Map<string, { id: string; reference: string; name: string }>;
   suppliers: { id: string; code: string; name: string; active: boolean }[];
   categories: { id: string; name: string }[];
   /** The organisation's brands (matched case-insensitively by name). */
@@ -257,16 +341,35 @@ export type ProductImportPreload = {
 
 const money2 = (value: number) => roundMoney(value);
 
-/** The columns a line must carry to CREATE a product (named as in the file). */
+/** The columns a line must carry to CREATE a product (named as in the file; as the import page's fields for the variants format). */
 function missingCreationFields(row: ProductImportRow): string[] {
+  const variants = rowCarriesVariantData(row);
   const missing: string[] = [];
-  if (row.name === undefined) missing.push("designation");
-  if (row.categoryName === undefined) missing.push("type");
-  if (row.supplierCode === undefined) missing.push("ref_fournisseur");
-  if (row.purchasePriceTTC === undefined) missing.push("prixAchatTTC");
-  if (row.salePriceTTC === undefined) missing.push("prixGros");
-  if (row.taxRate === undefined) missing.push("taux_tva");
+  if (row.name === undefined) missing.push(variants ? "désignation" : "designation");
+  if (row.categoryName === undefined) missing.push(variants ? "catégorie" : "type");
+  if (row.supplierCode === undefined) missing.push(variants ? "fournisseur (à choisir sur la page)" : "ref_fournisseur");
+  if (row.purchasePriceTTC === undefined) missing.push(variants ? "prix d'achat TTC" : "prixAchatTTC");
+  if (row.salePriceTTC === undefined) missing.push(variants ? "prix de vente TTC" : "prixGros");
+  if (row.taxRate === undefined) missing.push(variants ? "TVA (à confirmer sur la page)" : "taux_tva");
   return missing;
+}
+
+/**
+ * The line as it will be CREATED: the supplier and the VAT of the creation
+ * defaults fill what the line does not carry. The very same object comes back
+ * when there is nothing to fill, so a file without defaults is classified
+ * exactly as before.
+ */
+function withCreationDefaults(row: ProductImportRow, defaults: ResolvedCreationDefaults | undefined): ProductImportRow {
+  if (!defaults) return row;
+  const supplierCode = row.supplierCode === undefined ? defaults.supplierCode : undefined;
+  const taxRate = row.taxRate === undefined ? defaults.taxRate : undefined;
+  if (supplierCode === undefined && taxRate === undefined) return row;
+  return {
+    ...row,
+    ...(supplierCode !== undefined ? { supplierCode } : {}),
+    ...(taxRate !== undefined ? { taxRate } : {}),
+  };
 }
 
 /**
@@ -286,7 +389,7 @@ function missingCreationFields(row: ProductImportRow): string[] {
 export function classifyPreloadedRows(
   rows: ProductImportRow[],
   preload: ProductImportPreload,
-  options: { applyStock?: boolean } = {},
+  options: { applyStock?: boolean; creationDefaults?: ResolvedCreationDefaults } = {},
 ): { rows: ClassifiedProductRow[]; summary: ProductImportSummary } {
   const applyStock = options.applyStock ?? true;
   const productByRef = new Map(preload.products.map((product) => [product.reference, product]));
@@ -305,8 +408,10 @@ export function classifyPreloadedRows(
     if (row.barcode !== undefined) barcodeCounts.set(row.barcode, (barcodeCounts.get(row.barcode) ?? 0) + 1);
   }
 
-  const classified: ClassifiedProductRow[] = rows.map((row) => {
-    const existing = productByRef.get(row.reference);
+  const classified: ClassifiedProductRow[] = rows.map((input) => {
+    const existing = productByRef.get(input.reference);
+    // A product that does not exist yet is created with the defaults; an existing one never receives them.
+    const row = existing ? input : withCreationDefaults(input, options.creationDefaults);
     // The VAT used to turn the file's TTC prices into HT: the file's, else the stored one.
     const rate = row.taxRate ?? existing?.taxRate;
     const ht = (ttc: number | undefined) => (ttc !== undefined && rate !== undefined ? computePriceHTFromTTC(ttc, rate) : undefined);
@@ -314,8 +419,23 @@ export function classifyPreloadedRows(
     const category = row.categoryName !== undefined ? (categoryByKey.get(normalizeCategoryKey(row.categoryName)) ?? null) : null;
     const brand = row.brandName !== undefined ? (brandByKey.get(normalizeCategoryKey(row.brandName)) ?? null) : null;
 
+    const identity =
+      row.variantParentName !== undefined && row.variantAttributes !== undefined
+        ? {
+            parentName: row.variantParentName,
+            groupKey: variantGroupKeyOf(row.variantParentName),
+            key: variantKeyOf(row.variantAttributes),
+            attributes: row.variantAttributes,
+          }
+        : undefined;
+    const owner =
+      identity && category ? preload.variantOwners?.get(variantIdentityKey(category.id, identity.groupKey, identity.key)) : undefined;
+
     const base = {
       ...row,
+      ...(identity ? { variantIdentity: identity } : {}),
+      ...(existing && existing.variant !== undefined ? { existingVariant: existing.variant } : {}),
+      ...(owner && owner.id !== existing?.id ? { variantOwner: owner } : {}),
       purchasePriceHT: ht(row.purchasePriceTTC),
       salePriceHT: ht(row.salePriceTTC),
       retailPriceHT: ht(row.retailPriceTTC),
@@ -331,6 +451,7 @@ export function classifyPreloadedRows(
       pendingStock: null as ProductImportChange | null,
       existingId: null as string | null,
       changes: {} as Record<string, ProductImportChange>,
+      ...(row !== input && input.taxRate === undefined && row.taxRate !== undefined ? { appliedTaxRate: row.taxRate } : {}),
     };
     // never carry an undefined key for an absent price (keeps "absent" = absent)
     for (const key of ["purchasePriceHT", "salePriceHT", "retailPriceHT", "semiWholesalePriceHT"] as const) {

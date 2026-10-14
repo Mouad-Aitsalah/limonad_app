@@ -2,16 +2,20 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import type { ClassifiedProductRow } from "@/lib/products-import-rules";
+import { PRODUCT_IMPORT_GROUP_TX_MAX_WAIT_MS, PRODUCT_IMPORT_GROUP_TX_TIMEOUT_MS } from "@/lib/products-import-shared";
 import { writeImportBatch, type ImportWriteStore, type ProductImportBatchOutcome } from "@/lib/products-import-writer";
 import { nextCategoryCode } from "@/lib/server/categories";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { productImportLineTx, type ImportSequences } from "@/lib/server/products-import-core";
 import { nextMovementNumber } from "@/lib/server/sales-shared";
+// the SAME counter, reserved for a whole group in one step (see products-import-core.ts#commitMovements)
+import { nextMovementNumbers } from "@/lib/server/sales-shared";
 
 /** The real document numbers (category code, stock movement number) used by the core. */
 const IMPORT_SEQUENCES: ImportSequences = {
   nextCategoryCode: (tx, organizationId) => nextCategoryCode(tx, organizationId),
   nextMovementNumber: (tx, organizationId) => nextMovementNumber(tx, organizationId),
+  nextMovementNumbers: (tx, organizationId, count) => nextMovementNumbers(tx, organizationId, count),
 };
 
 export type { ImportRowResult, ImportRowStatus, ProductImportBatchOutcome } from "@/lib/products-import-writer";
@@ -44,6 +48,17 @@ function prismaImportStore(organizationId: string, userId: string, locationId: s
       withSerializableRetry(() =>
         prisma.$transaction((tx) => work(productImportLineTx(tx, organizationId, userId, locationId, IMPORT_SEQUENCES)), {
           isolationLevel: "Serializable",
+        }),
+      ),
+    // A whole variants group in ONE Serializable transaction, with the time a large group needs
+    // (Prisma's 5 s default would roll it back for nothing). Same retry on serialization failures:
+    // a retried attempt rolls the group back and replays all of it.
+    runGroup: (work) =>
+      withSerializableRetry(() =>
+        prisma.$transaction((tx) => work(productImportLineTx(tx, organizationId, userId, locationId, IMPORT_SEQUENCES, { deferMovements: true })), {
+          isolationLevel: "Serializable",
+          maxWait: PRODUCT_IMPORT_GROUP_TX_MAX_WAIT_MS,
+          timeout: PRODUCT_IMPORT_GROUP_TX_TIMEOUT_MS,
         }),
       ),
     describeError: (error) =>

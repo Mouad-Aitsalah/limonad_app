@@ -1,7 +1,13 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import type { ClassifiedProductRow, ProductImportRow, ProductImportSummary } from "@/lib/products-import-rules";
+import type {
+  ClassifiedProductRow,
+  ProductImportRow,
+  ProductImportSummary,
+  ResolvedCreationDefaults,
+} from "@/lib/products-import-rules";
+import type { ExternalVariantError, VariantGroupSummary } from "@/lib/products-import-variant-groups";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { classifyProductImportRowsWith } from "@/lib/server/products-import-core";
 
@@ -27,6 +33,8 @@ export {
   PRODUCT_IMPORT_MAX_ROWS,
 } from "@/lib/products-import-shared";
 export {
+  creationDefaultsSchema,
+  externalVariantErrorSchema,
   normalizeCategoryKey,
   productImportBatchSchema,
   productImportRowSchema,
@@ -102,7 +110,38 @@ export async function classifyProductImportRows(
   organizationId: string,
   locationId: string,
   rows: ProductImportRow[],
-  options: { applyStock: boolean },
-): Promise<{ rows: ClassifiedProductRow[]; summary: ProductImportSummary }> {
+  options: {
+    applyStock: boolean;
+    creationDefaults?: ResolvedCreationDefaults;
+    externalErrors?: readonly ExternalVariantError[];
+    /** The write: every variants line must declare its group size. */
+    requireGroupSize?: boolean;
+  },
+): Promise<{ rows: ClassifiedProductRow[]; summary: ProductImportSummary; groups: VariantGroupSummary[] }> {
   return classifyProductImportRowsWith(prisma, organizationId, locationId, rows, options);
+}
+
+/**
+ * The creation defaults of the request (variants format: no supplier / VAT column),
+ * checked: the supplier must be an ACTIVE supplier of the caller's organisation -
+ * it is looked up by id, scoped to the organisation, and never created here. The
+ * classification then uses its code. Read-only.
+ */
+export async function resolveCreationDefaults(
+  organizationId: string,
+  defaults: { supplierId?: string; taxRate?: number } | undefined,
+): Promise<ResolvedCreationDefaults | undefined> {
+  if (!defaults) return undefined;
+  const resolved: ResolvedCreationDefaults = {};
+  if (defaults.taxRate !== undefined) resolved.taxRate = defaults.taxRate;
+  if (defaults.supplierId !== undefined) {
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: defaults.supplierId, organizationId },
+      select: { code: true, active: true },
+    });
+    if (!supplier) throw new OperationsServiceError("Fournisseur par défaut introuvable dans votre organisation.", 422);
+    if (!supplier.active) throw new OperationsServiceError("Le fournisseur par défaut est inactif.", 422);
+    resolved.supplierCode = supplier.code;
+  }
+  return resolved;
 }

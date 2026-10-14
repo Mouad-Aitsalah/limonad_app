@@ -36,6 +36,49 @@ export function readText(value: unknown): string | undefined {
   return unguardText(String(value).trim());
 }
 
+export type BarcodeCell = {
+  /** The barcode as exact text (undefined for an empty cell or a refused one). */
+  value?: string;
+  /** The cell cannot be trusted: the line is refused with this message. */
+  error?: string;
+  /** Suspicious but possible: shown, never blocking. */
+  warning?: string;
+};
+
+/** What a spreadsheet writes when it turns a long number into "2,10E+12" (an "E" followed by a sign, or a decimal part). */
+const SCIENTIFIC_NOTATION = /^[+-]?\d+(?:[.,]\d+)?e[+-]\d+$|^[+-]?\d+[.,]\d+e[+-]?\d+$/i;
+
+/** Digits above which Excel keeps no precision: a number cell of 16 digits or more has already been rounded. */
+const EXCEL_EXACT_LIMIT = 1e15;
+
+/**
+ * A barcode cell, kept EXACT (it is an identifier, never a number):
+ *   - text stays text, leading zeros included ("0012345678905");
+ *   - a numeric Excel cell keeps all its digits when Excel kept them; with 16
+ *     digits or more, or decimals, Excel has rounded it -> refused (type the
+ *     barcode as text);
+ *   - a text already written in scientific notation ("2,10E+12") -> refused;
+ *   - a numeric cell of 12 or 7 digits may have lost a leading zero (EAN-13 /
+ *     EAN-8): a warning, not an error (a genuine UPC-A has 12 digits).
+ */
+export function readBarcode(value: unknown): BarcodeCell {
+  if (isBlankCell(value)) return {};
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value >= EXCEL_EXACT_LIMIT) {
+      return { error: "Code-barres numérique illisible ou arrondi par le tableur (15 chiffres conservés au plus) : saisissez-le en texte." };
+    }
+    const digits = String(value);
+    return digits.length === 12 || digits.length === 7
+      ? { value: digits, warning: `Code-barres numérique de ${digits.length} chiffres : un zéro initial a peut-être été perdu par le tableur, vérifiez-le.` }
+      : { value: digits };
+  }
+  const text = unguardText(String(value).trim());
+  if (SCIENTIFIC_NOTATION.test(text)) {
+    return { error: `Code-barres « ${text} » en notation scientifique : le tableur l'a converti, saisissez-le en texte.` };
+  }
+  return { value: text };
+}
+
 /**
  * A decimal number written with a comma OR a point ("33,5731" / "33.5731"),
  * thousands separated by spaces, or "1 234,56" / "1.234,56". When both "," and

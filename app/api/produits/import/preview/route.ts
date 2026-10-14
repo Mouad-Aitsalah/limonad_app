@@ -8,6 +8,7 @@ import { requireOrganizationUser } from "@/lib/server/organization-context";
 import {
   classifyProductImportRows,
   productImportSchema,
+  resolveCreationDefaults,
   resolveImportDepotTarget,
 } from "@/lib/server/products-import";
 
@@ -35,11 +36,13 @@ export async function POST(request: Request) {
     const depot = await resolveImportDepotTarget(user.organizationId, user.id);
     // QuantiteStock is compared (and reported as an update) only when the user
     // explicitly asked to apply it; otherwise it comes back as pendingStock.
-    const { rows, summary } = await classifyProductImportRows(
+    // Variants format only: the supplier / VAT chosen on the page for the NEW products.
+    const creationDefaults = await resolveCreationDefaults(user.organizationId, input.creationDefaults);
+    const { rows, summary, groups } = await classifyProductImportRows(
       user.organizationId,
       depot.locationId,
       input.rows,
-      { applyStock: input.applyStock === true },
+      { applyStock: input.applyStock === true, creationDefaults, externalErrors: input.externalErrors },
     );
 
     return NextResponse.json({
@@ -56,7 +59,13 @@ export async function POST(request: Request) {
         status: row.status,
         message: row.message,
         changes: row.changes,
+        // Present only for the variants format: a historical answer is unchanged.
+        ...(row.variantGroupIndex !== undefined ? { variantGroupIndex: row.variantGroupIndex } : {}),
+        ...(row.groupBlocked ? { groupBlocked: true } : {}),
+        ...(row.wouldBe !== undefined ? { wouldBe: row.wouldBe } : {}),
+        ...(row.appliedTaxRate !== undefined ? { appliedTaxRate: row.appliedTaxRate } : {}),
       })),
+      ...(groups.length ? { groups } : {}),
     });
   } catch (error) {
     if (

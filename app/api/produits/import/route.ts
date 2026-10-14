@@ -11,6 +11,7 @@ import { applyProductImportBatch, type ImportRowStatus } from "@/lib/server/prod
 import {
   classifyProductImportRows,
   productImportBatchSchema,
+  resolveCreationDefaults,
   resolveImportDepotTarget,
 } from "@/lib/server/products-import";
 
@@ -57,11 +58,16 @@ export async function POST(request: Request) {
     const startedAt = Date.now();
     const depot = await resolveImportDepotTarget(user.organizationId, user.id);
     const applyStock = input.applyStock === true;
+    // Variants format: the supplier / VAT of the NEW products are checked again HERE, in the caller's organisation -
+    // never taken from the browser as they are. A group is written whole or not at all: every variants line must
+    // declare its group's size, and the server compares it with the lines it received plus the lines the browser
+    // reports it refused itself (requireGroupSize) - an incomplete group is refused before any write.
+    const creationDefaults = await resolveCreationDefaults(user.organizationId, input.creationDefaults);
     const { rows } = await classifyProductImportRows(
       user.organizationId,
       depot.locationId,
       input.rows,
-      { applyStock },
+      { applyStock, creationDefaults, externalErrors: input.externalErrors, requireGroupSize: true },
     );
 
     const outcome = await applyProductImportBatch({
@@ -90,6 +96,9 @@ export async function POST(request: Request) {
           errors: countStatus("ERROR"),
           applyStock,
           stockMovementsCreated: outcome.stockMovementsCreated,
+          groupsWritten: outcome.groupsWritten,
+          groupsRolledBack: outcome.groupsRolledBack,
+          groupsRefused: outcome.groupsRefused,
           depot: depot.depotCode,
         },
       },
@@ -108,6 +117,9 @@ export async function POST(request: Request) {
       suppliersCreated: outcome.suppliersCreated,
       brandsCreated: outcome.brandsCreated,
       stockMovementsCreated: outcome.stockMovementsCreated,
+      groupsWritten: outcome.groupsWritten,
+      groupsRolledBack: outcome.groupsRolledBack,
+      groupsRefused: outcome.groupsRefused,
       depot: { name: depot.depotName, code: depot.depotCode },
       rows: outcome.results,
       // Lines not started because the time budget was spent: send them again.

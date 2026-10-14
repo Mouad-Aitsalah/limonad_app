@@ -27,6 +27,14 @@ export const PRODUCT_IMPORT_MIN_BATCH_SIZE = 25;
  * (maxDuration is 60 s; this leaves room for the response and a slow last line). */
 export const PRODUCT_IMPORT_BATCH_TIME_BUDGET_MS = 40_000;
 
+/**
+ * The transaction of ONE variants group (up to 200 lines written together). Prisma's own
+ * defaults - 2 s to get a connection, 5 s to finish - would roll a large group back for
+ * nothing. Must stay below the 60 s request limit, with room for the response.
+ */
+export const PRODUCT_IMPORT_GROUP_TX_TIMEOUT_MS = 30_000;
+export const PRODUCT_IMPORT_GROUP_TX_MAX_WAIT_MS = 10_000;
+
 /** After this many failed batches in a row the browser stops sending more. */
 export const PRODUCT_IMPORT_MAX_CONSECUTIVE_FAILURES = 3;
 
@@ -46,6 +54,72 @@ export function importRowLimitMessage(rowCount: number): string {
 
 export function importBatchLimitMessage(rowCount: number): string {
   return `Un lot d'import ne peut pas dépasser ${formatImportCount(PRODUCT_IMPORT_BATCH_MAX_ROWS)} lignes (reçu : ${formatImportCount(rowCount)}).`;
+}
+
+/**
+ * Groups the items so that the items of one group are consecutive (the group keeps the
+ * place of its first item; every other item keeps its own place). `groupOf` returns the
+ * group key of an item, or null for an item that belongs to no group.
+ */
+export function orderByGroup<T>(items: readonly T[], groupOf: (item: T) => string | null): T[] {
+  const ordered: Array<T | T[]> = [];
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = groupOf(item);
+    if (key === null) {
+      ordered.push(item);
+      continue;
+    }
+    const group = groups.get(key);
+    if (group) group.push(item);
+    else {
+      const created = [item];
+      groups.set(key, created);
+      ordered.push(created);
+    }
+  }
+  return ordered.flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
+}
+
+/**
+ * How many items, from the start of `queue`, make the next batch: at least `size` of them
+ * (when the queue has that many) but NEVER ending in the middle of a group - the items of
+ * a group are consecutive (see orderByGroup), so a batch extends to the end of the group
+ * it reaches. A group that would take the batch past `maxRows` starts the next batch
+ * instead (only a group larger than `maxRows` on its own exceeds it - the server refuses
+ * such a group anyway). Without `groupOf` this is exactly `min(size, queue.length)`.
+ */
+export function nextBatchLength<T>(
+  queue: readonly T[],
+  size: number,
+  groupOf?: (item: T) => string | null,
+  maxRows: number = PRODUCT_IMPORT_BATCH_MAX_ROWS,
+): number {
+  if (!groupOf) return Math.min(size, queue.length);
+  let taken = 0;
+  while (taken < queue.length && taken < size) {
+    const key = groupOf(queue[taken]);
+    let unitEnd = taken + 1;
+    if (key !== null) while (unitEnd < queue.length && groupOf(queue[unitEnd]) === key) unitEnd += 1;
+    if (taken > 0 && unitEnd > maxRows) break;
+    taken = unitEnd;
+  }
+  return taken;
+}
+
+/** The number of batches nextBatchLength cuts `queue` into. */
+export function countBatches<T>(
+  queue: readonly T[],
+  size: number,
+  groupOf?: (item: T) => string | null,
+  maxRows: number = PRODUCT_IMPORT_BATCH_MAX_ROWS,
+): number {
+  let batches = 0;
+  for (let start = 0; start < queue.length; ) {
+    start += nextBatchLength(queue.slice(start, start + maxRows + size), size, groupOf, maxRows) || 1;
+    batches += 1;
+  }
+  return batches;
 }
 
 /**

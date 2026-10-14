@@ -35,6 +35,9 @@ export function fileKind(fileName: string): "xlsx" | "csv" | "zip" | null {
 }
 
 function decodeText(bytes: Uint8Array): string {
+  // Excel's "Texte Unicode" is UTF-16 with a byte order mark (little endian; big endian on some tools).
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder("utf-16be").decode(bytes.subarray(2));
   const utf8 = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   // A file saved in Windows-1252 by an old spreadsheet shows U+FFFD: decode it as such.
   if (utf8.includes("�")) {
@@ -47,8 +50,15 @@ function decodeText(bytes: Uint8Array): string {
   return utf8;
 }
 
-/** The header row and the data rows of a file; throws TableFileError with a readable message. */
-export function readTableFile(bytes: Uint8Array, fileName: string, sheetName: string): ReadTable {
+/**
+ * Every row of the file as it is (the first one included, no header assumed): a
+ * CSV is decoded (UTF-8 with or without BOM, UTF-16 with BOM, else Windows-1252)
+ * and split without type guessing; an Excel workbook is read on the named sheet.
+ * Throws TableFileError with a readable message. readTableFile below assumes the
+ * first row is the header; a reader that must recognise a file WITHOUT header
+ * (the products import with variants) starts from this grid.
+ */
+export function readTableGrid(bytes: Uint8Array, fileName: string, sheetName: string): unknown[][] {
   const kind = fileKind(fileName);
   let grid: unknown[][];
   if (kind === "csv") {
@@ -69,6 +79,11 @@ export function readTableFile(bytes: Uint8Array, fileName: string, sheetName: st
   } else {
     throw new TableFileError("Format de fichier non pris en charge (.xlsx, .xls, .csv ou .zip attendu).");
   }
+  return grid;
+}
+
+/** The data rows of a grid below its header row, each with its line number (header = line 1), entirely empty rows dropped. */
+export function tableFromGrid(grid: readonly unknown[][]): ReadTable {
   const [headers = [], ...rows] = grid;
   // Keep the real line number, then drop rows that are entirely empty (formatting left in a spreadsheet).
   return {
@@ -77,6 +92,11 @@ export function readTableFile(bytes: Uint8Array, fileName: string, sheetName: st
       .map((cells, index) => ({ line: index + 2, cells }))
       .filter((row) => row.cells.some((cell) => cell !== null && cell !== undefined && String(cell).trim() !== "")),
   };
+}
+
+/** The header row and the data rows of a file; throws TableFileError with a readable message. */
+export function readTableFile(bytes: Uint8Array, fileName: string, sheetName: string): ReadTable {
+  return tableFromGrid(readTableGrid(bytes, fileName, sheetName));
 }
 
 /** An .xlsx workbook with one sheet. */
