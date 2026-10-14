@@ -45,6 +45,12 @@ export type CustomerDebtDto = {
   settlementsTotal: number;
   /** max(0, creditSalesTotal - creditNotesTotal - settlementsTotal). */
   debt: number;
+  /**
+   * Lot 2 - present ONLY once the debt cutover is active (lib/credit-note-debt-rule.ts): the total of the
+   * VALIDATED cash refunds validated on or after it, which creditNotesTotal does NOT include. Information
+   * only - never part of the formula.
+   */
+  cashRefundsNotDeductedTotal?: number;
 };
 
 /**

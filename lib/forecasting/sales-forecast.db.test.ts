@@ -7,6 +7,7 @@ import { after, before, test } from "node:test";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@/lib/generated/prisma/client";
+import { assertDevDatabaseOnly, assertLoopbackServer } from "@/lib/db-test-guard";
 
 import { addDays } from "./daily-sales-series";
 import type { ForecastDb } from "./product-daily-sales";
@@ -18,10 +19,13 @@ import { buildSalesForecast } from "./sales-forecast";
  * Skipped when the database is unreachable.
  */
 
+// Never against production or a hosted database (lib/db-test-guard.ts): throws before any connection is made.
+assertDevDatabaseOnly("lib/forecasting/sales-forecast.db.test.ts");
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 let reachable = false;
 
 before(async () => {
+  await assertLoopbackServer(prisma, "lib/forecasting/sales-forecast.db.test.ts");
   try {
     await Promise.race([
       prisma.$queryRaw`select 1`,

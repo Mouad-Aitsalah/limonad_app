@@ -29,6 +29,9 @@ type CreditNoteCartLine = {
    * editing them client-side would be misleading, so those two inputs are
    * disabled. */
   readOnlyPricing?: boolean;
+  /** Why the pricing is read-only, shown on the disabled inputs. Absent = the
+   * linked-line wording (price of the original sale). */
+  readOnlyPricingReason?: string;
   /** Linked line: caps the quantity input so the UI can't even suggest
    * returning more than what's actually still returnable (the server
    * enforces this regardless - this is just the fast, friendly feedback). */
@@ -140,7 +143,11 @@ export function CreditNoteCart({
                 step="0.01"
                 value={line.unitPrice}
                 disabled={disabled || line.readOnlyPricing}
-                title={line.readOnlyPricing ? "Prix reel de la vente d'origine - non modifiable" : undefined}
+                title={
+                  line.readOnlyPricing
+                    ? (line.readOnlyPricingReason ?? "Prix reel de la vente d'origine - non modifiable")
+                    : undefined
+                }
                 onChange={(event) =>
                   onUnitPriceChange(line.productId, Math.max(0, Number(event.target.value) || 0))
                 }
@@ -154,7 +161,11 @@ export function CreditNoteCart({
                 max={100}
                 value={line.discountPercent}
                 disabled={disabled || line.readOnlyPricing}
-                title={line.readOnlyPricing ? "Remise reelle de la vente d'origine - non modifiable" : undefined}
+                title={
+                  line.readOnlyPricing
+                    ? (line.readOnlyPricingReason ?? "Remise reelle de la vente d'origine - non modifiable")
+                    : undefined
+                }
                 onChange={(event) =>
                   onDiscountChange(
                     line.productId,

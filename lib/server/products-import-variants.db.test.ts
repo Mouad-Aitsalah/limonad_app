@@ -7,6 +7,7 @@ import { after, before, test } from "node:test";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@/lib/generated/prisma/client";
+import { assertDevDatabaseOnly, assertLoopbackServer } from "@/lib/db-test-guard";
 import { parseProductGrid } from "@/lib/import-export/products-format";
 import { productImportRowSchema, type ProductImportRow } from "@/lib/products-import-rules";
 import { classifyProductImportRowsWith } from "@/lib/server/products-import-core";
@@ -19,6 +20,8 @@ import { classifyProductImportRowsWith } from "@/lib/server/products-import-core
  * Skipped when the database is unreachable or empty.
  */
 
+// Never against production or a hosted database (lib/db-test-guard.ts): throws before any connection is made.
+assertDevDatabaseOnly("lib/server/products-import-variants.db.test.ts");
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 let ctx: {
   organizationId: string;
@@ -30,6 +33,7 @@ let ctx: {
 } | null = null;
 
 before(async () => {
+  await assertLoopbackServer(prisma, "lib/server/products-import-variants.db.test.ts");
   try {
     const product = await prisma.product.findFirst({
       where: { category: { name: { not: "" } } },

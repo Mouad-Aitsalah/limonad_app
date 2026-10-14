@@ -10,11 +10,13 @@ import {
 } from "@/lib/credit-note-rounding";
 import { addMoney, MONEY_RANGE_MAX_NUMBER, multiplyMoney, roundMoney, subtractMoney } from "@/lib/money";
 import { computeLinkedReturnTotals } from "@/lib/pos-discount";
+import { DRIVER_GOODS_RETURNS_DISABLED_MESSAGE, DRIVER_GOODS_RETURNS_ENABLED } from "@/lib/driver-returns-policy";
 import { prisma } from "@/lib/prisma";
 import type {
   CreditNoteOrigin as PrismaCreditNoteOrigin,
   CreditNotePartyType as PrismaCreditNotePartyType,
   CreditNoteReason as PrismaCreditNoteReason,
+  CreditNoteRefundMethod as PrismaCreditNoteRefundMethod,
   CreditNoteStatus as PrismaCreditNoteStatus,
 } from "@/lib/generated/prisma/enums";
 import type { CreditNoteGetPayload } from "@/lib/generated/prisma/models/CreditNote";
@@ -29,8 +31,9 @@ import { DocumentType, reserveDocumentSequence } from "@/lib/server/document-seq
 import {
   asOrganizationUser,
   requireOrganizationUser,
+  type OrganizationSessionUser,
 } from "@/lib/server/organization-context";
-import type { CurrentUser } from "@/types/auth";
+import type { CurrentUser, UserRole } from "@/types/auth";
 import type {
   CreateCreditNoteInput,
   CreateDriverReturnInput,
@@ -39,6 +42,7 @@ import type {
   CreditNoteOrigin,
   CreditNotePartyType,
   CreditNoteReason,
+  CreditNoteRefundMode,
   CreditNoteSaleOrigin,
   CreditNoteStatus,
   ReturnableProduct,
@@ -134,6 +138,101 @@ const partyTypeToUi: Record<PrismaCreditNotePartyType, CreditNotePartyType> = {
   SUPPLIER: "fournisseur",
 };
 
+// Lot 1 (avoirs): how a desk credit note is settled. The stored enum and its
+// accounting entry are unchanged (postValidatedCreditNoteAccountingEntry):
+//  - CASH = cash refunded from the till (7111 / 117 / 117 / 51611), the default;
+//  - BANK = amount credited to the customer's account (7119 + VAT / customer).
+// A supplier note always keeps CASH, its current treatment (4411 / 6111 / 34552).
+const refundModeToPrisma: Record<CreditNoteRefundMode, PrismaCreditNoteRefundMethod> = {
+  remboursement_especes: "CASH",
+  avoir_sur_compte: "BANK",
+};
+
+const refundModeFromPrisma: Record<PrismaCreditNoteRefundMethod, CreditNoteRefundMode> = {
+  CASH: "remboursement_especes",
+  BANK: "avoir_sur_compte",
+};
+
+/** Roles that create and validate desk credit notes (customer and supplier). */
+const DESK_CREDIT_NOTE_ROLES: UserRole[] = ["admin", "depot_manager", "cashier"];
+/** Roles that reverse (contre-passer) a validated credit note - unchanged. */
+const CREDIT_NOTE_REVERSAL_ROLES: UserRole[] = ["admin", "depot_manager"];
+
+/**
+ * Minimum length of the written justification of a desk CUSTOMER credit note,
+ * checked server-side for every role (the reason itself is always required by
+ * the schema). A supplier note keeps its previous rule (comment only for "Autre").
+ */
+export const CREDIT_NOTE_JUSTIFICATION_MIN_LENGTH = 5;
+
+function assertCustomerJustification(comment: string | null | undefined) {
+  if ((comment?.trim().length ?? 0) < CREDIT_NOTE_JUSTIFICATION_MIN_LENGTH) {
+    throw new OperationsServiceError(
+      `La justification est obligatoire pour un avoir client (${CREDIT_NOTE_JUSTIFICATION_MIN_LENGTH} caracteres minimum).`,
+      422,
+      { comment: "Justification obligatoire." },
+    );
+  }
+}
+
+/**
+ * Lot 1 - price control when a CASHIER validates a customer draft. The lines of a
+ * draft WITHOUT a sale line (a return with no invoice) must still carry the
+ * catalogue values of their product - sale price HT, no discount, the product's VAT
+ * - read NOW from the database. Returns the names of the products that differ.
+ * Lines linked to an invoice are exempt (they are priced from their sale line, for
+ * every role). Nothing is recalculated here: the caller refuses, it never edits.
+ */
+async function findLinesOffCatalogue(
+  tx: Pick<typeof prisma, "product">,
+  organizationId: string,
+  lines: Array<{
+    saleLineId: string | null;
+    productId: string;
+    unitPriceHT: { equals(other: unknown): boolean };
+    discountRate: { isZero(): boolean };
+    taxRate: { equals(other: unknown): boolean };
+    product: { name: string };
+  }>,
+): Promise<string[]> {
+  const freeLines = lines.filter((line) => !line.saleLineId);
+  if (freeLines.length === 0) return [];
+  const catalogue = await tx.product.findMany({
+    where: { id: { in: [...new Set(freeLines.map((line) => line.productId))] }, organizationId },
+    select: { id: true, salePrice: true, taxRate: true },
+  });
+  const byId = new Map(catalogue.map((product) => [product.id, product]));
+  const differing = new Set<string>();
+  for (const line of freeLines) {
+    const product = byId.get(line.productId);
+    if (
+      !product ||
+      !line.unitPriceHT.equals(product.salePrice) ||
+      !line.discountRate.isZero() ||
+      !line.taxRate.equals(product.taxRate)
+    ) {
+      differing.add(line.product.name);
+    }
+  }
+  return [...differing];
+}
+
+/**
+ * A desk credit note only ever moves the stock of a DEPOT: a customer return goes
+ * back to a depot, a supplier return leaves a depot. Truck stock is reserved to the
+ * driver return (createDriverReturn), which never comes through here.
+ */
+function assertDepotLocation(location: { type: string } | null, partyType: CreditNotePartyType) {
+  if (location && location.type !== "DEPOT") {
+    throw new OperationsServiceError(
+      partyType === "client"
+        ? "Un avoir client doit reintegrer le stock dans un depot (camion refuse)."
+        : "Un avoir fournisseur doit sortir le stock d'un depot (camion refuse).",
+      422,
+    );
+  }
+}
+
 const manualCreditNoteLineSchema = z.object({
   productId: z.string().trim().min(1, "Le produit est obligatoire."),
   // F8-D: input-level sanity bounds only, not the real protection - see
@@ -173,6 +272,9 @@ export const createCreditNoteSchema = z.object({
   // no SaleLine-equivalent to link against, so this stays optional here
   // and unused on that path.
   returnMode: z.enum(["LINKED", "MANUAL"]).optional(),
+  // Lot 1: cash refund (default) or amount credited to the customer's account.
+  // A supplier note only accepts the cash mode (its current treatment).
+  refundMode: z.enum(["remboursement_especes", "avoir_sur_compte"]).optional(),
   reason: z.enum([
     "produit_defectueux",
     "produit_endommage",
@@ -262,11 +364,31 @@ export async function getCreditNoteById(
 }
 
 export async function saveCreditNoteDraft(input: CreateCreditNoteInput): Promise<CreditNote> {
-  return persistManualCreditNote(input, "BROUILLON");
+  const user = await requireOrganizationUser(DESK_CREDIT_NOTE_ROLES);
+  return persistManualCreditNote(user, input, "BROUILLON");
 }
 
 export async function createManualCreditNote(input: CreateCreditNoteInput): Promise<CreditNote> {
-  return persistManualCreditNote(input, "VALIDE");
+  const user = await requireOrganizationUser(DESK_CREDIT_NOTE_ROLES);
+  return persistManualCreditNote(user, input, "VALIDE");
+}
+
+// The *As variants run the exact same code for an already-resolved user. The
+// exported functions above (used by the API routes) resolve the session first;
+// these exist so the rules can be tested against a throwaway database without a
+// browser session. They re-check the role themselves - never a way around it.
+export async function saveCreditNoteDraftAs(
+  user: CurrentUser,
+  input: CreateCreditNoteInput,
+): Promise<CreditNote> {
+  return persistManualCreditNote(asOrganizationUser(user), input, "BROUILLON");
+}
+
+export async function createManualCreditNoteAs(
+  user: CurrentUser,
+  input: CreateCreditNoteInput,
+): Promise<CreditNote> {
+  return persistManualCreditNote(asOrganizationUser(user), input, "VALIDE");
 }
 
 export async function createCreditNote(
@@ -279,7 +401,12 @@ export async function createCreditNote(
 }
 
 export async function validateCreditNote(id: string): Promise<CreditNote> {
-  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const user = await requireOrganizationUser(DESK_CREDIT_NOTE_ROLES);
+  return validateCreditNoteAs(user, id);
+}
+
+export async function validateCreditNoteAs(sessionUser: CurrentUser, id: string): Promise<CreditNote> {
+  const user = asOrganizationUser(assertUserRole(sessionUser, DESK_CREDIT_NOTE_ROLES));
 
   return withSerializableRetry(async () =>
     prisma.$transaction(
@@ -292,19 +419,48 @@ export async function validateCreditNote(id: string): Promise<CreditNote> {
         if (!existing) {
           throw new OperationsServiceError("Avoir introuvable.", 404);
         }
+        // Read inside the same Serializable transaction as the update below: two
+        // concurrent validations of one draft can never both pass this guard.
         if (existing.status !== "DRAFT") {
           throw new OperationsServiceError("Seul un brouillon peut etre valide.", 422);
         }
         if (existing.lines.length === 0) {
           throw new OperationsServiceError("Le brouillon ne contient aucune ligne.", 422);
         }
-        // F4 finalization: the MANUAL-mode role restriction applies for
-        // the note's whole lifecycle, not only at creation - a cashier
-        // cannot validate a MANUAL draft even if an admin/depot_manager
-        // created it. origin is the persisted, authoritative record of the
-        // mode decision (see persistManualCreditNote).
-        if (existing.partyType === "CUSTOMER" && existing.origin === "MANUAL") {
-          assertUserRole(user, ["admin", "depot_manager"]);
+        // Lot 1: the cashier now validates customer credit notes like the other
+        // desk roles (the MANUAL-only restriction is lifted). The rules that
+        // replace it apply to every desk note, whoever validates it: a written
+        // justification for a customer note, and depot stock only. A driver
+        // return is never a draft (createDriverReturn validates at once), so a
+        // draft always comes from the desk.
+        if (existing.partyType === "CUSTOMER") {
+          assertCustomerJustification(existing.comment);
+        }
+        const deskLocationId =
+          existing.partyType === "CUSTOMER"
+            ? existing.stockDestinationLocationId
+            : existing.stockSourceLocationId;
+        if (deskLocationId) {
+          const deskLocation = await tx.stockLocation.findFirst({
+            where: { id: deskLocationId, organizationId: user.organizationId },
+            select: { type: true },
+          });
+          assertDepotLocation(deskLocation, partyTypeToUi[existing.partyType]);
+        }
+        // Lot 1: a cashier never validates a customer draft whose lines without an
+        // invoice differ from the catalogue (price, discount or VAT) - whoever wrote
+        // it, and whether the catalogue moved since. Refused before any side effect;
+        // admin and depot manager are not restricted, supplier notes are exempt.
+        if (existing.partyType === "CUSTOMER" && user.role === "cashier") {
+          const differing = await findLinesOffCatalogue(tx, user.organizationId, existing.lines);
+          if (differing.length > 0) {
+            throw new OperationsServiceError(
+              `Ce brouillon contient des prix differents du catalogue (${differing.join(", ")}) : ` +
+                "re-enregistrez-le pour recalculer les prix, ou faites-le valider par un administrateur ou un responsable de depot.",
+              403,
+              { lines: "Prix, remise ou TVA differents du catalogue." },
+            );
+          }
         }
 
         // F4: re-enforce the returnable cap here too, not only at creation
@@ -430,7 +586,12 @@ export async function validateCreditNote(id: string): Promise<CreditNote> {
 }
 
 export async function reverseCreditNote(id: string): Promise<CreditNote> {
-  const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  const user = await requireOrganizationUser(CREDIT_NOTE_REVERSAL_ROLES);
+  return reverseCreditNoteAs(user, id);
+}
+
+export async function reverseCreditNoteAs(sessionUser: CurrentUser, id: string): Promise<CreditNote> {
+  const user = asOrganizationUser(assertUserRole(sessionUser, CREDIT_NOTE_REVERSAL_ROLES));
 
   return withSerializableRetry(async () =>
     prisma.$transaction(
@@ -660,11 +821,11 @@ export async function reverseCreditNote(id: string): Promise<CreditNote> {
 export async function getReturnableProductsForCustomer(
   customerId: string,
 ): Promise<ReturnableProduct[]> {
-  // "driver" included (F4): a driver return needs the same suggested
-  // returnable-quantity figures the admin/depot_manager/cashier UI already
-  // shows - this stays a read-only suggestion, createDriverReturn below is
-  // still the sole authority that enforces the actual cap.
-  const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier", "driver"]);
+  // Desk roles only. The driver role used to be allowed here (F4, for the driver
+  // return); drivers have no access to goods returns any more
+  // (lib/driver-returns-policy.ts), and this read is not scoped to a driver's own
+  // customers - it lists a customer's whole purchase history of the organisation.
+  const currentUser = await requireOrganizationUser(DESK_CREDIT_NOTE_ROLES);
   return computeReturnableProducts(currentUser.organizationId, customerId);
 }
 
@@ -732,6 +893,12 @@ const driverReturnSchema = z.object({
  * at all rather than silently rejecting it deep inside a shared helper.
  */
 export async function createDriverReturn(input: CreateDriverReturnInput): Promise<CreditNote> {
+  // FIRST statement, before any session or database access: goods returns are closed
+  // to drivers (lib/driver-returns-policy.ts). The rest of this function is kept as it
+  // was - no caller, present or future, can reach it while the switch is off.
+  if (!DRIVER_GOODS_RETURNS_ENABLED) {
+    throw new OperationsServiceError(DRIVER_GOODS_RETURNS_DISABLED_MESSAGE, 403);
+  }
   const user = await requireOrganizationUser(["driver"]);
   if (!user.driverId || !user.truckId) {
     throw new OperationsServiceError("Aucun camion n'est affecte a votre compte.", 403);
@@ -989,10 +1156,11 @@ export async function createDriverReturn(input: CreateDriverReturnInput): Promis
 }
 
 async function persistManualCreditNote(
+  sessionUser: OrganizationSessionUser,
   input: CreateCreditNoteInput,
   status: Exclude<CreditNoteStatus, "CONTREPASSE">,
 ): Promise<CreditNote> {
-  const user = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  const user = asOrganizationUser(assertUserRole(sessionUser, DESK_CREDIT_NOTE_ROLES));
   const parsed = createCreditNoteSchema.safeParse(input);
   if (!parsed.success) {
     throw new OperationsServiceError(
@@ -1027,21 +1195,11 @@ async function persistManualCreditNote(
     }
     returnMode = parsed.data.returnMode;
 
-    if (returnMode === "MANUAL") {
-      // Checked before implementing: no existing business rule requires
-      // cashier access to unlinked returns specifically - credit notes use
-      // the same generic admin/depot_manager/cashier trio as almost every
-      // other module in this app, not a documented decision distinct to
-      // manual returns. See the F4 finalization report.
-      assertUserRole(user, ["admin", "depot_manager"]);
-      if (!parsed.data.comment?.trim()) {
-        throw new OperationsServiceError(
-          "La justification est obligatoire pour un retour manuel.",
-          422,
-          { comment: "Justification obligatoire pour un retour manuel." },
-        );
-      }
-    }
+    // Lot 1: the cashier may now create a MANUAL customer return too (it used to
+    // be admin/depot_manager only). What protects it instead, for every role:
+    // a written justification (below) and, for the cashier, a price locked to
+    // the product's current sale price (resolveReturnLines' lockManualPricing).
+    assertCustomerJustification(parsed.data.comment);
 
     for (const line of parsed.data.lines) {
       if (returnMode === "LINKED" && !line.saleLineId) {
@@ -1060,6 +1218,38 @@ async function persistManualCreditNote(
       }
     }
   }
+
+  // Lot 1: settlement mode. Customer: cash refund unless the account mode is
+  // explicitly asked for. Supplier: only its current (cash) treatment.
+  if (partyType === "fournisseur" && parsed.data.refundMode === "avoir_sur_compte") {
+    throw new OperationsServiceError(
+      "Le mode « Avoir sur compte » concerne uniquement les avoirs client.",
+      422,
+      { refundMode: "Mode non disponible pour un avoir fournisseur." },
+    );
+  }
+  const refundMethod: PrismaCreditNoteRefundMethod =
+    partyType === "client"
+      ? refundModeToPrisma[parsed.data.refundMode ?? "remboursement_especes"]
+      : "CASH";
+
+  // Lot 1: a fresh note (no draft id) must carry the key of its submission, so a
+  // double click or a network retry returns the note already created instead of
+  // creating - and refunding - a second one. Updating an existing draft (by id)
+  // needs none: it can only ever touch that draft.
+  if (!parsed.data.id && !parsed.data.idempotencyKey) {
+    throw new OperationsServiceError(
+      "Identifiant de soumission manquant : rechargez la page puis recommencez.",
+      422,
+      { idempotencyKey: "Obligatoire pour un nouvel avoir." },
+    );
+  }
+
+  // Lot 1: a cashier never sets the price of a return without an invoice - the
+  // server takes the product's current sale price, whatever the browser sent.
+  // Admin and depot manager keep the manual price. A linked line is always
+  // priced from its sale line, for every role (unchanged).
+  const lockManualPricing = partyType === "client" && user.role === "cashier";
 
   const returnDate = parseReturnDate(parsed.data.returnDate);
   const normalizedLines = normalizeManualLines(parsed.data.lines);
@@ -1137,7 +1327,7 @@ async function persistManualCreditNote(
                   id: destinationLocationId,
                   organizationId: user.organizationId,
                 },
-                select: { id: true, name: true, active: true },
+                select: { id: true, name: true, active: true, type: true },
               })
             : Promise.resolve(null),
           sourceLocationId
@@ -1146,7 +1336,7 @@ async function persistManualCreditNote(
                   id: sourceLocationId,
                   organizationId: user.organizationId,
                 },
-                select: { id: true, name: true, active: true },
+                select: { id: true, name: true, active: true, type: true },
               })
             : Promise.resolve(null),
         ]);
@@ -1163,6 +1353,9 @@ async function persistManualCreditNote(
         if (partyType === "fournisseur" && (!sourceLocationId || !sourceLocation || !sourceLocation.active)) {
           throw new OperationsServiceError("Stock source non autorise.", 422);
         }
+        // Lot 1: depot stock only - a truck location is refused for a customer
+        // destination and for a supplier source alike.
+        assertDepotLocation(partyType === "client" ? destination : sourceLocation, partyType);
 
         // F4: links (saleLineId) + caps (returnableQuantity) every line in
         // one pass - see resolveReturnLines's own doc comment. Runs for
@@ -1173,6 +1366,7 @@ async function persistManualCreditNote(
           resolvedLines: persistedLines,
           originalSaleId,
           anyLinked,
+          lockedPricingProductIds,
           roundingAmount,
         } = await resolveReturnLines(tx, {
           organizationId: user.organizationId,
@@ -1180,6 +1374,7 @@ async function persistManualCreditNote(
           customerId,
           supplierId,
           lines: normalizedLines,
+          lockManualPricing,
         });
 
         // F4: a free-return line (no saleLineId) that happens to match a
@@ -1214,6 +1409,7 @@ async function persistManualCreditNote(
               // (returnMode is null there - no change from prior behavior).
               origin: partyType === "client" && returnMode === "LINKED" ? "SALE" : "MANUAL",
               originalSaleId,
+              refundMethod,
               reason: reasonToPrisma[parsed.data.reason],
               comment: parsed.data.comment?.trim() || null,
               createdAt: returnDate,
@@ -1264,6 +1460,7 @@ async function persistManualCreditNote(
               status: statusToPrisma[status],
               // Same rule as the update branch above.
               origin: partyType === "client" && returnMode === "LINKED" ? "SALE" : "MANUAL",
+              refundMethod,
               reason: reasonToPrisma[parsed.data.reason],
               comment: parsed.data.comment?.trim() || null,
               createdAt: returnDate,
@@ -1375,6 +1572,13 @@ async function persistManualCreditNote(
               linkedToSale: anyLinked,
               freeReturnMatchedProductIds:
                 freeReturnMatches.length > 0 ? freeReturnMatches : undefined,
+              // Lot 1: settlement mode, and - for a cashier - the products whose
+              // price/discount/VAT sent by the browser was replaced by the
+              // product's current price (never silently: it is recorded here).
+              refundMethod,
+              priceLockedToCatalogue: lockManualPricing || undefined,
+              clientPricingIgnoredProductIds:
+                lockedPricingProductIds.length > 0 ? lockedPricingProductIds : undefined,
             },
           },
         });
@@ -1527,6 +1731,7 @@ function mapCreditNoteToDto(
     supplierName: note.supplier?.name ?? null,
     supplierCode: note.supplier?.code ?? null,
     origin: originToUi[note.origin],
+    refundMode: refundModeFromPrisma[note.refundMethod],
     saleOrigin,
     truckId: note.originalSale?.truck?.id ?? null,
     truckLabel: note.originalSale?.truck
@@ -1714,6 +1919,13 @@ async function resolveReturnLines(
     customerId: string | null;
     supplierId: string | null;
     lines: LineResolutionInput[];
+    /**
+     * Lot 1: price every line WITHOUT a sale line from the product's current
+     * sale price (HT), its VAT rate and no discount, ignoring what the browser
+     * sent - the cashier's desk return. Off by default: every other caller
+     * (admin / depot manager, supplier notes, driver returns) is unchanged.
+     */
+    lockManualPricing?: boolean;
   },
 ): Promise<{
   resolvedLines: ResolvedReturnLine[];
@@ -1721,6 +1933,8 @@ async function resolveReturnLines(
   anyLinked: boolean;
   /** Share of the original sale(s)' commercial rounding this note gives back (0 for a free / supplier note). */
   roundingAmount: number;
+  /** Lot 1: products whose browser-sent price, discount or VAT was replaced by the locked one. */
+  lockedPricingProductIds: string[];
 }> {
   const productIds = params.lines.map((line) => line.productId);
   const products = await tx.product.findMany({
@@ -1740,6 +1954,7 @@ async function resolveReturnLines(
 
   const saleIdsSeen = new Set<string>();
   const resolvedLines: ResolvedReturnLine[] = [];
+  const lockedPricingProductIds: string[] = [];
 
   for (const line of params.lines) {
     const product = productMap.get(line.productId);
@@ -1817,6 +2032,22 @@ async function resolveReturnLines(
       const grossHT = unitPrice * line.quantityReturned;
       discountPercent =
         grossHT > 0 ? Math.min(100, roundMoney(((grossHT - totals.totalHT) / grossHT) * 100)) : 0;
+    } else if (params.lockManualPricing) {
+      unitPrice = product.salePrice.toNumber();
+      discountPercent = 0;
+      taxRate = product.taxRate.toNumber();
+      const sentOtherPricing =
+        (line.unitPrice !== undefined && line.unitPrice !== unitPrice) ||
+        (line.discountPercent !== undefined && line.discountPercent !== 0) ||
+        (line.taxRate !== undefined && line.taxRate !== taxRate);
+      if (sentOtherPricing) lockedPricingProductIds.push(line.productId);
+      totals = computeLineTotals({
+        productId: line.productId,
+        quantityReturned: line.quantityReturned,
+        unitPrice,
+        discountPercent,
+        taxRate,
+      });
     } else {
       unitPrice =
         line.unitPrice ??
@@ -1872,7 +2103,7 @@ async function resolveReturnLines(
         )
       : 0;
 
-  return { resolvedLines, originalSaleId, anyLinked, roundingAmount };
+  return { resolvedLines, originalSaleId, anyLinked, roundingAmount, lockedPricingProductIds };
 }
 
 /**

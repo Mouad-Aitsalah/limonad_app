@@ -1,3 +1,4 @@
+import { cashRefundNotDeductedWhere, creditNoteReducesDebt, debtReducingCreditNoteWhere, resolveCutover, type CutoverOption } from "@/lib/credit-note-debt-rule";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { roundMoney } from "@/lib/money";
 import {
@@ -64,8 +65,12 @@ export type CustomerBalance = {
   raw: number;
   /** max(0, raw) - computeCustomerDebt(...).debt */
   debt: number;
+  /** Validated CASH notes that DO reduce the debt (historical ones, before the cutover; all of them while it is dormant). */
   cashCreditNotesTotal: number;
   cashCreditNotesCount: number;
+  /** Lot 2: validated CASH notes validated on or after the cutover, which the formula leaves out (0 while dormant). */
+  cashRefundsNotDeductedTotal: number;
+  cashRefundsNotDeductedCount: number;
 };
 
 const money = (value: Prisma.Decimal | null | undefined) => roundMoney(value?.toNumber() ?? 0);
@@ -75,8 +80,16 @@ const money = (value: Prisma.Decimal | null | undefined) => roundMoney(value?.to
  * sale, a validated customer credit note or a validated settlement - 4 grouped
  * queries instead of 3 queries per customer. Same filters, same rounding.
  */
-export async function loadCustomerBalances(db: ReceivablesDb, organizationId: string): Promise<Map<string, CustomerBalance>> {
-  const [sales, notes, cashNotes, settlements] = await Promise.all([
+export async function loadCustomerBalances(
+  db: ReceivablesDb,
+  organizationId: string,
+  options?: CutoverOption,
+): Promise<Map<string, CustomerBalance>> {
+  // The credit notes that reduce the debt come from the SAME filter as computeCustomerDebt
+  // (lib/credit-note-debt-rule.ts): the two computations cannot drift apart.
+  const cutover = resolveCutover(options);
+  const reducing = debtReducingCreditNoteWhere(cutover);
+  const [sales, notes, cashNotes, settlements, notDeductedNotes] = await Promise.all([
     db.sale.groupBy({
       by: ["customerId"],
       where: { organizationId, customerId: { not: null }, status: { in: [...OPEN_CREDIT_STATUSES] } },
@@ -84,12 +97,12 @@ export async function loadCustomerBalances(db: ReceivablesDb, organizationId: st
     }),
     db.creditNote.groupBy({
       by: ["customerId"],
-      where: { organizationId, customerId: { not: null }, partyType: "CUSTOMER", status: "VALIDATED" },
+      where: { organizationId, customerId: { not: null }, partyType: "CUSTOMER", status: "VALIDATED", ...reducing },
       _sum: { totalTTC: true },
     }),
     db.creditNote.groupBy({
       by: ["customerId"],
-      where: { organizationId, customerId: { not: null }, partyType: "CUSTOMER", status: "VALIDATED", refundMethod: "CASH" },
+      where: { organizationId, customerId: { not: null }, partyType: "CUSTOMER", status: "VALIDATED", refundMethod: "CASH", ...reducing },
       _sum: { totalTTC: true },
       _count: { _all: true },
     }),
@@ -98,14 +111,28 @@ export async function loadCustomerBalances(db: ReceivablesDb, organizationId: st
       where: { organizationId, status: "VALIDATED" },
       _sum: { amount: true },
     }),
+    // Only when the rule is active: the cash refunds it leaves out (information, never part of the formula).
+    cutover
+      ? db.creditNote.groupBy({
+          by: ["customerId"],
+          where: { organizationId, customerId: { not: null }, partyType: "CUSTOMER", status: "VALIDATED", ...cashRefundNotDeductedWhere(cutover) },
+          _sum: { totalTTC: true },
+          _count: { _all: true },
+        })
+      : Promise.resolve([]),
   ]);
 
   const creditSales = new Map(sales.map((row) => [row.customerId as string, money(row._sum.creditAmount)]));
   const creditNotes = new Map(notes.map((row) => [row.customerId as string, money(row._sum.totalTTC)]));
   const cash = new Map(cashNotes.map((row) => [row.customerId as string, { total: money(row._sum.totalTTC), count: row._count._all }]));
   const settled = new Map(settlements.map((row) => [row.customerId, money(row._sum.amount)]));
+  const notDeducted = new Map(
+    notDeductedNotes.map((row) => [row.customerId as string, { total: money(row._sum.totalTTC), count: row._count._all }]),
+  );
 
-  const ids = new Set<string>([...creditSales.keys(), ...creditNotes.keys(), ...settled.keys()]);
+  // A customer with only a cash refund the rule leaves out is listed too (balance 0), so the
+  // overview can count that refund; it is never a debtor nor a creditor.
+  const ids = new Set<string>([...creditSales.keys(), ...creditNotes.keys(), ...settled.keys(), ...notDeducted.keys()]);
   const out = new Map<string, CustomerBalance>();
   for (const customerId of ids) {
     const creditSalesTotal = creditSales.get(customerId) ?? 0;
@@ -121,6 +148,8 @@ export async function loadCustomerBalances(db: ReceivablesDb, organizationId: st
       debt,
       cashCreditNotesTotal: cash.get(customerId)?.total ?? 0,
       cashCreditNotesCount: cash.get(customerId)?.count ?? 0,
+      cashRefundsNotDeductedTotal: notDeducted.get(customerId)?.total ?? 0,
+      cashRefundsNotDeductedCount: notDeducted.get(customerId)?.count ?? 0,
     });
   }
   return out;
@@ -215,14 +244,15 @@ async function loadOpenSaleParts(db: ReceivablesDb, organizationId: string, debt
 export async function loadReceivablesOverview(
   db: ReceivablesDb,
   organizationId: string,
-  options: { now: Date; settings: ReceivablesSettings },
+  options: { now: Date; settings: ReceivablesSettings } & CutoverOption,
 ): Promise<Omit<ReceivablesOverviewDto, "debtors" | "creditors"> & {
   debtors: Array<Omit<ReceivablesDebtorRow, "accountCode">>;
   creditors: { count: number; total: number; rows: Array<Omit<ReceivablesCreditorRow, "accountCode">> };
 }> {
   const asOfDay = businessDayOf(options.now);
   const { overdueDays } = options.settings;
-  const balances = await loadCustomerBalances(db, organizationId);
+  const cutover = resolveCutover(options);
+  const balances = await loadCustomerBalances(db, organizationId, { cutover });
 
   const debtorBalances = [...balances.values()].filter((balance) => balance.debt > 0);
   const creditorBalances = [...balances.values()].filter((balance) => balance.raw < 0);
@@ -303,6 +333,7 @@ export async function loadReceivablesOverview(
   }));
 
   const cashNotes = [...balances.values()].filter((balance) => balance.cashCreditNotesCount > 0);
+  const notDeductedNotes = [...balances.values()].filter((balance) => balance.cashRefundsNotDeductedCount > 0);
 
   return {
     asOfDay,
@@ -326,6 +357,15 @@ export async function loadReceivablesOverview(
         count: cashNotes.reduce((sum, balance) => sum + balance.cashCreditNotesCount, 0),
         total: sumMoney(cashNotes.map((balance) => balance.cashCreditNotesTotal)),
       },
+      // Lot 2 - only once the cutover is active: the cash refunds the formula leaves out.
+      ...(cutover
+        ? {
+            cashRefundsNotDeducted: {
+              count: notDeductedNotes.reduce((sum, balance) => sum + balance.cashRefundsNotDeductedCount, 0),
+              total: sumMoney(notDeductedNotes.map((balance) => balance.cashRefundsNotDeductedTotal)),
+            },
+          }
+        : {}),
       agingMismatchCount,
     },
   };
@@ -337,7 +377,7 @@ export async function loadCustomerReceivableDetail(
   db: ReceivablesDb,
   organizationId: string,
   customerId: string,
-  options: { now: Date; settings: ReceivablesSettings },
+  options: { now: Date; settings: ReceivablesSettings } & CutoverOption,
 ): Promise<Omit<CustomerReceivableDetailDto, "customer"> & { customer: Omit<CustomerReceivableDetailDto["customer"], "accountCode"> }> {
   const customer = await db.customer.findFirst({
     where: { id: customerId, organizationId },
@@ -346,10 +386,11 @@ export async function loadCustomerReceivableDetail(
   if (!customer) throw new ReceivablesError("Client introuvable.", 404);
 
   const asOfDay = businessDayOf(options.now);
+  const cutover = resolveCutover(options);
   const statuses = [...OPEN_CREDIT_STATUSES];
   const [debt, sales, notes, settlements, excludedSales, nonValidatedNotes, cancelledSettlements] = await Promise.all([
     // THE reference figure, shown in the table.
-    computeCustomerDebt(db, organizationId, customerId),
+    computeCustomerDebt(db, organizationId, customerId, { cutover }),
     db.sale.findMany({
       where: { organizationId, customerId, status: { in: statuses }, creditAmount: { gt: 0 } },
       select: {
@@ -435,12 +476,22 @@ export async function loadCustomerReceivableDetail(
   }
   let cashCount = 0;
   let cashCents = 0;
+  let notDeductedCount = 0;
+  let notDeductedCents = 0;
   for (const note of notes) {
     const at = note.validatedAt ?? note.createdAt;
     const amount = note.totalTTC.toNumber();
-    if (note.refundMethod === "CASH") {
+    // The same rule as the debt (lib/credit-note-debt-rule.ts): a cash refund validated on or after
+    // the cutover is listed for transparency but moves the running balance by 0, so the last running
+    // balance stays exactly the debt formula's unclamped result.
+    const deducted = creditNoteReducesDebt(note, cutover);
+    if (deducted && note.refundMethod === "CASH") {
       cashCount += 1;
       cashCents += Math.round(amount * 100);
+    }
+    if (!deducted) {
+      notDeductedCount += 1;
+      notDeductedCents += Math.round(amount * 100);
     }
     inputs.push({
       id: `note:${note.id}`,
@@ -448,14 +499,15 @@ export async function loadCustomerReceivableDetail(
       day: businessDayOf(at),
       sortAt: at.getTime(),
       reference: note.creditNoteNumber,
-      label: `Avoir ${note.creditNoteNumber}`,
-      amount: -amount,
+      label: deducted ? `Avoir ${note.creditNoteNumber}` : `Remboursement espèces ${note.creditNoteNumber}`,
+      amount: deducted ? -amount : 0,
       creditNote: {
         refundMethod: note.refundMethod,
         originalSaleReference: note.originalSale
           ? formatSaleDisplayNumber(note.originalSale.saleNumber, note.originalSale.saleYear, note.originalSale.invoiceNumber)
           : null,
         originalSaleStatus: note.originalSale?.status ?? null,
+        ...(deducted ? {} : { notDeductedFromDebt: { faceAmount: amount } }),
       },
     });
   }
@@ -493,6 +545,7 @@ export async function loadCustomerReceivableDetail(
     reconciled: Math.round(finalBalance * 100) === Math.round(rawBalance * 100),
     aging: { overdue: aging.overdue, over30: aging.over30, buckets: aging.buckets },
     cashCreditNotes: { count: cashCount, total: cashCents / 100 },
+    ...(cutover ? { cashRefundsNotDeducted: { count: notDeductedCount, total: notDeductedCents / 100 } } : {}),
     excluded: {
       draftOrCancelledSales: excludedSales,
       nonValidatedCreditNotes: nonValidatedNotes,

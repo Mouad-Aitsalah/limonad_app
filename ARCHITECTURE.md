@@ -444,6 +444,8 @@ Pas de schéma SQL — juste les entités, leur rôle et leurs relations, pour c
 - Un retour de marchandise ne concerne **jamais** les bouteilles, casiers ou emballages consignés (hors périmètre — §2).
 - Un retour doit toujours être rattaché à une vente ou une tournée d'origine.
 
+> **Mise à jour (avoirs, lots 1 et 2).** Le fonctionnement réel des avoirs clients et fournisseurs — retour manuel sans facture, remboursement en espèces ou avoir sur compte, règle de dette et date de bascule, retours de marchandises fermés aux chauffeurs, limites connues et précautions de mise en production — est décrit dans [`docs/avoirs-et-dette-clients.md`](docs/avoirs-et-dette-clients.md). Il prime sur la règle ci-dessus lorsqu'ils diffèrent.
+
 ### Utilisateurs / Accès
 
 - Un chauffeur ne peut agir que sur son propre camion et sa propre tournée.

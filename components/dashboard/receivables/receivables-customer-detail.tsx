@@ -8,10 +8,12 @@ import { useAnalysisData } from "@/components/dashboard/commercial/use-analysis-
 import {
   BUCKET_STYLES,
   CASH_NOTE_HINT,
+  CASH_REFUND_NOT_DEDUCTED_HINT,
   ESTIMATE_NOTE,
   formatDay,
   formatDays,
   methodLabel,
+  refundMethodLabel,
   statusLabel,
 } from "@/components/dashboard/receivables/receivables-format";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -63,6 +65,13 @@ function movementBadge(movement: ReceivableMovementDto) {
     case "SETTLEMENT":
       return <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[0.68rem] font-semibold text-emerald-800">Règlement</span>;
     case "CREDIT_NOTE":
+      if (movement.creditNote?.notDeductedFromDebt) {
+        return (
+          <span data-cash-refund-not-deducted className="rounded bg-slate-100 px-1.5 py-0.5 text-[0.68rem] font-semibold text-slate-800">
+            Remboursement espèces
+          </span>
+        );
+      }
       return movement.creditNote?.refundMethod === "CASH" ? (
         <span data-cash-note className="rounded bg-amber-100 px-1.5 py-0.5 text-[0.68rem] font-semibold text-amber-900">
           Avoir « espèces »
@@ -84,7 +93,13 @@ function movementDetail(movement: ReceivableMovementDto): string {
     const sale = movement.creditNote.originalSaleReference
       ? `sur la vente ${movement.creditNote.originalSaleReference} (${statusLabel(movement.creditNote.originalSaleStatus)})`
       : "sans vente d'origine";
-    return `Remboursement enregistré : ${methodLabel(movement.creditNote.refundMethod)} · ${sale}`;
+    if (movement.creditNote.notDeductedFromDebt) {
+      return `Remboursement en espèces de ${formatCurrency(movement.creditNote.notDeductedFromDebt.faceAmount)} · sans effet sur la dette · ${sale}`;
+    }
+    if (movement.creditNote.refundMethod === "BANK") {
+      return `${refundMethodLabel("BANK")} · crédité sur le compte du client · ${sale}`;
+    }
+    return `Remboursement enregistré : ${refundMethodLabel(movement.creditNote.refundMethod)} · ${sale}`;
   }
   if (movement.settlement) {
     return `${methodLabel(movement.settlement.method)}${movement.settlement.createdByName ? ` · saisi par ${movement.settlement.createdByName}` : ""}`;
@@ -109,7 +124,7 @@ export function CustomerReceivableDetailBody({ detail }: { detail: CustomerRecei
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Figure label="Ventes à crédit" value={formatCurrency(debt.creditSalesTotal)} />
-        <Figure label="Avoirs validés" value={`− ${formatCurrency(debt.creditNotesTotal)}`} />
+        <Figure label={detail.cashRefundsNotDeducted ? "Avoirs déduits" : "Avoirs validés"} value={`− ${formatCurrency(debt.creditNotesTotal)}`} />
         <Figure label="Règlements validés" value={`− ${formatCurrency(debt.settlementsTotal)}`} />
         <Figure
           label={credit ? "Solde créditeur" : "Solde dû"}
@@ -135,6 +150,15 @@ export function CustomerReceivableDetailBody({ detail }: { detail: CustomerRecei
             {detail.cashCreditNotes.count} avoir{detail.cashCreditNotes.count > 1 ? "s" : ""} enregistré{detail.cashCreditNotes.count > 1 ? "s" : ""} « remboursé en espèces » ({formatCurrency(detail.cashCreditNotes.total)}) {detail.cashCreditNotes.count > 1 ? "sont déduits" : "est déduit"} du solde par le calcul actuel.
           </span>
           <InfoHint label="Avoirs « espèces »" text={CASH_NOTE_HINT} />
+        </p>
+      ) : null}
+
+      {detail.cashRefundsNotDeducted && detail.cashRefundsNotDeducted.count > 0 ? (
+        <p role="note" data-note="cash-refunds-not-deducted" className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800">
+          <span>
+            {detail.cashRefundsNotDeducted.count} remboursement{detail.cashRefundsNotDeducted.count > 1 ? "s" : ""} en espèces ({formatCurrency(detail.cashRefundsNotDeducted.total)}) {detail.cashRefundsNotDeducted.count > 1 ? "ne sont pas déduits" : "n'est pas déduit"} du solde : l&apos;argent est sorti de la caisse, la dette du client est inchangée.
+          </span>
+          <InfoHint label="Remboursements espèces" text={CASH_REFUND_NOT_DEDUCTED_HINT} />
         </p>
       ) : null}
 

@@ -32,7 +32,7 @@ export type ReceivablesDebtorRow = {
   /** Age in days of the oldest still-open (FIFO) credit sale. */
   oldestOpenAgeDays: number | null;
   lastSettlementDay: string | null;
-  /** Validated customer credit notes recorded as refunded in cash, deducted by the current formula. */
+  /** Validated customer credit notes recorded as refunded in cash THAT THE FORMULA DEDUCTS (all of them before the debt cutover - lib/credit-note-debt-rule.ts). */
   cashCreditNotesTotal: number;
 };
 
@@ -70,6 +70,8 @@ export type ReceivablesOverviewDto = {
   dataNotes: {
     /** Validated customer credit notes with refundMethod CASH, counted in the formula (debtors only). */
     cashCreditNotes: { count: number; total: number };
+    /** Present ONLY once the debt cutover is active: the cash refunds validated on or after it, which the formula does NOT deduct. */
+    cashRefundsNotDeducted?: { count: number; total: number };
     /** Customers whose FIFO estimate could not be reconciled with their balance (should be 0). */
     agingMismatchCount: number;
   };
@@ -94,6 +96,11 @@ export type ReceivableMovementDto = {
     refundMethod: "CASH" | "BANK";
     originalSaleReference: string | null;
     originalSaleStatus: string | null;
+    /**
+     * Present ONLY for a cash refund validated on or after the debt cutover: it is listed for transparency
+     * but its movement amount is 0 (it does not reduce the debt). Absent = deducted, as before.
+     */
+    notDeductedFromDebt?: { faceAmount: number };
   };
   /** SETTLEMENT details. */
   settlement?: { method: string; createdByName: string | null };
@@ -118,6 +125,8 @@ export type CustomerReceivableDetailDto = {
     buckets: AgingBuckets;
   };
   cashCreditNotes: { count: number; total: number };
+  /** Present ONLY once the debt cutover is active: the cash refunds of this customer that the formula does NOT deduct. */
+  cashRefundsNotDeducted?: { count: number; total: number };
   /** Documents of this customer that the formula does NOT count (shown as counts, for transparency). */
   excluded: {
     draftOrCancelledSales: number;

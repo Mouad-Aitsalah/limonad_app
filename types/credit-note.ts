@@ -16,6 +16,14 @@ export type CreditNoteReason =
 export type CreditNoteOrigin = "retour_manuel" | "facture";
 export type CreditNotePartyType = "client" | "fournisseur";
 
+/**
+ * How a credit note is settled (stored as CreditNote.refundMethod):
+ *  - "remboursement_especes": cash refunded from the till (default, CASH);
+ *  - "avoir_sur_compte": amount credited to the customer's account (BANK) -
+ *    customer notes only; a supplier note always keeps its current cash treatment.
+ */
+export type CreditNoteRefundMode = "remboursement_especes" | "avoir_sur_compte";
+
 export type CreditNoteSaleOrigin = "comptoir" | "camion" | null;
 
 export type CreditNoteLine = {
@@ -54,6 +62,8 @@ export type CreditNote = {
   supplierName?: string | null;
   supplierCode?: string | null;
   origin: CreditNoteOrigin;
+  /** Absent only on a DTO built outside the server mapper (mock data). */
+  refundMode?: CreditNoteRefundMode;
   saleOrigin: CreditNoteSaleOrigin;
   truckId: string | null;
   truckLabel?: string | null;
@@ -147,9 +157,13 @@ export type CreateCreditNoteInput = {
   supplierId?: string | null;
   // F4 finalization: required for a customer return ("client") - LINKED
   // means every line must carry a saleLineId (capped against it); MANUAL
-  // means no line may (admin/depot_manager only, justification required).
+  // means no line may. Lot 1: admin, depot manager and cashier alike, a
+  // written justification required for every customer note, and the
+  // cashier's MANUAL lines priced at the product's current sale price.
   // Not used for a supplier return.
   returnMode?: "LINKED" | "MANUAL";
+  /** Lot 1: defaults to "remboursement_especes"; "avoir_sur_compte" is customer-only. */
+  refundMode?: CreditNoteRefundMode;
   reason: CreditNoteReason;
   comment?: string | null;
   returnDate: string;
@@ -165,9 +179,10 @@ export type CreateCreditNoteInput = {
     // when MANUAL. See the F4 finalization report.
     saleLineId?: string | null;
   }[];
-  // Client-generated, stable for one avoir creation attempt (F5) - see
-  // components/avoirs/credit-note-form.tsx. Only meaningful when `id` is not
-  // set (a fresh avoir, not an update of an existing draft).
+  // Client-generated, stable for one avoir creation attempt (F5). Lot 1:
+  // REQUIRED by the server when `id` is not set (a fresh avoir, not an update
+  // of an existing draft) - a resubmission with the same key returns the avoir
+  // already created instead of creating a second one.
   idempotencyKey?: string | null;
 };
 

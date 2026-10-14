@@ -7,6 +7,7 @@ import { after, before, test } from "node:test";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@/lib/generated/prisma/client";
+import { assertDevDatabaseOnly, assertLoopbackServer } from "@/lib/db-test-guard";
 
 import { addDays } from "./daily-sales-series";
 import type { ForecastDb } from "./product-daily-sales";
@@ -26,10 +27,13 @@ import { getCurrentBusinessDayParam } from "@/lib/business-day";
  * ONE transaction that is ALWAYS rolled back. Skipped when unreachable.
  */
 
+// Never against production or a hosted database (lib/db-test-guard.ts): throws before any connection is made.
+assertDevDatabaseOnly("lib/forecasting/purchase-forecast-cache.db.test.ts");
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 let reachable = false;
 
 before(async () => {
+  await assertLoopbackServer(prisma, "lib/forecasting/purchase-forecast-cache.db.test.ts");
   try {
     await Promise.race([prisma.$queryRaw`select 1`, new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 20_000))]);
     reachable = true;

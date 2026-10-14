@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@/lib/generated/prisma/client";
+import { assertDevDatabaseOnly, assertLoopbackServer } from "@/lib/db-test-guard";
 import { AnalysisFilterError } from "@/lib/commercial-analysis/filters";
 
 import { loadCoverage, loadSalesAnalysis } from "./commercial-analysis-core";
@@ -18,10 +19,13 @@ import { loadCoverage, loadSalesAnalysis } from "./commercial-analysis-core";
  * skipped when no database is reachable. Plus the server-side admin-only gating.
  */
 
+// Never against production or a hosted database (lib/db-test-guard.ts): throws before any connection is made.
+assertDevDatabaseOnly("lib/server/commercial-analysis.test.ts");
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 let reachable = false;
 
 before(async () => {
+  await assertLoopbackServer(prisma, "lib/server/commercial-analysis.test.ts");
   try {
     await Promise.race([prisma.$queryRaw`select 1`, new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 20_000))]);
     reachable = true;

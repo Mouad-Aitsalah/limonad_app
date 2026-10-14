@@ -11,6 +11,9 @@ export const BUCKET_STYLES: Record<AgingBucketKey, { bar: string; dot: string; l
 export const ESTIMATE_NOTE =
   "Répartition estimative : les règlements étant enregistrés sur le compte du client et non sur une facture, les avoirs et règlements sont imputés aux ventes à crédit les plus anciennes (FIFO). Ce n'est pas l'affectation comptable réelle des règlements aux factures ; le solde, lui, est exact.";
 
+export const CASH_REFUND_NOT_DEDUCTED_HINT =
+  "Remboursements en espèces validés depuis la règle « un remboursement en espèces est indépendant de la dette à crédit » : l'argent sort de la caisse, la dette du client ne baisse pas. Seul un avoir « sur compte » réduit la dette. Ces remboursements sont listés dans le détail de chaque client, avec un effet de 0 sur son solde.";
+
 export const CASH_NOTE_HINT =
   "Avoirs clients validés enregistrés avec la méthode de remboursement « espèces ». Le calcul actuel du solde (le même que « Solde clients » et le Dashboard) les déduit de ce que doit le client. Cette méthode n'est jamais choisie à la saisie d'un avoir : c'est la valeur par défaut de la base. Vérifiez au cas par cas si le client a réellement été remboursé en espèces.";
 
@@ -51,10 +54,18 @@ const METHOD_LABELS: Record<string, string> = {
   CARD: "Carte",
   MIXED: "Mixte",
   CREDIT: "Crédit",
-  BANK: "Banque",
 };
 
 export function methodLabel(method: string | null | undefined): string {
   if (!method) return "—";
   return METHOD_LABELS[method] ?? method;
+}
+
+/**
+ * How a customer credit note was settled (CreditNote.refundMethod), in the words of the credit-note form:
+ * CASH = cash refunded from the till, BANK = credited to the customer's account (« Avoir sur compte client »).
+ * Kept apart from methodLabel, which labels the payment methods of the settlements.
+ */
+export function refundMethodLabel(method: "CASH" | "BANK"): string {
+  return method === "BANK" ? "Avoir sur compte client" : "Espèces";
 }

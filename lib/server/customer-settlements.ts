@@ -50,6 +50,15 @@ import type {
  * customer credit notes (see its own doc comment for the precision limits
  * of this correction).
  *
+ * UPDATE (credit-note Lot 1 + 2): the finding above describes the system as it was
+ * audited. A customer credit note is now created with an explicit settlement mode
+ * (CreditNote.refundMethod: CASH = refunded in cash, BANK = credited to the customer's
+ * account), and which validated notes reduce the debt is decided in ONE place,
+ * lib/credit-note-debt-rule.ts: a cash refund validated on or after the cutover does
+ * not (the cash leaves the till, the credit debt is a separate matter); an account
+ * credit does; any note validated before the cutover - or without a validation date -
+ * keeps the historical treatment. While that cutover is null nothing changed.
+ *
  * LEDGER AUDIT FINDING (2A-bis, do not re-litigate without re-checking): a
  * per-customer "solde comptable" (SUM(debit)-SUM(credit) on that customer's
  * own AccountingAccount, POSTED entries only) is NOT the same number as

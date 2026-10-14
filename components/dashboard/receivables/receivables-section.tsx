@@ -8,7 +8,7 @@ import { OverdueDaysSetting } from "@/components/dashboard/receivables/overdue-d
 import { ReceivablesAgingChart } from "@/components/dashboard/receivables/receivables-aging-chart";
 import { ReceivablesCustomerDetailDialog } from "@/components/dashboard/receivables/receivables-customer-detail";
 import { ReceivablesDebtorsTable } from "@/components/dashboard/receivables/receivables-debtors-table";
-import { CASH_NOTE_HINT, formatDay } from "@/components/dashboard/receivables/receivables-format";
+import { CASH_NOTE_HINT, CASH_REFUND_NOT_DEDUCTED_HINT, formatDay } from "@/components/dashboard/receivables/receivables-format";
 import { SectionCard } from "@/components/ui/section-card";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { ReceivablesOverviewDto, ReceivablesSettings } from "@/types/receivables";
@@ -148,6 +148,14 @@ function DataNotes({ data, onOpenCustomer }: { data: ReceivablesOverviewDto; onO
             {dataNotes.cashCreditNotes.count > 1 ? "sont déduits" : "est déduit"} des soldes par le calcul actuel. Ils sont signalés dans le détail de chaque client.
           </span>
           <InfoHint label="Avoirs « espèces »" text={CASH_NOTE_HINT} />
+        </p>
+      ) : null}
+      {dataNotes.cashRefundsNotDeducted && dataNotes.cashRefundsNotDeducted.count > 0 ? (
+        <p role="note" className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800" data-note="cash-refunds-not-deducted">
+          <span>
+            {dataNotes.cashRefundsNotDeducted.count} remboursement{dataNotes.cashRefundsNotDeducted.count > 1 ? "s" : ""} en espèces ({formatCurrency(dataNotes.cashRefundsNotDeducted.total)}) {dataNotes.cashRefundsNotDeducted.count > 1 ? "ne sont pas déduits" : "n'est pas déduit"} des soldes : ils sortent de la caisse sans réduire la dette des clients. Ils sont listés dans le détail de chaque client.
+          </span>
+          <InfoHint label="Remboursements espèces" text={CASH_REFUND_NOT_DEDUCTED_HINT} />
         </p>
       ) : null}
       {dataNotes.agingMismatchCount > 0 ? (

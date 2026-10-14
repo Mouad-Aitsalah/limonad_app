@@ -1,34 +1,14 @@
 import { NextResponse } from "next/server";
 
-import { AuthServiceError } from "@/lib/server/auth";
-import { OperationsServiceError } from "@/lib/server/depots";
-import { createDriverReturn } from "@/lib/server/credit-notes";
-import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { DRIVER_GOODS_RETURNS_DISABLED_MESSAGE } from "@/lib/driver-returns-policy";
 import { rejectDisabledModule } from "@/lib/server/module-guard";
 
+// Goods returns are not available to drivers (lib/driver-returns-policy.ts): this
+// route is closed for EVERY role. After the module check that every route starts
+// with, it answers 403 without reading the body. Nothing here can create a credit
+// note, move stock or post an accounting entry. The desk roles record returns from /avoirs.
 export async function POST(request: Request) {
   const moduleRejection = await rejectDisabledModule(request);
   if (moduleRejection) return moduleRejection;
-  const csrfRejection = rejectUntrustedOrigin(request);
-  if (csrfRejection) return csrfRejection;
-  try {
-    return NextResponse.json(
-      { creditNote: await createDriverReturn(await request.json()) },
-      { status: 201 },
-    );
-  } catch (error) {
-    if (error instanceof AuthServiceError) {
-      return NextResponse.json({ message: error.message }, { status: error.status });
-    }
-    if (error instanceof OperationsServiceError) {
-      return NextResponse.json(
-        { message: error.message, fieldErrors: error.fieldErrors },
-        { status: error.status },
-      );
-    }
-    return NextResponse.json(
-      { message: "Impossible d'enregistrer le retour." },
-      { status: 500 },
-    );
-  }
+  return NextResponse.json({ message: DRIVER_GOODS_RETURNS_DISABLED_MESSAGE }, { status: 403 });
 }

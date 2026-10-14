@@ -29,6 +29,7 @@ import type { CurrentUser } from "@/types/auth";
 import type {
   CreditNote,
   CreditNoteReason,
+  CreditNoteRefundMode,
   CreateCreditNoteInput,
   ReturnableProduct,
   ReturnableProductOrigin,
@@ -88,12 +89,32 @@ const reasonOptions: CreditNoteReason[] = [
   "autre",
 ];
 
-// F4 finalization comment: MANUAL is restricted server-side to
-// admin/depot_manager (see persistManualCreditNote). Mirrored here so a
-// cashier/driver session never sees a toggle that would just 403.
+// Lot 1: the cashier may create a MANUAL return too (server-side, see
+// persistManualCreditNote) - with a written justification, and with the price
+// locked to the product's current sale price (the server ignores any other).
 function canCreateManualReturn(role: CurrentUser["role"]) {
-  return role === "admin" || role === "depot_manager";
+  return role === "admin" || role === "depot_manager" || role === "cashier";
 }
+
+/** The cashier never sets the price of a return without an invoice (server-enforced). */
+function hasLockedManualPricing(role: CurrentUser["role"]) {
+  return role === "cashier";
+}
+
+const refundModeOptions: Array<{ value: CreditNoteRefundMode; label: string; hint: string }> = [
+  {
+    value: "remboursement_especes",
+    label: "Remboursement en especes",
+    hint: "Argent rendu au client depuis la caisse.",
+  },
+  {
+    value: "avoir_sur_compte",
+    label: "Avoir sur compte client",
+    hint: "Montant credite sur le compte du client.",
+  },
+];
+
+const JUSTIFICATION_MIN_LENGTH = 5;
 
 function lineKey(line: CartLine) {
   return line.saleLineId ?? line.productId;
@@ -130,14 +151,13 @@ export function CreditNotePosView({
   onSaved,
   onClearEditing,
 }: CreditNotePosViewProps) {
+  // Lot 1: a customer return goes back to a DEPOT only - a truck is never
+  // offered (and the server refuses one anyway).
   const activeLocations = React.useMemo(
     () =>
       [...locations]
-        .filter((location) => location.active)
-        .sort((a, b) => {
-          if (a.type !== b.type) return a.type === "DEPOT" ? -1 : 1;
-          return a.name.localeCompare(b.name, "fr-FR");
-        }),
+        .filter((location) => location.active && location.type === "DEPOT")
+        .sort((a, b) => a.name.localeCompare(b.name, "fr-FR")),
     [locations],
   );
 
@@ -178,7 +198,12 @@ export function CreditNotePosView({
   const [reason, setReason] = React.useState<CreditNoteReason>(initialFormState.reason);
   const [comment, setComment] = React.useState(initialFormState.comment);
   const [cart, setCart] = React.useState<CartLine[]>(initialFormState.cart);
+  const [refundMode, setRefundMode] = React.useState<CreditNoteRefundMode>(initialFormState.refundMode);
   const [busy, setBusy] = React.useState(false);
+  // One key per avoir being created: a double click or a retry of the same
+  // submission returns the avoir already created (server-side idempotency).
+  // Renewed only once the avoir is saved or the form is emptied.
+  const idempotencyKeyRef = React.useRef<string>(crypto.randomUUID());
 
   const [returnables, setReturnables] = React.useState<ReturnableProduct[]>([]);
   const [loadingReturnables, setLoadingReturnables] = React.useState(false);
@@ -188,6 +213,7 @@ export function CreditNotePosView({
   const selectedDestination =
     activeLocations.find((location) => location.id === destinationId) ?? null;
   const allowManual = canCreateManualReturn(currentUser.role);
+  const pricingLocked = hasLockedManualPricing(currentUser.role);
 
   const filteredCustomers = React.useMemo(() => {
     const query = normalizeSearch(customerSearch);
@@ -393,7 +419,10 @@ export function CreditNotePosView({
       setReason("erreur_quantite");
       setComment("");
       setCart([]);
+      setRefundMode("remboursement_especes");
       setSelectedSaleId(null);
+      // A new avoir starts: it gets its own submission key.
+      idempotencyKeyRef.current = crypto.randomUUID();
     },
     [defaultCustomerId, defaultDestinationId],
   );
@@ -535,8 +564,10 @@ export function CreditNotePosView({
       toast.error("Ajoutez au moins un produit dans le panier.");
       return;
     }
-    if (reason === "autre" && comment.trim().length === 0) {
-      toast.error("La justification est obligatoire pour le motif Autre.");
+    if (comment.trim().length < JUSTIFICATION_MIN_LENGTH) {
+      toast.error(
+        `La justification est obligatoire (${JUSTIFICATION_MIN_LENGTH} caracteres minimum).`,
+      );
       return;
     }
     if (mode === "linked" && cart.some((line) => !line.saleLineId)) {
@@ -554,10 +585,13 @@ export function CreditNotePosView({
       // the real toggle above rather than a constant, since both modes are
       // genuinely reachable here now.
       returnMode: mode === "linked" ? "LINKED" : "MANUAL",
+      refundMode,
       reason,
       comment,
       returnDate,
       stockDestinationLocationId: selectedDestination.id,
+      // Only a fresh avoir needs it; updating a draft (id) never duplicates.
+      idempotencyKey: editingCreditNote ? null : idempotencyKeyRef.current,
       lines: cartLines.map((line) => ({
         productId: line.productId,
         quantityReturned: line.quantityReturned,
@@ -809,13 +843,41 @@ export function CreditNotePosView({
             </div>
           </div>
 
+          <div className="space-y-2">
+            <Label>Mode de reglement</Label>
+            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Mode de reglement">
+              {refundModeOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={refundMode === option.value}
+                  disabled={busy}
+                  onClick={() => setRefundMode(option.value)}
+                  className={`rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
+                    refundMode === option.value
+                      ? "border-emerald-500 bg-emerald-50"
+                      : "border-border hover:border-emerald-300"
+                  }`}
+                >
+                  <span className="block font-medium text-foreground">{option.label}</span>
+                  <span className="block text-xs text-muted-foreground">{option.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-border">
             <CreditNoteCart
               lines={cartLines.map((line) => ({
                 ...line,
                 productId: lineKey(line),
                 invoiceNumber: line.invoiceNumber,
-                readOnlyPricing: Boolean(line.saleLineId),
+                readOnlyPricing: Boolean(line.saleLineId) || pricingLocked,
+                readOnlyPricingReason:
+                  !line.saleLineId && pricingLocked
+                    ? "Prix de vente actuel du produit - non modifiable par un caissier"
+                    : undefined,
                 maxQuantity: line.maxQuantityReturnable ?? undefined,
               }))}
               disabled={busy}
@@ -857,9 +919,7 @@ export function CreditNotePosView({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="credit-note-comment">
-                Commentaire / justification {reason === "autre" ? "(obligatoire)" : ""}
-              </Label>
+              <Label htmlFor="credit-note-comment">Commentaire / justification (obligatoire)</Label>
               <Textarea
                 id="credit-note-comment"
                 value={comment}
@@ -964,6 +1024,7 @@ function createFormState(
       reason: "erreur_quantite" as CreditNoteReason,
       comment: "",
       cart: [] as CartLine[],
+      refundMode: "remboursement_especes" as CreditNoteRefundMode,
     };
   }
 
@@ -1006,5 +1067,6 @@ function createFormState(
     reason: editingCreditNote.reason,
     comment: editingCreditNote.comment,
     cart,
+    refundMode: editingCreditNote.refundMode ?? ("remboursement_especes" as CreditNoteRefundMode),
   };
 }

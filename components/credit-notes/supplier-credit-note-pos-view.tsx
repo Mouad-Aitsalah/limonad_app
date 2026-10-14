@@ -76,14 +76,13 @@ export function SupplierCreditNotePosView({
   onSaved,
   onClearEditing,
 }: SupplierCreditNotePosViewProps) {
+  // Lot 1: a supplier return leaves a DEPOT only - a truck is never offered
+  // (and the server refuses one anyway).
   const activeLocations = React.useMemo(
     () =>
       [...locations]
-        .filter((location) => location.active)
-        .sort((a, b) => {
-          if (a.type !== b.type) return a.type === "DEPOT" ? -1 : 1;
-          return a.name.localeCompare(b.name, "fr-FR");
-        }),
+        .filter((location) => location.active && location.type === "DEPOT")
+        .sort((a, b) => a.name.localeCompare(b.name, "fr-FR")),
     [locations],
   );
 
@@ -111,6 +110,9 @@ export function SupplierCreditNotePosView({
   const [comment, setComment] = React.useState(initialFormState.comment);
   const [cart, setCart] = React.useState<CartLine[]>(initialFormState.cart);
   const [busy, setBusy] = React.useState(false);
+  // One key per avoir being created (server-side idempotency): a double click or
+  // a retry returns the avoir already created. Renewed once saved or emptied.
+  const idempotencyKeyRef = React.useRef<string>(crypto.randomUUID());
 
   const selectedSupplier = suppliers.find((supplier) => supplier.id === supplierId) ?? null;
   const selectedSource =
@@ -210,6 +212,7 @@ export function SupplierCreditNotePosView({
     setReason("produit_defectueux");
     setComment("");
     setCart([]);
+    idempotencyKeyRef.current = crypto.randomUUID();
   }, [defaultSourceId]);
 
   function addProduct(product: ProductDto) {
@@ -297,6 +300,8 @@ export function SupplierCreditNotePosView({
       comment,
       returnDate,
       stockSourceLocationId: selectedSource.id,
+      // Only a fresh avoir needs it; updating a draft (id) never duplicates.
+      idempotencyKey: editingCreditNote ? null : idempotencyKeyRef.current,
       lines: cartLines.map((line) => ({
         productId: line.productId,
         quantityReturned: line.quantityReturned,

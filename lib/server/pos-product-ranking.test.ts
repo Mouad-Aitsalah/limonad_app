@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@/lib/generated/prisma/client";
+import { assertDevDatabaseOnly, assertLoopbackServer } from "@/lib/db-test-guard";
 
 import { SOLD_SALE_STATUSES, orderByIds, rankPosProducts, soldQuantitiesByProduct } from "./pos-product-ranking";
 
@@ -19,10 +20,13 @@ import { SOLD_SALE_STATUSES, orderByIds, rankPosProducts, soldQuantitiesByProduc
  * without a database.
  */
 
+// Never against production or a hosted database (lib/db-test-guard.ts): throws before any connection is made.
+assertDevDatabaseOnly("lib/server/pos-product-ranking.test.ts");
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 let reachable = false;
 
 before(async () => {
+  await assertLoopbackServer(prisma, "lib/server/pos-product-ranking.test.ts");
   try {
     await Promise.race([
       prisma.$queryRaw`select 1`,
