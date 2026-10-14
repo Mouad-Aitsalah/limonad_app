@@ -4,7 +4,8 @@ import { test } from "node:test";
 import { DESKTOP_SCALE_ROUTES, isDesktopScaleRoute } from "@/lib/desktop-scale-routes";
 
 test("scales every listed page, with or without trailing slash", () => {
-  assert.equal(DESKTOP_SCALE_ROUTES.length, 13);
+  assert.equal(DESKTOP_SCALE_ROUTES.length, 14);
+  assert.ok(DESKTOP_SCALE_ROUTES.includes("/ventes/journalieres/regroupement"), "the grouping page reads like its parent page");
   for (const route of DESKTOP_SCALE_ROUTES) {
     assert.equal(isDesktopScaleRoute(route), true, route);
     assert.equal(isDesktopScaleRoute(`${route}/`), true, `${route}/`);

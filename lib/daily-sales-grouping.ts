@@ -120,7 +120,7 @@ export type DailySalesGrouping = {
 };
 
 export function groupDailySales(lines: DailySaleLineInput[], options: GroupDailySalesOptions): DailySalesGrouping {
-  const byProduct = new Map<string, { name: string; reference: string; lines: DailySaleLineInput[]; prices: Map<number, { quantity: number; amountCents: number }> }>();
+  const byProduct = new Map<string, { name: string; reference: string; lines: DailySaleLineInput[]; prices: Map<number, { quantity: number; amountCents: number; lines: DailySaleLineInput[] }> }>();
   for (const line of lines) {
     let product = byProduct.get(line.productId);
     if (!product) {
@@ -129,9 +129,10 @@ export function groupDailySales(lines: DailySaleLineInput[], options: GroupDaily
     }
     product.lines.push(line);
     const key = appliedUnitPriceCents(line);
-    const group = product.prices.get(key) ?? { quantity: 0, amountCents: 0 };
+    const group = product.prices.get(key) ?? { quantity: 0, amountCents: 0, lines: [] };
     group.quantity += line.quantity;
     group.amountCents += cents(line.totalTTC);
+    group.lines.push(line);
     product.prices.set(key, group);
   }
 
@@ -141,7 +142,13 @@ export function groupDailySales(lines: DailySaleLineInput[], options: GroupDaily
   for (const [productId, product] of byProduct) {
     const priceGroups = [...product.prices.entries()]
       .sort(([a], [b]) => b - a)
-      .map(([unitCents, group]) => ({ unitPriceTTC: fromCents(unitCents), quantity: group.quantity, amountTTC: fromCents(group.amountCents) }));
+      .map(([unitCents, group]) => ({
+        unitPriceTTC: fromCents(unitCents),
+        quantity: group.quantity,
+        amountTTC: fromCents(group.amountCents),
+        // same rule as the product and the total, on the lines sold at this price only
+        ...(options.includeMargin ? { margin: summarizeMargin(group.lines, options.reliableSince) } : {}),
+      }));
     const productCents = [...product.prices.values()].reduce((sum, group) => sum + group.amountCents, 0);
     const productQuantity = [...product.prices.values()].reduce((sum, group) => sum + group.quantity, 0);
     linesTotalCents += productCents;

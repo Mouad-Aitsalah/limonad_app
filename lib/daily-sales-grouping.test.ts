@@ -44,7 +44,7 @@ test("the business example: 4 Sidi Ali 2 L, 3 at 20 DH and 1 at 19 DH -> two pri
   const result = groupDailySales(lines, opts({ revenueTotal: 79 }));
   assert.equal(result.products.length, 1);
   const [product] = result.products;
-  assert.deepEqual(product.priceGroups, [
+  assert.deepEqual(product.priceGroups.map(({ unitPriceTTC, quantity, amountTTC }) => ({ unitPriceTTC, quantity, amountTTC })), [
     { unitPriceTTC: 20, quantity: 3, amountTTC: 60 },
     { unitPriceTTC: 19, quantity: 1, amountTTC: 19 },
   ]);
@@ -74,7 +74,7 @@ test("the price is the one REALLY applied on the line (totalTTC / quantity, disc
 
 test("an old percentage-discount line whose unit price is not a whole cent is keyed to the nearest cent; its amount stays the real stored total", () => {
   const result = groupDailySales([line({ quantity: 3, totalTTC: 59.99 })], opts({ revenueTotal: 59.99 }));
-  assert.deepEqual(result.products[0].priceGroups, [{ unitPriceTTC: 20, quantity: 3, amountTTC: 59.99 }]);
+  assert.deepEqual(result.products[0].priceGroups.map(({ unitPriceTTC, quantity, amountTTC }) => ({ unitPriceTTC, quantity, amountTTC })), [{ unitPriceTTC: 20, quantity: 3, amountTTC: 59.99 }]);
   assert.equal(result.products[0].totalTTC, 59.99, "no amount is recomputed from the rounded price");
 });
 
@@ -113,6 +113,17 @@ test("margin HT = Σ(totalHT − qty × unitCostHT) and taux de marque = margin 
   assert.equal(margin.markupRate, 24.05); // 15.83 / 65.83 × 100
   assert.equal(margin.partial, false);
   assert.deepEqual(result.margin, margin, "one product: the total margin is that product's");
+});
+
+test("the margin of each applied price uses the same rule on the lines sold at that price; the three levels add up", () => {
+  const lines = [line({ quantity: 3, totalTTC: 60, totalHT: 50 }), line({ quantity: 1, totalTTC: 19, totalHT: 15.83 })];
+  const [product] = groupDailySales(lines, opts({ revenueTotal: 79 })).products;
+  const [at20, at19] = product.priceGroups;
+  assert.deepEqual([at20.margin!.marginHT, at20.margin!.markupRate], [12.5, 25]); // 50 − 3 × 12.50
+  assert.deepEqual([at19.margin!.marginHT, at19.margin!.markupRate], [3.33, 21.04]); // 15.83 − 12.50
+  assert.equal(Math.round((at20.margin!.marginHT + at19.margin!.marginHT) * 100) / 100, product.margin!.marginHT);
+  const hidden = groupDailySales(lines, opts({ includeMargin: false, revenueTotal: 79 })).products[0];
+  assert.equal(hidden.priceGroups.some((group) => "margin" in group), false, "no margin per price without the right");
 });
 
 test("a zero or unknown cost never produces an artificial margin: the line is left out and reported (the schema cannot tell a real 0 from an unknown cost)", () => {

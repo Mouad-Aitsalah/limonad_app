@@ -1,36 +1,31 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { Layers } from "lucide-react";
 
 import { DailyKpiCards } from "@/components/ventes/daily-kpi-cards";
-import { DailyInvoicesUserFilter } from "@/components/ventes/daily-invoices-user-filter";
-import { DailySalesGroupingButton } from "@/components/ventes/daily-sales-grouping-dialog";
+import { DailyInvoicesFilterFields } from "@/components/ventes/daily-invoices-filter-fields";
 import { InvoicesTable } from "@/components/ventes/invoices-table";
 import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
-import { paymentMethodOptions } from "@/components/ventes/orders-toolbar";
 import { useDailyInvoicesPage } from "@/components/ventes/use-daily-invoices-page";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { dailyInvoicesHref, dailySalesGroupingHref, type DailyInvoicesFilters } from "@/lib/daily-invoices-filters";
 import { formatCurrency } from "@/lib/utils";
 import type { DailyInvoicesPageDto } from "@/types/daily-invoice";
 
 type DailyInvoicesViewProps = {
   initialData: DailyInvoicesPageDto;
+  /** The filters of the URL (e.g. coming back from « Regroupement des ventes »). */
+  initialFilters: DailyInvoicesFilters;
+  /** The current business day - the latest selectable one. */
+  currentDay: string;
 };
 
-export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
-  const [day, setDay] = React.useState(initialData.day);
-  const [userIds, setUserIds] = React.useState<string[]>([]);
-  const [paymentMethod, setPaymentMethod] = React.useState("all");
+export function DailyInvoicesView({ initialData, initialFilters, currentDay }: DailyInvoicesViewProps) {
+  const [filters, setFilters] = React.useState<DailyInvoicesFilters>(initialFilters);
+  const { day, userIds, paymentMethod } = filters;
 
   const {
     data,
@@ -43,57 +38,27 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
     refetch,
   } = useDailyInvoicesPage({ day, userIds, paymentMethod }, initialData);
 
+  // The URL carries the active filters (a reload, the « Retour » of the grouping
+  // page and a shared link all show the same invoices). No navigation: the
+  // browser's own history entry is updated in place.
+  const href = dailyInvoicesHref(filters);
+  React.useEffect(() => {
+    if (`${window.location.pathname}${window.location.search}` !== href) {
+      window.history.replaceState(window.history.state, "", href);
+    }
+  }, [href]);
+
   const { kpis } = data;
 
   return (
     <div className="space-y-4 lg:space-y-6">
-      {/* Filters. Phones: full-width fields, tighter gaps, 40px touch height;
-          from lg the original spacing and heights. */}
-      <div className="grid gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3">
-        <div className="space-y-1 lg:space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Journée</Label>
-          <Input
-            className="max-lg:h-10"
-            type="date"
-            value={day}
-            max={initialData.day}
-            onChange={(event) => setDay(event.target.value || initialData.day)}
-          />
-        </div>
-        <div className="space-y-1 lg:space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Utilisateur</Label>
-          <DailyInvoicesUserFilter
-            options={data.userOptions}
-            value={userIds}
-            onChange={setUserIds}
-          />
-        </div>
-        <div className="space-y-1 lg:space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Mode de règlement</Label>
-          <Select
-            value={paymentMethod}
-            onValueChange={(value) => setPaymentMethod(value ?? "all")}
-          >
-            <SelectTrigger className="w-full max-lg:data-[size=default]:h-10">
-              <SelectValue placeholder="Tous">
-                {(value: string | null) =>
-                  value && value !== "all"
-                    ? paymentMethodOptions.find((option) => option.value === value)?.label ?? value
-                    : "Tous"
-                }
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tous</SelectItem>
-              {paymentMethodOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+      {/* Filters - the same component as the « Regroupement des ventes » page. */}
+      <DailyInvoicesFilterFields
+        value={filters}
+        onChange={setFilters}
+        userOptions={data.userOptions}
+        maxDay={currentDay}
+      />
 
       {/* KPIs */}
       <DailyKpiCards kpis={kpis} />
@@ -115,8 +80,14 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
               {data.totalCount} facture{data.totalCount > 1 ? "s" : ""}
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              {/* Same filters as the page (day, users, payment method). */}
-              <DailySalesGroupingButton filters={{ day, userIds, paymentMethod }} />
+              {/* Opens the dedicated page with the same filters (day, users, payment method). */}
+              <Link
+                href={dailySalesGroupingHref(filters)}
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+              >
+                <Layers aria-hidden="true" className="h-4 w-4" />
+                Regroupement des ventes
+              </Link>
               {/* admin only: renders nothing for another role */}
               <TableColumnsPanel pageKey="dailyInvoices" table="invoices" tableName="Factures" />
               <Button

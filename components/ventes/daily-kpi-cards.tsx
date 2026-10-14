@@ -86,11 +86,11 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
   );
 }
 
-function breakableUnit(value: string) {
+export function breakableUnit(value: string) {
   return value.replace(/ /g, " ");
 }
 
-function PrimaryKpi({
+export function PrimaryKpi({
   icon: Icon,
   label,
   value,
@@ -143,7 +143,7 @@ function PrimaryKpi({
  * right (« — » when the CA HT of the reliable lines is 0), and a « partielle » note
  * when lines without a reliable cost were left out (see lib/daily-sales-grouping.ts).
  */
-function MarginKpi({ margin }: { margin: DailyMarginDto }) {
+export function MarginKpi({ margin }: { margin: DailyMarginDto }) {
   const partialNote = marginPartialNote(margin);
   return (
     <div

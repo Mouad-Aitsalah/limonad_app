@@ -264,6 +264,16 @@ test("admin: margin HT and taux de marque over the reliable lines only; missing 
   assert.equal(oulmes.margin!.markupRate, null, "no reliable cost at all: « — », no artificial margin");
   assert.equal(oulmes.margin!.marginHT, 0);
   assert.equal(oulmes.margin!.missingCostLines, 2);
+  // the page's table: margin per applied price, same rule (the 18,00 line has an approximate cost: excluded, « — »)
+  const sidi = body.products.find((product) => product.name === "Sidi Ali 2 L")!;
+  assert.deepEqual(
+    sidi.priceGroups.map((group) => [group.unitPriceTTC, group.margin!.marginHT, group.margin!.markupRate, group.margin!.partial]),
+    [
+      [20, 12.5, 25, false],
+      [19, 3.33, 21.04, false],
+      [18, 0, null, true],
+    ],
+  );
   const kpis = (await page("admin", org)).body.kpis;
   assert.equal(kpis.margin!.marginHT, 15.83, "the KPI card and the grouping agree");
   assert.equal(kpis.margin!.markupRate, 24.05);
@@ -276,12 +286,26 @@ test("depot manager and cashier: the same quantities and amounts, but NO margin 
   for (const role of ["depot_manager", "cashier"] as const) {
     const g = await grouping(role, org);
     assert.equal(g.status, 200, role);
-    assert.deepEqual(g.body.products.map((product) => [product.name, product.priceGroups, product.totalQuantity, product.totalTTC]), admin.body.products.map((product) => [product.name, product.priceGroups, product.totalQuantity, product.totalTTC]), role);
+    // the admin's price rows also carry a margin; everything else must be identical
+    const withoutMargin = (groups: DailySalesGroupingDto["products"][number]["priceGroups"]) =>
+      groups.map(({ unitPriceTTC, quantity, amountTTC }) => ({ unitPriceTTC, quantity, amountTTC }));
+    assert.deepEqual(
+      g.body.products.map((product) => [product.name, product.priceGroups, product.totalQuantity, product.totalTTC]),
+      admin.body.products.map((product) => [product.name, withoutMargin(product.priceGroups), product.totalQuantity, product.totalTTC]),
+      role,
+    );
     assert.deepEqual(g.body.totals, admin.body.totals, role);
     for (const raw of [g.raw, (await page(role, org)).raw]) {
       assert.equal(/margin|markup|unitCost|cost/i.test(raw), false, `${role}: no margin or cost in ${raw.slice(0, 60)}`);
     }
   }
+});
+
+test("the grouping page gets the same « Utilisateur / Chauffeur » options as the daily invoices page (own organisation only)", { skip: SKIP }, async () => {
+  const org = await fixtures();
+  const [p, g] = await Promise.all([page("cashier", org), grouping("cashier", org)]);
+  assert.deepEqual(g.body.userOptions, p.body.userOptions);
+  assert.deepEqual(new Set(g.body.userOptions.map((option) => option.id)), new Set(Object.values(org.userIds)));
 });
 
 test("a driver is refused on both routes (403), and an organisation never sees another one's sales", { skip: SKIP }, async () => {

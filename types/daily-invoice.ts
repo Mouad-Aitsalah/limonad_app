@@ -49,7 +49,13 @@ export type DailyMarginDto = {
 };
 
 /** One unit price TTC really applied (after line discount) and what was sold at it. */
-export type DailySalesPriceGroupDto = { unitPriceTTC: number; quantity: number; amountTTC: number };
+export type DailySalesPriceGroupDto = {
+  unitPriceTTC: number;
+  quantity: number;
+  amountTTC: number;
+  /** Admin only: the margin of the lines sold at this price. */
+  margin?: DailyMarginDto;
+};
 
 export type DailySalesProductDto = {
   productId: string;
@@ -87,6 +93,8 @@ export type DailySalesGroupingDto = {
   totals: DailySalesGroupingTotalsDto;
   /** Admin only. */
   margin?: DailyMarginDto;
+  /** Org users, for the « Utilisateur / Chauffeur » filter (same list as the daily invoices page). */
+  userOptions: DailyInvoiceUserOptionDto[];
 };
 
 export type DailyInvoiceUserOptionDto = { id: string; name: string };

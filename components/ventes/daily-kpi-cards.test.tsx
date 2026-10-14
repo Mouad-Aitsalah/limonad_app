@@ -183,12 +183,14 @@ test("a long amount can drop its unit under the figure instead of splitting it",
 });
 
 test("filters: same three fields and handlers; phones get 40px touch heights and tighter gaps, desktop keeps its spacing", () => {
-  const view = readFileSync(new URL("./daily-invoices-view.tsx", import.meta.url), "utf8");
+  // the fields now live in one component shared with the « Regroupement des ventes » page
+  const view = readFileSync(new URL("./daily-invoices-filter-fields.tsx", import.meta.url), "utf8");
+  assert.match(readFileSync(new URL("./daily-invoices-view.tsx", import.meta.url), "utf8"), /<DailyInvoicesFilterFields\s+value=\{filters\}\s+onChange=\{setFilters\}/);
   assert.match(view, /grid gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3/);
   assert.match(view, /space-y-1 lg:space-y-1\.5/);
   assert.match(view, /className="max-lg:h-10"\s*type="date"/);
   assert.match(view, /max-lg:data-\[size=default\]:h-10/);
-  for (const kept of ["Journée", "Utilisateur", "Mode de règlement", "setDay(event.target.value || initialData.day)", "onChange={setUserIds}", "setPaymentMethod(value ?? \"all\")"]) {
+  for (const kept of ["Journée", "Utilisateur", "Mode de règlement", "setDay(event.target.value || maxDay)", "onChange={setUserIds}", "setPaymentMethod(next ?? \"all\")"]) {
     assert.ok(view.includes(kept), kept);
   }
   const userFilter = readFileSync(new URL("./daily-invoices-user-filter.tsx", import.meta.url), "utf8");
@@ -198,7 +200,7 @@ test("filters: same three fields and handlers; phones get 40px touch heights and
 test("the page keeps its filters, table and data flow; the server and other screens are untouched", () => {
   const view = readFileSync(new URL("./daily-invoices-view.tsx", import.meta.url), "utf8");
   assert.match(view, /<DailyKpiCards kpis=\{kpis\} \/>/);
-  for (const kept of ["DailyInvoicesUserFilter", "paymentMethodOptions", "useDailyInvoicesPage({ day, userIds, paymentMethod }, initialData)", "goToNextPage", "goToPreviousPage", "<InvoicesTable invoices={data.items} onSaleChanged={refetch} dailyLayout />", "kpis.reconciled"]) {
+  for (const kept of ["DailyInvoicesFilterFields", "userOptions={data.userOptions}", "useDailyInvoicesPage({ day, userIds, paymentMethod }, initialData)", "goToNextPage", "goToPreviousPage", "<InvoicesTable invoices={data.items} onSaleChanged={refetch} dailyLayout />", "kpis.reconciled"]) {
     assert.ok(view.includes(kept), kept);
   }
   const server = readFileSync(new URL("../../lib/server/daily-invoices.ts", import.meta.url), "utf8");

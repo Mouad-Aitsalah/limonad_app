@@ -5,6 +5,7 @@ import { businessDayRangeUtc, formatBusinessDayLabel } from "@/lib/business-day"
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
+import { dailyParamsFromSearchParams, type DailyInvoicesQueryParams } from "@/lib/daily-invoices-filters";
 import { canSeeDailyMargin, groupDailySales, summarizeMargin } from "@/lib/daily-sales-grouping";
 import { canSeeDiscountIndicator } from "@/lib/sale-discount-indicator";
 import { mapOrderRowToListItemDto, orderListSelect } from "@/lib/server/sales-history";
@@ -39,31 +40,10 @@ const PAYMENT_METHOD_VALUES = new Set(Object.keys(METHOD_LABEL));
 const CORE_METHOD_ORDER = ["CASH", "BANK_TRANSFER", "CHECK", "CREDIT"];
 const EXTRA_METHOD_ORDER = ["CARD", "MIXED"];
 
-export type DailyInvoicesPageParams = {
-  /** Business day "YYYY-MM-DD"; defaults to the current one (02:00 cutoff). */
-  day?: string;
-  cursor?: string | null;
-  pageSize?: number;
-  /** OR filter on Sale.createdByUserId. Empty = all users. */
-  userIds?: string[];
-  /** Exact Sale.paymentMethod; anything else = all methods. */
-  paymentMethod?: string;
-};
+export type DailyInvoicesPageParams = DailyInvoicesQueryParams;
 
-/** The query parameters of /api/daily-invoices and /api/daily-invoices/sales-grouping (same filters). */
-export function dailyParamsFromSearchParams(searchParams: URLSearchParams): DailyInvoicesPageParams {
-  const pageSizeParam = searchParams.get("pageSize");
-  const userIdsParam = searchParams.get("userIds");
-  return {
-    day: searchParams.get("day") || undefined,
-    cursor: searchParams.get("cursor") || undefined,
-    pageSize: pageSizeParam ? Number(pageSizeParam) : undefined,
-    userIds: userIdsParam
-      ? userIdsParam.split(",").map((value) => value.trim()).filter(Boolean)
-      : undefined,
-    paymentMethod: searchParams.get("paymentMethod") || undefined,
-  };
-}
+// One parser for the routes and the pages (pure, in lib/daily-invoices-filters.ts).
+export { dailyParamsFromSearchParams };
 
 /**
  * The sales of the page: one business day, sold statuses, the « Utilisateur » and
@@ -134,6 +114,16 @@ async function loadDailyMargin(saleWhere: Prisma.SaleWhereInput): Promise<DailyM
   );
 }
 
+/** Org users for the « Utilisateur » filter - one list for the daily invoices page and the grouping page. */
+async function loadDailyUserOptions(organizationId: string) {
+  const rows = await prisma.user.findMany({
+    where: { organizationId },
+    select: { id: true, fullName: true, email: true },
+    orderBy: { fullName: "asc" },
+  });
+  return rows.map((row) => ({ id: row.id, name: row.fullName?.trim() || row.email }));
+}
+
 type GroupingLineRow = {
   productId: string;
   quantity: number;
@@ -168,11 +158,12 @@ export async function getDailySalesGrouping(
     ? prisma.saleLine.findMany({ where: { sale: { is: saleWhere } }, select: { ...lineSelect, unitCostHT: true } })
     : prisma.saleLine.findMany({ where: { sale: { is: saleWhere } }, select: lineSelect });
 
-  const [lines, invoiceCount, sums, reliableSince] = await Promise.all([
+  const [lines, invoiceCount, sums, reliableSince, userOptions] = await Promise.all([
     linesQuery,
     prisma.sale.count({ where: saleWhere }),
     prisma.sale.aggregate({ where: saleWhere, _sum: { totalTTC: true, roundingAmount: true } }),
     includeMargin ? loadUnitCostReliableSince() : Promise.resolve(null),
+    loadDailyUserOptions(user.organizationId),
   ]);
 
   const grouping = groupDailySales(
@@ -201,6 +192,7 @@ export async function getDailySalesGrouping(
     products: grouping.products,
     totals: grouping.totals,
     ...(grouping.margin ? { margin: grouping.margin } : {}),
+    userOptions,
   };
 }
 
@@ -270,11 +262,7 @@ export async function getDailyInvoicesPage(
       where: { organizationId, status: "VALIDATED", sale: { is: saleWhere } },
       _sum: { amount: true },
     }),
-    prisma.user.findMany({
-      where: { organizationId },
-      select: { id: true, fullName: true, email: true },
-      orderBy: { fullName: "asc" },
-    }),
+    loadDailyUserOptions(organizationId),
     // Margin: admin only - for every other role no cost is read and no field is sent.
     canSeeDailyMargin(user.role) ? loadDailyMargin(saleWhere) : Promise.resolve(undefined),
   ]);
@@ -337,6 +325,6 @@ export async function getDailyInvoicesPage(
       reconciled: Math.abs(breakdownTotal - revenueTotal) < 0.01,
       ...(margin ? { margin } : {}),
     },
-    userOptions: userRows.map((row) => ({ id: row.id, name: row.fullName?.trim() || row.email })),
+    userOptions: userRows,
   };
 }

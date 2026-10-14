@@ -9,6 +9,7 @@
 export const DESKTOP_SCALE_ROUTES: readonly string[] = [
   "/ventes", // Archives des factures
   "/ventes/journalieres", // Factures journalières
+  "/ventes/journalieres/regroupement", // Regroupement des ventes (same reading size as its parent page)
   "/produits", // Produits
   "/categories", // Catégories
   "/stock", // Stock

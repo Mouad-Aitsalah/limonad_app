@@ -2,15 +2,13 @@
 
 import * as React from "react";
 
+import type { DailyInvoicesFilters } from "@/lib/daily-invoices-filters";
 import type { DailyInvoicesPageDto } from "@/types/daily-invoice";
 
 const PAGE_SIZE = 25;
 
-export type DailyInvoicesFilters = {
-  day: string;
-  userIds: string[];
-  paymentMethod: string;
-};
+// One filter shape for the daily invoices page and the grouping page (lib/daily-invoices-filters.ts).
+export type { DailyInvoicesFilters };
 
 /**
  * Cursor pagination for /ventes/journalieres, same forward-only + cursor
