@@ -5,13 +5,18 @@ export type SortDirection = "asc" | "desc";
 
 export const SALES_METRICS: readonly SalesMetric[] = ["quantity", "revenue", "margin"];
 
+/** Supplier filter value for the products that have no supplier (Product.defaultSupplierId IS NULL). */
+export const NO_SUPPLIER = "none";
+/** Coverage filter value for the customers assigned to nobody (Customer.createdByDriverId IS NULL). */
+export const UNASSIGNED = "unassigned";
+
 export type SalesAnalysisFilters = {
-  /** A driver id, or "all". */
-  driverId: string;
+  /** Selected sellers (user ids). Empty = every user. The figures are the UNION of the selected users. */
+  userIds: string[];
   /** "YYYY-MM". */
   month: string;
-  /** A supplier id, "all", or "none" (products without a supplier). */
-  supplierId: string;
+  /** Selected supplier ids, and/or NO_SUPPLIER. Empty = every product. */
+  supplierIds: string[];
   metric: SalesMetric;
   sort: SalesMetric;
   direction: SortDirection;
@@ -32,9 +37,10 @@ export type SalesProductRow = {
   margin: number;
 };
 
-export type SalesDriverRow = {
-  driverId: string;
-  driverName: string;
+/** One seller (user) of the comparison table. */
+export type SalesUserRow = {
+  userId: string;
+  userName: string;
   quantity: number;
   revenue: number;
   margin: number;
@@ -49,6 +55,8 @@ export type SalesTotals = {
   distinctProducts: number;
 };
 
+export type AnalysisUserOption = { id: string; name: string; isDriver: boolean };
+
 export type SalesAnalysisDto = {
   filters: SalesAnalysisFilters;
   period: { month: string; label: string; fromDay: string; toDay: string };
@@ -57,13 +65,15 @@ export type SalesAnalysisDto = {
   /** Total number of rows before the display cap. */
   productRowCount: number;
   truncated: boolean;
-  /** Per driver (same month / supplier filters) - only when driverId = "all". */
-  byDriver: SalesDriverRow[] | null;
-  drivers: Array<{ id: string; name: string }>;
+  /** Per seller (same month / supplier filters): the selected users, or every user when none is selected. */
+  byUser: SalesUserRow[];
+  users: AnalysisUserOption[];
   suppliers: Array<{ id: string; name: string }>;
-  /** Cases the figures cannot attribute reliably - shown instead of being guessed. */
+  /** True when the organisation has products without a supplier (the « Sans fournisseur » option). */
+  hasProductsWithoutSupplier: boolean;
+  /** Cases worth knowing about - shown instead of being hidden. */
   dataQuality: {
-    /** Truck sales of the period with no driver (not in any driver's figures). */
+    /** Truck sales of the period with no driver: attributed to the user who recorded them. */
     truckSalesWithoutDriver: { count: number; revenue: number };
     /** Returned lines with no link to a sale line: revenue is netted, the cost cannot be. */
     returnLinesWithoutCost: number;
@@ -71,8 +81,8 @@ export type SalesAnalysisDto = {
 };
 
 export type CoverageFilters = {
-  /** A driver id, or "all". */
-  driverId: string;
+  /** Selected users, and/or UNASSIGNED. Empty = every user (the « Non attribués » stay apart). */
+  userIds: string[];
   /** Monday of the week, "YYYY-MM-DD". */
   week: string;
 };
@@ -82,9 +92,11 @@ export type CoverageStatus = "BOUGHT" | "NO_PURCHASE";
 export type CoverageCustomerRow = {
   customerId: string;
   name: string;
+  /** The user whose portfolio the customer is in; null = « Non attribués ». */
+  ownerName: string | null;
   status: CoverageStatus;
   salesCount: number;
-  /** TTC invoiced to this customer by this driver during the week. */
+  /** TTC invoiced to this customer during the week (by its portfolio owner; by anybody for an unassigned one). */
   amount: number;
   /** ISO instant of the last sale of the week, null without purchase. */
   lastPurchaseAt: string | null;
@@ -98,18 +110,21 @@ export type CoverageSummary = {
   rate: number | null;
 };
 
-export type CoverageDriverRow = CoverageSummary & { driverId: string; driverName: string };
+export type CoverageUserRow = CoverageSummary & { userId: string; userName: string };
 
 export type CoverageDto = {
   filters: CoverageFilters;
   period: { fromDay: string; toDay: string; isCurrentWeek: boolean };
+  /** The selected users (union of their portfolios), or every user when none is selected. */
   summary: CoverageSummary;
-  /** The portfolio of the selected driver (empty for "all"). */
+  /** The customers of the selected portfolios (empty when nothing is selected). */
   customers: CoverageCustomerRow[];
   customersTruncated: boolean;
-  /** Per driver - only when driverId = "all". */
-  byDriver: CoverageDriverRow[] | null;
-  drivers: Array<{ id: string; name: string }>;
-  /** Customers served by the driver but outside the driver's portfolio (not in the rate). */
+  /** One row per user: the selected ones, or every relevant user when none is selected. */
+  byUser: CoverageUserRow[];
+  /** « Non attribués »: customers created at the office / imported, in no user's portfolio - always apart. */
+  unassigned: CoverageSummary;
+  users: AnalysisUserOption[];
+  /** Customers served by the selected users (or anybody) outside their own portfolio (not in the rate). */
   outsidePortfolio: { customers: number; sales: number };
 };

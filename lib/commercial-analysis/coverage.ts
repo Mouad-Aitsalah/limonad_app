@@ -1,25 +1,29 @@
 import { roundMoney } from "@/lib/money";
-import type { CoverageCustomerRow, CoverageDriverRow, CoverageSummary } from "@/types/commercial-analysis";
+import type { CoverageCustomerRow, CoverageSummary, CoverageUserRow } from "@/types/commercial-analysis";
 
 /**
  * Rules of « Couverture commerciale » - pure.
  *
- *   Rate = customers of the portfolio with at least one valid sale by the driver during the week
+ *   Rate = customers of the portfolio with at least one valid sale by its owner during the week
  *          / customers of the portfolio x 100
  *
  * - The denominator is the WHOLE portfolio, visited or not.
  * - A customer counts once per week, however many sales.
- * - A sale only counts for the portfolio of the driver who made it (Sale.driverId) and only for a customer
- *   of that portfolio (customers served outside it are reported apart, never in the rate).
+ * - A sale only counts for the portfolio of its seller (the user account of the sale's driver, else the
+ *   user who recorded it) and only for a customer of that portfolio (customers served outside it are
+ *   reported apart, never in the rate).
  * - No customer assigned -> no rate (null), never a division by zero.
  *
- * Portfolio (lib/server/commercial-analysis.ts): the ACTIVE customers created by the driver
- * (Customer.createdByDriverId - the rule the driver POS already uses) that existed at the end of the week.
- * The data has no assignment history: a customer belongs to ONE driver (its creator), so it can never be in two
- * portfolios, and a customer is never moved retroactively.
+ * Portfolio (lib/server/commercial-analysis-core.ts): the ACTIVE customers whose creating driver
+ * (Customer.createdByDriverId - the only customer-to-user assignment the data has, the rule the driver POS
+ * already uses) is the user's driver profile, existing at the end of the week. A customer belongs to ONE
+ * portfolio at most, so the union of several users' portfolios never counts a customer twice. A user without
+ * a driver profile has no portfolio (no assignment relation exists for him); the customers created at the
+ * office or imported (no creating driver) form the distinct « Non attribués » group, whose buyers are those
+ * who bought from anybody during the week. Nothing is ever reassigned.
  */
 
-export type PortfolioCustomer = { customerId: string; name: string };
+export type PortfolioCustomer = { customerId: string; name: string; ownerName?: string | null };
 
 export type WeekPurchase = {
   customerId: string;
@@ -45,7 +49,7 @@ export function summarize(assigned: number, buyers: number): CoverageSummary {
   };
 }
 
-/** The portfolio of ONE driver with each customer's week status. Only portfolio customers appear. */
+/** The selected portfolio(s) with each customer's week status. Only portfolio customers appear. */
 export function buildCustomerRows(
   portfolio: readonly PortfolioCustomer[],
   purchases: ReadonlyMap<string, WeekPurchase>,
@@ -57,6 +61,7 @@ export function buildCustomerRows(
       return {
         customerId: customer.customerId,
         name: customer.name,
+        ownerName: customer.ownerName ?? null,
         status: bought ? ("BOUGHT" as const) : ("NO_PURCHASE" as const),
         salesCount: bought ? purchase!.salesCount : 0,
         amount: bought ? roundMoney(purchase!.amount) : 0,
@@ -70,22 +75,22 @@ export function summarizeCustomerRows(rows: readonly CoverageCustomerRow[]): Cov
   return summarize(rows.length, rows.filter((row) => row.status === "BOUGHT").length);
 }
 
-export type CoverageDriverSortKey = "rate" | "buyers" | "withoutPurchase";
+export type CoverageUserSortKey = "rate" | "buyers" | "withoutPurchase";
 
-/** Drivers without a portfolio (rate null) go last whatever the direction. */
-export function sortCoverageDrivers(
-  rows: readonly CoverageDriverRow[],
-  key: CoverageDriverSortKey,
+/** Users without a portfolio (rate null) go last whatever the direction. */
+export function sortCoverageUsers(
+  rows: readonly CoverageUserRow[],
+  key: CoverageUserSortKey,
   direction: "asc" | "desc",
-): CoverageDriverRow[] {
+): CoverageUserRow[] {
   const sign = direction === "asc" ? 1 : -1;
-  const value = (row: CoverageDriverRow) => (key === "rate" ? row.rate : key === "buyers" ? row.buyers : row.withoutPurchase);
+  const value = (row: CoverageUserRow) => (key === "rate" ? row.rate : key === "buyers" ? row.buyers : row.withoutPurchase);
   return [...rows].sort((a, b) => {
     const left = value(a);
     const right = value(b);
     if (left === null && right !== null) return 1;
     if (right === null && left !== null) return -1;
     const delta = ((left ?? 0) - (right ?? 0)) * sign;
-    return delta || a.driverName.localeCompare(b.driverName, "fr", { sensitivity: "base" });
+    return delta || a.userName.localeCompare(b.userName, "fr", { sensitivity: "base" });
   });
 }

@@ -4,7 +4,12 @@ import { Suspense } from "react";
 import { CommercialAnalysisTabs } from "@/components/dashboard/commercial/commercial-analysis-tabs";
 import { ReceivablesSection } from "@/components/dashboard/receivables/receivables-section";
 import { DashboardForecastSection } from "@/components/dashboard/forecast/dashboard-forecast-section";
-import { ForecastSectionSkeleton } from "@/components/dashboard/forecast/forecast-section-view";
+import { ForecastCollapsible } from "@/components/dashboard/forecast/forecast-collapsible";
+import {
+  FORECAST_SECTION_DESCRIPTION,
+  FORECAST_SECTION_TITLE,
+  ForecastSectionSkeleton,
+} from "@/components/dashboard/forecast/forecast-section-view";
 import { DirectionCategoryChart } from "@/components/dashboard/direction-category-chart";
 import { DirectionEvolutionChart } from "@/components/dashboard/direction-evolution-chart";
 import { DirectionKpiCard } from "@/components/dashboard/direction-kpi-card";
@@ -79,9 +84,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       </div>
 
       {showForecast ? (
-        <Suspense fallback={<ForecastSectionSkeleton />}>
-          <DashboardForecastSection />
-        </Suspense>
+        <ForecastCollapsible title={FORECAST_SECTION_TITLE} description={FORECAST_SECTION_DESCRIPTION}>
+          <Suspense fallback={<ForecastSectionSkeleton embedded />}>
+            <DashboardForecastSection embedded />
+          </Suspense>
+        </ForecastCollapsible>
       ) : null}
 
       {showCommercialAnalysis ? <CommercialAnalysisTabs /> : null}

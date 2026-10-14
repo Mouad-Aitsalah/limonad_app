@@ -10,6 +10,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/lib/generated/prisma/client";
 import { assertDevDatabaseOnly, assertLoopbackServer } from "@/lib/db-test-guard";
 import { AnalysisFilterError } from "@/lib/commercial-analysis/filters";
+import { NO_SUPPLIER, UNASSIGNED } from "@/types/commercial-analysis";
 
 import { loadCoverage, loadSalesAnalysis } from "./commercial-analysis-core";
 
@@ -84,6 +85,13 @@ async function makeDriver(tx: Tx, org: Org, name: string, active = true) {
   return tx.driver.create({ data: { organizationId: org.organization.id, employeeCode: `E-${code}`, userId: user.id, active } });
 }
 
+/** A user without a driver profile (cashier, admin...). */
+async function makeUser(tx: Tx, org: Org, name: string, role: "ADMIN" | "CASHIER" | "DEPOT_MANAGER") {
+  return tx.user.create({
+    data: { organizationId: org.organization.id, firstName: name, lastName: "User", fullName: name, email: `u-${uid()}@example.invalid`, passwordHash: "x", role },
+  });
+}
+
 async function makeSupplier(tx: Tx, org: Org, name: string) {
   return tx.supplier.create({ data: { organizationId: org.organization.id, code: `S-${uid()}`, name } });
 }
@@ -130,7 +138,7 @@ async function makeCustomer(
 
 type SaleLineInput = { productId: string; quantity: number; totalHT: number; unitCostHT: number };
 
-/** A sale made by a driver (or none) with its lines; totals follow the lines (20 % VAT). */
+/** A sale made by a driver (or none) with its lines, recorded by the admin unless said otherwise; totals follow the lines (20 % VAT). */
 async function makeSale(
   tx: Tx,
   org: Org,
@@ -141,6 +149,7 @@ async function makeSale(
     status?: "DRAFT" | "VALIDATED" | "PARTIALLY_PAID" | "PAID" | "CREDIT" | "CANCELLED" | "CREDIT_NOTED";
     validatedAt?: Date;
     origin?: "COUNTER" | "TRUCK";
+    createdByUserId?: string;
   },
 ) {
   const subtotal = options.lines.reduce((sum, line) => sum + line.totalHT, 0);
@@ -157,7 +166,7 @@ async function makeSale(
       taxAmount: subtotal * 0.2,
       totalTTC: subtotal * 1.2,
       paymentMethod: "CASH",
-      createdByUserId: org.admin.id,
+      createdByUserId: options.createdByUserId ?? org.admin.id,
       validatedAt: options.validatedAt ?? IN_MONTH,
     },
   });
@@ -235,20 +244,21 @@ async function makeCreditNote(
 }
 
 const salesFilters = (overrides: Partial<Parameters<typeof loadSalesAnalysis>[2]> = {}) => ({
-  driverId: "all",
+  userIds: [] as string[],
   month: MONTH,
-  supplierId: "all",
+  supplierIds: [] as string[],
   metric: "revenue" as const,
   sort: "revenue" as const,
   direction: "desc" as const,
   ...overrides,
 });
+const coverageFilters = (userIds: string[] = [], week = WEEK) => ({ userIds, week });
 
 // ---------------------------------------------------------------------------
 // Analyse des ventes
 // ---------------------------------------------------------------------------
 
-test("combined filters driver + month + supplier only keep the matching lines", async (t) => {
+test("combined filters users + month + suppliers only keep the matching lines; several users / suppliers are cumulated", async (t) => {
   if (!reachable) return t.skip("no local database reachable");
   await inRollback(async (tx) => {
     const org = await makeOrg(tx, "combo");
@@ -266,29 +276,61 @@ test("combined filters driver + month + supplier only keep the matching lines", 
 
     const all = await loadSalesAnalysis(tx, org.organization.id, salesFilters());
     assert.deepEqual([all.totals.quantity, all.totals.revenue, all.totals.distinctProducts], [21, 225, 3]);
-    assert.equal(all.byDriver?.length, 2, "the comparison lists both drivers");
+    assert.deepEqual(new Set(all.byUser.map((row) => row.userId)), new Set([d1.userId, d2.userId]), "the comparison lists both sellers");
+    // the user filter offers every user of the organisation (drivers flagged), the supplier filter « Sans fournisseur »
+    assert.deepEqual(new Set(all.users.map((user) => user.id)), new Set([org.admin.id, d1.userId, d2.userId]));
+    assert.equal(all.users.find((user) => user.id === d1.userId)?.isDriver, true);
+    assert.equal(all.users.find((user) => user.id === org.admin.id)?.isDriver, false);
+    assert.equal(all.hasProductsWithoutSupplier, true);
 
-    const driverOnly = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ driverId: d1.id }));
-    assert.deepEqual([driverOnly.totals.quantity, driverOnly.totals.revenue], [16, 170]);
-    assert.equal(driverOnly.byDriver, null, "no comparison once one driver is chosen");
+    const one = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [d1.userId] }));
+    assert.deepEqual([one.totals.quantity, one.totals.revenue], [16, 170]);
+    assert.deepEqual(one.byUser.map((row) => row.userId), [d1.userId]);
 
-    const combined = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ driverId: d1.id, supplierId: s1.id }));
+    // two users = their union: each sale has ONE seller, nothing counted twice
+    const two = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [d1.userId, d2.userId] }));
+    assert.deepEqual([two.totals.quantity, two.totals.revenue, two.totals.margin], [all.totals.quantity, all.totals.revenue, all.totals.margin]);
+    const d2only = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [d2.userId] }));
+    assert.equal(two.totals.revenue, one.totals.revenue + d2only.totals.revenue);
+    assert.equal(two.products.find((p) => p.productId === pA.id)?.quantity, 15, "product A merges both users once");
+
+    const combined = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [d1.userId], supplierIds: [s1.id] }));
     assert.equal(combined.products.length, 1);
     assert.equal(combined.products[0].productId, pA.id);
     assert.equal(combined.products[0].supplierName, "Fournisseur 1");
     assert.deepEqual([combined.totals.quantity, combined.totals.revenue, combined.totals.margin, combined.totals.distinctProducts], [10, 100, 40, 1]);
 
-    const noSupplier = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ supplierId: "none" }));
+    const noSupplier = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ supplierIds: [NO_SUPPLIER] }));
     assert.deepEqual(noSupplier.products.map((p) => p.productId), [pC.id]);
+
+    // several suppliers, with « Sans fournisseur »: A (s1) + C (none), never B; one supplier per product -> no duplicate
+    const several = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ supplierIds: [s1.id, NO_SUPPLIER] }));
+    assert.deepEqual(new Set(several.products.map((p) => p.productId)), new Set([pA.id, pC.id]));
+    assert.deepEqual([several.totals.quantity, several.totals.revenue], [17, 185]);
+    const both = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ supplierIds: [s1.id, s2.id] }));
+    assert.deepEqual([both.totals.quantity, both.totals.revenue, both.products.length], [19, 195, 2]);
 
     // The previous month has none of this.
     const empty = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ month: "2026-02" }));
     assert.deepEqual(empty.totals, { quantity: 0, revenue: 0, margin: 0, distinctProducts: 0 });
     assert.deepEqual(empty.products, []);
+    assert.deepEqual(empty.byUser, []);
   });
 });
 
-test("several lines / invoices / drivers of the same product are ONE row; the margin uses the frozen cost, not the current price", async (t) => {
+test("« Sans fournisseur » is offered only when the organisation has products without a supplier", async (t) => {
+  if (!reachable) return t.skip("no local database reachable");
+  await inRollback(async (tx) => {
+    const org = await makeOrg(tx, "nosup");
+    const supplier = await makeSupplier(tx, org, "F");
+    await makeProduct(tx, org, "P", supplier.id);
+    assert.equal((await loadSalesAnalysis(tx, org.organization.id, salesFilters())).hasProductsWithoutSupplier, false);
+    await makeProduct(tx, org, "Q", null);
+    assert.equal((await loadSalesAnalysis(tx, org.organization.id, salesFilters())).hasProductsWithoutSupplier, true);
+  });
+});
+
+test("several lines / invoices / users of the same product are ONE row; the margin uses the frozen cost, not the current price", async (t) => {
   if (!reachable) return t.skip("no local database reachable");
   await inRollback(async (tx) => {
     const org = await makeOrg(tx, "agg");
@@ -311,8 +353,8 @@ test("several lines / invoices / drivers of the same product are ONE row; the ma
     assert.equal(row.margin, 58);
     assert.equal(result.totals.distinctProducts, 1);
     assert.equal(result.productRowCount, 1);
-    // the per-driver rows add up to the global figures
-    const sum = (result.byDriver ?? []).reduce((acc, d) => acc + d.revenue, 0);
+    // the per-user rows add up to the global figures
+    const sum = result.byUser.reduce((acc, user) => acc + user.revenue, 0);
     assert.equal(sum, result.totals.revenue);
   });
 });
@@ -346,8 +388,8 @@ test("validated credit notes of the month reduce quantity, revenue and margin (c
     const customer = await makeCustomer(tx, org, "Client", { driverId: driver.id });
     const { sale, lines } = await makeSale(tx, org, { driverId: driver.id, customerId: customer.id, status: "CREDIT_NOTED", lines: [{ productId: product.id, quantity: 10, totalHT: 200, unitCostHT: 12 }] });
 
-    // validated return of 2 u (40 HT) linked to the sale line, no driver on the credit note itself:
-    // the driver is the one of the ORIGINAL sale
+    // validated return of 2 u (40 HT) linked to the sale line, no driver on the credit note itself, recorded by the
+    // admin: the seller is the one of the ORIGINAL sale
     await makeCreditNote(tx, org, { originalSaleId: sale.id, customerId: customer.id, lines: [{ productId: product.id, saleLineId: lines[0].id, quantity: 2, totalHT: 40 }] });
     // ignored: draft, reversed, supplier credit note, and a return validated in ANOTHER month
     await makeCreditNote(tx, org, { originalSaleId: sale.id, customerId: customer.id, status: "DRAFT", lines: [{ productId: product.id, saleLineId: lines[0].id, quantity: 1, totalHT: 20 }] });
@@ -355,23 +397,25 @@ test("validated credit notes of the month reduce quantity, revenue and margin (c
     await makeCreditNote(tx, org, { originalSaleId: null, partyType: "SUPPLIER", supplierId: supplier.id, lines: [{ productId: product.id, saleLineId: null, quantity: 3, totalHT: 60 }] });
     await makeCreditNote(tx, org, { originalSaleId: sale.id, customerId: customer.id, validatedAt: OTHER_MONTH, lines: [{ productId: product.id, saleLineId: lines[0].id, quantity: 4, totalHT: 80 }] });
 
-    const result = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ driverId: driver.id }));
+    const result = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [driver.userId] }));
     const [row] = result.products;
     assert.equal(row.quantity, 8);
     assert.equal(row.revenue, 160);
     // margin = (200 - 120) - (40 - 24) = 64
     assert.equal(row.margin, 64);
     assert.equal(result.dataQuality.returnLinesWithoutCost, 0);
+    // the admin who recorded the credit note gets nothing
+    assert.deepEqual((await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [org.admin.id] }))).products, []);
 
     // A free-standing return (no sale line): revenue is netted, its cost is unknown and REPORTED.
     await makeCreditNote(tx, org, { originalSaleId: sale.id, customerId: customer.id, lines: [{ productId: product.id, saleLineId: null, quantity: 1, totalHT: 20 }] });
-    const after = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ driverId: driver.id }));
+    const after = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [driver.userId] }));
     assert.equal(after.products[0].revenue, 140);
     assert.equal(after.dataQuality.returnLinesWithoutCost, 1);
   });
 });
 
-test("a credit note with no original sale uses its own driver; with no driver at all it is not put on anybody", async (t) => {
+test("a credit note with no original sale goes to its own driver, else to the user who recorded it", async (t) => {
   if (!reachable) return t.skip("no local database reachable");
   await inRollback(async (tx) => {
     const org = await makeOrg(tx, "cn-driver");
@@ -381,25 +425,38 @@ test("a credit note with no original sale uses its own driver; with no driver at
     await makeCreditNote(tx, org, { originalSaleId: null, driverId: driver.id, customerId: customer.id, lines: [{ productId: product.id, saleLineId: null, quantity: 1, totalHT: 15 }] });
     await makeCreditNote(tx, org, { originalSaleId: null, driverId: null, customerId: customer.id, lines: [{ productId: product.id, saleLineId: null, quantity: 1, totalHT: 500 }] });
     const result = await loadSalesAnalysis(tx, org.organization.id, salesFilters());
-    assert.equal(result.totals.revenue, -15);
+    assert.equal(result.totals.revenue, -515);
     assert.equal(result.totals.distinctProducts, 0, "a product that was only returned is not « sold »");
+    assert.equal((await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [driver.userId] }))).totals.revenue, -15);
+    assert.equal((await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [org.admin.id] }))).totals.revenue, -500);
   });
 });
 
-test("sales with no driver (counter sales, unattributed truck sales) never go on a driver; truck ones are reported", async (t) => {
+test("counter sales go to the user who recorded them; truck sales without a driver too, and are reported", async (t) => {
   if (!reachable) return t.skip("no local database reachable");
   await inRollback(async (tx) => {
-    const org = await makeOrg(tx, "unattributed");
+    const org = await makeOrg(tx, "sellers");
     const driver = await makeDriver(tx, org, "Karim");
+    const cashier = await makeUser(tx, org, "Caissier", "CASHIER");
     const product = await makeProduct(tx, org, "P", null);
     const customer = await makeCustomer(tx, org, "Client");
     await makeSale(tx, org, { driverId: driver.id, customerId: customer.id, lines: [{ productId: product.id, quantity: 1, totalHT: 10, unitCostHT: 1 }] });
-    await makeSale(tx, org, { driverId: null, customerId: customer.id, origin: "COUNTER", lines: [{ productId: product.id, quantity: 7, totalHT: 700, unitCostHT: 1 }] });
+    await makeSale(tx, org, { driverId: null, customerId: customer.id, origin: "COUNTER", createdByUserId: cashier.id, lines: [{ productId: product.id, quantity: 7, totalHT: 700, unitCostHT: 1 }] });
     await makeSale(tx, org, { driverId: null, customerId: customer.id, origin: "TRUCK", lines: [{ productId: product.id, quantity: 3, totalHT: 90, unitCostHT: 1 }] });
 
-    const result = await loadSalesAnalysis(tx, org.organization.id, salesFilters());
-    assert.deepEqual([result.totals.quantity, result.totals.revenue], [1, 10]);
-    assert.deepEqual(result.dataQuality.truckSalesWithoutDriver, { count: 1, revenue: 90 });
+    const all = await loadSalesAnalysis(tx, org.organization.id, salesFilters());
+    assert.deepEqual([all.totals.quantity, all.totals.revenue], [11, 800]);
+    assert.deepEqual(all.dataQuality.truckSalesWithoutDriver, { count: 1, revenue: 90 });
+    const byUser = new Map(all.byUser.map((row) => [row.userId, row.revenue]));
+    assert.deepEqual([byUser.get(driver.userId), byUser.get(cashier.id), byUser.get(org.admin.id)], [10, 700, 90]);
+
+    const cashierOnly = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [cashier.id] }));
+    assert.deepEqual([cashierOnly.totals.quantity, cashierOnly.totals.revenue], [7, 700]);
+    assert.deepEqual(cashierOnly.dataQuality.truckSalesWithoutDriver, { count: 0, revenue: 0 });
+    const driverAndCashier = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [driver.userId, cashier.id] }));
+    assert.deepEqual([driverAndCashier.totals.quantity, driverAndCashier.totals.revenue], [8, 710]);
+    const adminOnly = await loadSalesAnalysis(tx, org.organization.id, salesFilters({ userIds: [org.admin.id] }));
+    assert.deepEqual(adminOnly.dataQuality.truckSalesWithoutDriver, { count: 1, revenue: 90 });
   });
 });
 
@@ -429,7 +486,7 @@ test("sorting is done by the chosen metric and direction", async (t) => {
   });
 });
 
-test("organisation isolation: another organisation's sales, drivers and suppliers are invisible and unusable as filters", async (t) => {
+test("organisation isolation: another organisation's sales, users and suppliers are invisible and unusable as filters", async (t) => {
   if (!reachable) return t.skip("no local database reachable");
   await inRollback(async (tx) => {
     const mine = await makeOrg(tx, "mine");
@@ -446,24 +503,19 @@ test("organisation isolation: another organisation's sales, drivers and supplier
 
     const result = await loadSalesAnalysis(tx, mine.organization.id, salesFilters());
     assert.deepEqual([result.totals.quantity, result.totals.revenue], [1, 10]);
-    assert.deepEqual(result.drivers.map((d) => d.id), [myDriver.id]);
+    assert.deepEqual(new Set(result.users.map((user) => user.id)), new Set([mine.admin.id, myDriver.userId]));
     assert.deepEqual(result.suppliers, []);
 
-    await assert.rejects(
-      loadSalesAnalysis(tx, mine.organization.id, salesFilters({ driverId: otherDriver.id })),
-      (error: unknown) => error instanceof AnalysisFilterError && error.field === "driverId",
-    );
-    await assert.rejects(
-      loadSalesAnalysis(tx, mine.organization.id, salesFilters({ supplierId: otherSupplier.id })),
-      (error: unknown) => error instanceof AnalysisFilterError && error.field === "supplierId",
-    );
-    await assert.rejects(
-      loadCoverage(tx, mine.organization.id, { driverId: otherDriver.id, week: WEEK }),
-      (error: unknown) => error instanceof AnalysisFilterError && error.field === "driverId",
-    );
+    const refused = (field: string) => (error: unknown) => error instanceof AnalysisFilterError && error.field === field;
+    // a selection that contains ONE foreign / unknown id is refused as a whole (never a silent partial filter)
+    await assert.rejects(loadSalesAnalysis(tx, mine.organization.id, salesFilters({ userIds: [myDriver.userId, otherDriver.userId] })), refused("userIds"));
+    await assert.rejects(loadSalesAnalysis(tx, mine.organization.id, salesFilters({ userIds: ["ghost"] })), refused("userIds"));
+    await assert.rejects(loadSalesAnalysis(tx, mine.organization.id, salesFilters({ supplierIds: [otherSupplier.id] })), refused("supplierIds"));
+    await assert.rejects(loadCoverage(tx, mine.organization.id, coverageFilters([otherDriver.userId])), refused("userIds"));
 
-    const coverage = await loadCoverage(tx, mine.organization.id, { driverId: "all", week: WEEK });
-    assert.deepEqual(coverage.byDriver?.map((d) => d.driverId), [myDriver.id]);
+    const coverage = await loadCoverage(tx, mine.organization.id, coverageFilters());
+    assert.deepEqual(coverage.byUser.map((row) => row.userId), [myDriver.userId]);
+    assert.deepEqual(new Set(coverage.users.map((user) => user.id)), new Set([mine.admin.id, myDriver.userId]));
   });
 });
 
@@ -487,7 +539,7 @@ test("the month boundary follows the business day (02:00): 01:30 on the 1st stil
 // Couverture commerciale
 // ---------------------------------------------------------------------------
 
-test("coverage of one driver: 50 assigned customers, 40 buyers = 80 %; a customer buying 3 times counts once", async (t) => {
+test("coverage of one user: 50 assigned customers, 40 buyers = 80 %; a customer buying 3 times counts once", async (t) => {
   if (!reachable) return t.skip("no local database reachable");
   await inRollback(async (tx) => {
     const org = await makeOrg(tx, "cov50");
@@ -504,12 +556,12 @@ test("coverage of one driver: 50 assigned customers, 40 buyers = 80 %; a custome
     await makeSale(tx, org, { driverId: driver.id, customerId: customers[0].id, validatedAt: new Date("2026-03-14T12:00:00Z"), lines: line });
     await makeSale(tx, org, { driverId: driver.id, customerId: customers[45].id, validatedAt: OTHER_WEEK, lines: line });
 
-    const result = await loadCoverage(tx, org.organization.id, { driverId: driver.id, week: WEEK });
+    const result = await loadCoverage(tx, org.organization.id, coverageFilters([driver.userId]));
     assert.deepEqual(result.summary, { assigned: 50, buyers: 40, withoutPurchase: 10, rate: 80 });
     assert.equal(result.customers.length, 50);
     assert.equal(result.customers.filter((c) => c.status === "BOUGHT").length, 40);
     const first = result.customers.find((c) => c.customerId === customers[0].id)!;
-    assert.deepEqual([first.status, first.salesCount, first.amount], ["BOUGHT", 3, 36]);
+    assert.deepEqual([first.status, first.salesCount, first.amount, first.ownerName], ["BOUGHT", 3, 36, "Karim"]);
     assert.ok(first.lastPurchaseAt?.startsWith("2026-03-14"));
     const never = result.customers.find((c) => c.customerId === customers[45].id)!;
     assert.deepEqual([never.status, never.salesCount, never.amount, never.lastPurchaseAt], ["NO_PURCHASE", 0, 0, null]);
@@ -517,12 +569,11 @@ test("coverage of one driver: 50 assigned customers, 40 buyers = 80 %; a custome
     assert.equal(result.period.toDay, "2026-03-15");
 
     // any day of the week gives the same Monday-Sunday window
-    assert.equal(weekOf(await loadCoverage(tx, org.organization.id, { driverId: driver.id, week: "2026-03-09" })), 40);
+    assert.equal((await loadCoverage(tx, org.organization.id, coverageFilters([driver.userId], "2026-03-12"))).summary.buyers, 40);
   });
 });
-const weekOf = (result: Awaited<ReturnType<typeof loadCoverage>>) => result.summary.buyers;
 
-test("coverage: not counted = cancelled / draft sales, inactive customers, customers created after the week, other drivers' customers", async (t) => {
+test("coverage: not counted = cancelled / draft sales, inactive customers, customers created after the week, other users' customers", async (t) => {
   if (!reachable) return t.skip("no local database reachable");
   await inRollback(async (tx) => {
     const org = await makeOrg(tx, "covrules");
@@ -534,33 +585,101 @@ test("coverage: not counted = cancelled / draft sales, inactive customers, custo
     const draftOnly = await makeCustomer(tx, org, "C brouillon", { driverId: d1.id });
     const inactive = await makeCustomer(tx, org, "D inactif", { driverId: d1.id, status: "INACTIVE" });
     const later = await makeCustomer(tx, org, "E tardif", { driverId: d1.id, createdAt: new Date("2026-03-16T12:00:00Z") });
-    const otherDriversCustomer = await makeCustomer(tx, org, "F de Said", { driverId: d2.id });
-    const adminCustomer = await makeCustomer(tx, org, "G sans chauffeur");
+    const otherUsersCustomer = await makeCustomer(tx, org, "F de Said", { driverId: d2.id });
+    const officeCustomer = await makeCustomer(tx, org, "G sans chauffeur");
 
     await makeSale(tx, org, { driverId: d1.id, customerId: bought.id, validatedAt: IN_WEEK, lines: line });
     await makeSale(tx, org, { driverId: d1.id, customerId: cancelledOnly.id, status: "CANCELLED", validatedAt: IN_WEEK, lines: line });
     await makeSale(tx, org, { driverId: d1.id, customerId: draftOnly.id, status: "DRAFT", validatedAt: IN_WEEK, lines: line });
     await makeSale(tx, org, { driverId: d1.id, customerId: inactive.id, validatedAt: IN_WEEK, lines: line });
     await makeSale(tx, org, { driverId: d1.id, customerId: later.id, validatedAt: IN_WEEK, lines: line });
-    // d1 serves d2's customer and a customer with no driver: reported apart, never in d1's rate
-    await makeSale(tx, org, { driverId: d1.id, customerId: otherDriversCustomer.id, validatedAt: IN_WEEK, lines: line });
-    await makeSale(tx, org, { driverId: d1.id, customerId: adminCustomer.id, validatedAt: IN_WEEK, lines: line });
+    // d1 serves d2's customer and an office customer: reported apart, never in d1's rate
+    await makeSale(tx, org, { driverId: d1.id, customerId: otherUsersCustomer.id, validatedAt: IN_WEEK, lines: line });
+    await makeSale(tx, org, { driverId: d1.id, customerId: officeCustomer.id, validatedAt: IN_WEEK, lines: line });
 
-    const one = await loadCoverage(tx, org.organization.id, { driverId: d1.id, week: WEEK });
+    const one = await loadCoverage(tx, org.organization.id, coverageFilters([d1.userId]));
     assert.deepEqual(one.customers.map((c) => c.name), ["A achete", "B annule", "C brouillon"]);
     assert.deepEqual(one.summary, { assigned: 3, buyers: 1, withoutPurchase: 2, rate: 33.3 });
-    // inactive, later-created, other driver's and admin customers = 4 customers / 4 sales outside the portfolio
+    // inactive, later-created, other user's and office customers = 4 customers / 4 sales outside the portfolio
     assert.deepEqual(one.outsidePortfolio, { customers: 4, sales: 4 });
 
-    // The "all drivers" figures agree with the single-driver ones, and a customer is in ONE portfolio only.
-    const all = await loadCoverage(tx, org.organization.id, { driverId: "all", week: WEEK });
-    const row1 = all.byDriver!.find((r) => r.driverId === d1.id)!;
-    const row2 = all.byDriver!.find((r) => r.driverId === d2.id)!;
+    // "all users": every portfolio, the « Non attribués » kept APART (not in the summary)
+    const all = await loadCoverage(tx, org.organization.id, coverageFilters());
+    const row1 = all.byUser.find((r) => r.userId === d1.userId)!;
+    const row2 = all.byUser.find((r) => r.userId === d2.userId)!;
     assert.deepEqual([row1.assigned, row1.buyers, row1.withoutPurchase, row1.rate], [3, 1, 2, 33.3]);
     assert.deepEqual([row2.assigned, row2.buyers, row2.withoutPurchase, row2.rate], [1, 0, 1, 0]);
-    assert.equal(all.summary.assigned, row1.assigned + row2.assigned, "no customer is counted for two drivers");
+    assert.deepEqual(all.summary, { assigned: 4, buyers: 1, withoutPurchase: 3, rate: 25 });
+    assert.deepEqual(all.unassigned, { assigned: 1, buyers: 1, withoutPurchase: 0, rate: 100 });
     assert.deepEqual(all.outsidePortfolio, one.outsidePortfolio);
     assert.deepEqual(all.customers, []);
+
+    // two users: the union of their portfolios, each customer once, with its owner
+    const two = await loadCoverage(tx, org.organization.id, coverageFilters([d1.userId, d2.userId]));
+    assert.deepEqual(two.summary, all.summary);
+    assert.deepEqual(two.customers.map((c) => [c.name, c.ownerName]), [["A achete", "Karim"], ["B annule", "Karim"], ["C brouillon", "Karim"], ["F de Said", "Said"]]);
+    assert.deepEqual(two.byUser.map((r) => r.userId), [d1.userId, d2.userId]);
+
+    // « Non attribués » selected with a user: added to the summary, listed with no owner
+    const withUnassigned = await loadCoverage(tx, org.organization.id, coverageFilters([d1.userId, UNASSIGNED]));
+    assert.deepEqual(withUnassigned.summary, { assigned: 4, buyers: 2, withoutPurchase: 2, rate: 50 });
+    const office = withUnassigned.customers.find((c) => c.customerId === officeCustomer.id)!;
+    assert.deepEqual([office.ownerName, office.status, office.salesCount], [null, "BOUGHT", 1]);
+
+    // « Non attribués » alone: only them, no user row, nothing « outside a portfolio »
+    const onlyUnassigned = await loadCoverage(tx, org.organization.id, coverageFilters([UNASSIGNED]));
+    assert.deepEqual(onlyUnassigned.summary, { assigned: 1, buyers: 1, withoutPurchase: 0, rate: 100 });
+    assert.deepEqual(onlyUnassigned.customers.map((c) => c.name), ["G sans chauffeur"]);
+    assert.deepEqual(onlyUnassigned.byUser, []);
+    assert.deepEqual(onlyUnassigned.outsidePortfolio, { customers: 0, sales: 0 });
+  });
+});
+
+test("coverage: a customer bought by two users is counted once, in its owner's portfolio only", async (t) => {
+  if (!reachable) return t.skip("no local database reachable");
+  await inRollback(async (tx) => {
+    const org = await makeOrg(tx, "covdouble");
+    const [d1, d2] = [await makeDriver(tx, org, "Karim"), await makeDriver(tx, org, "Said")];
+    const product = await makeProduct(tx, org, "P", null);
+    const line = [{ productId: product.id, quantity: 1, totalHT: 10, unitCostHT: 1 }];
+    const shared = await makeCustomer(tx, org, "Partage", { driverId: d1.id });
+    await makeCustomer(tx, org, "Seul", { driverId: d1.id });
+    await makeSale(tx, org, { driverId: d1.id, customerId: shared.id, validatedAt: IN_WEEK, lines: line });
+    await makeSale(tx, org, { driverId: d2.id, customerId: shared.id, validatedAt: IN_WEEK, lines: line });
+
+    const two = await loadCoverage(tx, org.organization.id, coverageFilters([d1.userId, d2.userId]));
+    assert.deepEqual(two.summary, { assigned: 2, buyers: 1, withoutPurchase: 1, rate: 50 });
+    // d2's sale to a customer of d1: outside d2's portfolio, reported once
+    assert.deepEqual(two.outsidePortfolio, { customers: 1, sales: 1 });
+    assert.equal(two.customers.find((c) => c.customerId === shared.id)?.salesCount, 1, "only the owner's sale counts for the rate");
+  });
+});
+
+test("coverage: a user without a driver profile has no portfolio; office customers stay « Non attribués » and are never reassigned", async (t) => {
+  if (!reachable) return t.skip("no local database reachable");
+  await inRollback(async (tx) => {
+    const org = await makeOrg(tx, "covcashier");
+    const driver = await makeDriver(tx, org, "Karim");
+    const cashier = await makeUser(tx, org, "Caissier", "CASHIER");
+    const product = await makeProduct(tx, org, "P", null);
+    const line = [{ productId: product.id, quantity: 1, totalHT: 10, unitCostHT: 1 }];
+    const office = await makeCustomer(tx, org, "Bureau");
+    await makeCustomer(tx, org, "Importe");
+    await makeSale(tx, org, { driverId: null, origin: "COUNTER", createdByUserId: cashier.id, customerId: office.id, validatedAt: IN_WEEK, lines: line });
+
+    const all = await loadCoverage(tx, org.organization.id, coverageFilters());
+    assert.deepEqual(all.unassigned, { assigned: 2, buyers: 1, withoutPurchase: 1, rate: 50 });
+    const cashierRow = all.byUser.find((r) => r.userId === cashier.id)!;
+    assert.deepEqual([cashierRow.assigned, cashierRow.rate], [0, null], "the cashier sold this week, but has no portfolio");
+    assert.ok(all.byUser.some((r) => r.userId === driver.userId), "an active driver is listed even without sales");
+
+    const cashierOnly = await loadCoverage(tx, org.organization.id, coverageFilters([cashier.id]));
+    assert.deepEqual(cashierOnly.summary, { assigned: 0, buyers: 0, withoutPurchase: 0, rate: null });
+    assert.deepEqual(cashierOnly.outsidePortfolio, { customers: 1, sales: 1 });
+
+    // read only: nobody was given the office customers
+    const after = await tx.customer.findMany({ where: { organizationId: org.organization.id }, select: { createdByDriverId: true } });
+    assert.ok(after.every((customer) => customer.createdByDriverId === null));
   });
 });
 
@@ -577,15 +696,16 @@ test("coverage: everybody bought = 100 %, nobody bought = 0 %, nobody assigned =
     }
     await makeCustomer(tx, org, "c", { driverId: none.id });
 
-    const rate = async (driverId: string) => (await loadCoverage(tx, org.organization.id, { driverId, week: WEEK })).summary;
-    assert.deepEqual(await rate(full.id), { assigned: 2, buyers: 2, withoutPurchase: 0, rate: 100 });
-    assert.deepEqual(await rate(none.id), { assigned: 1, buyers: 0, withoutPurchase: 1, rate: 0 });
-    assert.deepEqual(await rate(empty.id), { assigned: 0, buyers: 0, withoutPurchase: 0, rate: null });
-    assert.deepEqual((await loadCoverage(tx, org.organization.id, { driverId: empty.id, week: WEEK })).customers, []);
+    const rate = async (userId: string) => (await loadCoverage(tx, org.organization.id, coverageFilters([userId]))).summary;
+    assert.deepEqual(await rate(full.userId), { assigned: 2, buyers: 2, withoutPurchase: 0, rate: 100 });
+    assert.deepEqual(await rate(none.userId), { assigned: 1, buyers: 0, withoutPurchase: 1, rate: 0 });
+    assert.deepEqual(await rate(empty.userId), { assigned: 0, buyers: 0, withoutPurchase: 0, rate: null });
+    assert.deepEqual((await loadCoverage(tx, org.organization.id, coverageFilters([empty.userId]))).customers, []);
 
-    const all = await loadCoverage(tx, org.organization.id, { driverId: "all", week: WEEK });
-    assert.equal(all.byDriver!.find((r) => r.driverId === empty.id)!.rate, null);
+    const all = await loadCoverage(tx, org.organization.id, coverageFilters());
+    assert.equal(all.byUser.find((r) => r.userId === empty.userId)!.rate, null);
     assert.deepEqual(all.summary, { assigned: 3, buyers: 2, withoutPurchase: 1, rate: 66.7 });
+    assert.deepEqual(all.unassigned, { assigned: 0, buyers: 0, withoutPurchase: 0, rate: null });
   });
 });
 
@@ -597,10 +717,10 @@ test("coverage: a week with no sales at all, and a week before the customers exi
     await makeCustomer(tx, org, "Ancien", { driverId: driver.id, createdAt: new Date("2026-01-05T10:00:00Z") });
     await makeCustomer(tx, org, "Recent", { driverId: driver.id, createdAt: new Date("2026-03-10T10:00:00Z") });
 
-    const quiet = await loadCoverage(tx, org.organization.id, { driverId: driver.id, week: WEEK });
+    const quiet = await loadCoverage(tx, org.organization.id, coverageFilters([driver.userId]));
     assert.deepEqual(quiet.summary, { assigned: 2, buyers: 0, withoutPurchase: 2, rate: 0 });
     // the week BEFORE the second customer existed: only the first is in the portfolio
-    const before = await loadCoverage(tx, org.organization.id, { driverId: driver.id, week: "2026-03-02" });
+    const before = await loadCoverage(tx, org.organization.id, coverageFilters([driver.userId], "2026-03-02"));
     assert.deepEqual(before.customers.map((c) => c.name), ["Ancien"]);
     assert.equal(before.summary.assigned, 1);
   });

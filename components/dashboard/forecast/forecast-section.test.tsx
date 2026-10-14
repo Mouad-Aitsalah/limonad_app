@@ -4,10 +4,13 @@ import { test } from "node:test";
 
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { ForecastCollapsible } from "@/components/dashboard/forecast/forecast-collapsible";
 import {
   ForecastSectionSkeleton,
   ForecastSectionView,
   FORECAST_INDICATIVE_NOTE,
+  FORECAST_SECTION_DESCRIPTION,
+  FORECAST_SECTION_TITLE,
 } from "@/components/dashboard/forecast/forecast-section-view";
 import { formatComputedAt, formatForecastDay } from "@/lib/forecasting/forecast-format";
 import type { DashboardForecastDto, DashboardForecastReady } from "@/types/dashboard-forecast";
@@ -192,12 +195,64 @@ test("formatting helpers", () => {
   assert.match(formatComputedAt("2026-10-03T00:10:00.000Z"), /^03\/10\/2026 à 0[12]:10$/);
 });
 
-test("page wiring: the section sits after the indicator rows and before the charts, in a Suspense, only for authorised roles", () => {
+test("collapsible bar: CLOSED by default - the title, the icon and aria-expanded=false, the content hidden but present", () => {
+  const markup = renderToStaticMarkup(
+    <ForecastCollapsible title={FORECAST_SECTION_TITLE} description={FORECAST_SECTION_DESCRIPTION}>
+      <ForecastSectionView data={ready()} embedded />
+    </ForecastCollapsible>,
+  );
+  assert.match(markup, /data-forecast-collapsible="closed"/);
+  assert.match(markup, /<button type="button" aria-expanded="false" aria-controls="([^"]+)"/);
+  const controls = /aria-controls="([^"]+)"/.exec(markup)![1];
+  // the controlled region is the hidden one, and the content is already there (no reload when it opens)
+  assert.ok(markup.includes(`id="${controls}" role="region" aria-label="Intelligence &amp; Prévisions IA" hidden=""`), "hidden region");
+  assert.match(text(markup), /Intelligence & Prévisions IA/);
+  assert.match(text(markup), /Afficher/);
+  assert.match(markup, /lucide-chevron-down/);
+  assert.equal(/rotate-180/.test(markup), false, "closed: the chevron points down");
+  assert.match(text(markup), /Ventes prévues \(7 jours\)/, "content rendered (hidden), not removed");
+  // embedded: the title is drawn once, by the bar
+  assert.equal((text(markup).match(/Intelligence & Prévisions IA/g) ?? []).length, 1);
+});
+
+test("collapsible bar: open, the content is visible, the chevron turns and the label says « Masquer »", () => {
+  const markup = renderToStaticMarkup(
+    <ForecastCollapsible title={FORECAST_SECTION_TITLE} description={FORECAST_SECTION_DESCRIPTION} defaultOpen>
+      <p>contenu</p>
+    </ForecastCollapsible>,
+  );
+  assert.match(markup, /data-forecast-collapsible="open"/);
+  assert.match(markup, /aria-expanded="true"/);
+  assert.equal(/hidden=""/.test(markup), false);
+  assert.match(markup, /rotate-180/);
+  assert.match(text(markup), /Masquer/);
+});
+
+test("collapsible bar: clicking toggles the state (open, then closed again)", () => {
+  const source = read("./forecast-collapsible.tsx");
+  assert.match(source, /React\.useState\(defaultOpen\)/);
+  assert.match(source, /defaultOpen = false/);
+  assert.match(source, /onClick=\{\(\) => setOpen\(\(value\) => !value\)\}/);
+  assert.match(source, /hidden=\{!open\}/);
+});
+
+test("embedded section: no card nor title of its own (the bar draws them), the content is unchanged", () => {
+  const embedded = renderToStaticMarkup(<ForecastSectionView data={ready()} embedded />);
+  assert.equal(/Intelligence & Prévisions IA/.test(text(embedded)), false);
+  assert.match(text(embedded), /CA prévisionnel \(7 jours\)/);
+  assert.match(text(renderToStaticMarkup(<ForecastSectionSkeleton embedded />)), /Chargement des prévisions/);
+});
+
+test("page wiring: the section sits after the indicator rows and before the charts, in a collapsible bar + Suspense, only for authorised roles", () => {
   const page = read("../../../app/(dashboard)/dashboard/page.tsx");
   assert.match(page, /const showForecast = canViewForecast\(sessionUser\?\.role\);/);
-  assert.match(page, /\{showForecast \? \(\s*<Suspense fallback=\{<ForecastSectionSkeleton \/>\}>\s*<DashboardForecastSection \/>\s*<\/Suspense>\s*\) : null\}/);
+  assert.match(
+    page,
+    /\{showForecast \? \(\s*<ForecastCollapsible title=\{FORECAST_SECTION_TITLE\} description=\{FORECAST_SECTION_DESCRIPTION\}>\s*<Suspense fallback=\{<ForecastSectionSkeleton embedded \/>\}>\s*<DashboardForecastSection embedded \/>\s*<\/Suspense>\s*<\/ForecastCollapsible>\s*\) : null\}/,
+  );
+  assert.equal(/defaultOpen/.test(page), false, "closed by default");
   const indicators = page.indexOf("kpis.activeCustomers");
-  const section = page.indexOf("<DashboardForecastSection />");
+  const section = page.indexOf("<DashboardForecastSection embedded />");
   const charts = page.indexOf("<DirectionEvolutionChart");
   assert.ok(indicators > 0 && section > indicators && charts > section, "order: indicators < forecast < charts");
   // the existing sections are all still there

@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import {
   buildCustomerRows,
   coverageRate,
-  sortCoverageDrivers,
+  sortCoverageUsers,
   summarize,
   summarizeCustomerRows,
 } from "@/lib/commercial-analysis/coverage";
@@ -21,17 +21,21 @@ import {
   weekRange,
 } from "@/lib/commercial-analysis/period";
 import {
-  buildDriverRows,
   buildProductRows,
   buildTotals,
+  buildUserRows,
+  PRODUCTS_PREVIEW_COUNT,
+  selectRows,
   sortProductRows,
+  visibleProductRows,
   type ProductMeta,
   type SalesAggregateRow,
 } from "@/lib/commercial-analysis/sales-analysis";
-import type { CoverageCustomerRow, CoverageDriverRow } from "@/types/commercial-analysis";
+import { MAX_SELECTION } from "@/lib/commercial-analysis/filters";
+import { NO_SUPPLIER, UNASSIGNED, type CoverageCustomerRow, type CoverageUserRow } from "@/types/commercial-analysis";
 
 const row = (overrides: Partial<SalesAggregateRow>): SalesAggregateRow => ({
-  driverId: "d1",
+  userId: "u1",
   productId: "p1",
   soldQuantity: 0,
   soldRevenue: 0,
@@ -51,8 +55,8 @@ const meta = new Map<string, ProductMeta>([
 describe("sales analysis - aggregation", () => {
   it("merges several groups of the same product into ONE row", () => {
     const rows = [
-      row({ driverId: "d1", productId: "p1", soldQuantity: 10, soldRevenue: 100, soldCost: 60 }),
-      row({ driverId: "d2", productId: "p1", soldQuantity: 5, soldRevenue: 55, soldCost: 30 }),
+      row({ userId: "u1", productId: "p1", soldQuantity: 10, soldRevenue: 100, soldCost: 60 }),
+      row({ userId: "u2", productId: "p1", soldQuantity: 5, soldRevenue: 55, soldCost: 30 }),
     ];
     const products = buildProductRows(rows, meta);
     assert.equal(products.length, 1);
@@ -63,14 +67,37 @@ describe("sales analysis - aggregation", () => {
     assert.equal(products[0].supplierName, "Sidi Ali");
   });
 
-  it("filters on one driver without touching the other drivers' figures", () => {
+  it("filters on one user without touching the other users' figures", () => {
     const rows = [
-      row({ driverId: "d1", productId: "p1", soldQuantity: 10, soldRevenue: 100, soldCost: 60 }),
-      row({ driverId: "d2", productId: "p1", soldQuantity: 5, soldRevenue: 55, soldCost: 30 }),
+      row({ userId: "u1", productId: "p1", soldQuantity: 10, soldRevenue: 100, soldCost: 60 }),
+      row({ userId: "u2", productId: "p1", soldQuantity: 5, soldRevenue: 55, soldCost: 30 }),
     ];
-    assert.equal(buildProductRows(rows, meta, { driverId: "d2" })[0].quantity, 5);
-    assert.equal(buildTotals(rows, { driverId: "d2" }).revenue, 55);
-    assert.equal(buildTotals(rows, { driverId: "all" }).revenue, 155);
+    assert.equal(buildProductRows(rows, meta, { userIds: ["u2"] })[0].quantity, 5);
+    assert.equal(buildTotals(rows, { userIds: ["u2"] }).revenue, 55);
+    assert.equal(buildTotals(rows, { userIds: [] }).revenue, 155);
+  });
+
+  it("two selected users are CUMULATED: union of their groups, each sale counted once", () => {
+    const rows = [
+      row({ userId: "u1", productId: "p1", soldQuantity: 10, soldRevenue: 100, soldCost: 60 }),
+      row({ userId: "u2", productId: "p1", soldQuantity: 5, soldRevenue: 55, soldCost: 30 }),
+      row({ userId: "u2", productId: "p2", soldQuantity: 2, soldRevenue: 20, soldCost: 12 }),
+      row({ userId: "u3", productId: "p1", soldQuantity: 7, soldRevenue: 70, soldCost: 40 }),
+    ];
+    const both = buildTotals(rows, { userIds: ["u1", "u2"] });
+    assert.deepEqual(both, { quantity: 17, revenue: 175, margin: 73, distinctProducts: 2 });
+    // = u1 alone + u2 alone (disjoint: a group belongs to ONE seller)
+    const u1 = buildTotals(rows, { userIds: ["u1"] });
+    const u2 = buildTotals(rows, { userIds: ["u2"] });
+    assert.equal(both.revenue, u1.revenue + u2.revenue);
+    // a user selected twice is not counted twice
+    assert.deepEqual(buildTotals(rows, { userIds: ["u1", "u1", "u2"] }), both);
+    // the product row merges the selected users only
+    const p1 = buildProductRows(rows, meta, { userIds: ["u1", "u2"] }).find((product) => product.productId === "p1")!;
+    assert.equal(p1.quantity, 15);
+    // every user selected = no selection
+    assert.deepEqual(buildTotals(rows, { userIds: ["u1", "u2", "u3"] }), buildTotals(rows));
+    assert.equal(selectRows(rows, { userIds: ["nobody"] }).length, 0);
   });
 
   it("nets returns / credit notes from quantity, revenue and margin (cost of the returned goods comes back)", () => {
@@ -110,7 +137,7 @@ describe("sales analysis - aggregation", () => {
   it("counts distinct products sold, not lines, and not products that only have returns", () => {
     const rows = [
       row({ productId: "p1", soldQuantity: 3, soldRevenue: 30 }),
-      row({ driverId: "d2", productId: "p1", soldQuantity: 2, soldRevenue: 20 }),
+      row({ userId: "u2", productId: "p1", soldQuantity: 2, soldRevenue: 20 }),
       row({ productId: "p2", soldQuantity: 1, soldRevenue: 9 }),
       row({ productId: "p3", returnedQuantity: 1, returnedRevenue: 5 }),
     ];
@@ -119,7 +146,7 @@ describe("sales analysis - aggregation", () => {
 
   it("rounds money to cents only at the end (no drift from many small lines)", () => {
     const rows = Array.from({ length: 100 }, (_, index) =>
-      row({ driverId: `d${index}`, soldQuantity: 1, soldRevenue: 0.1, soldCost: 0.05 }),
+      row({ userId: `u${index}`, soldQuantity: 1, soldRevenue: 0.1, soldCost: 0.05 }),
     );
     const totals = buildTotals(rows);
     assert.equal(totals.revenue, 10);
@@ -129,28 +156,52 @@ describe("sales analysis - aggregation", () => {
   it("returns a clean empty result (zeros, no NaN) without any row", () => {
     assert.deepEqual(buildTotals([]), { quantity: 0, revenue: 0, margin: 0, distinctProducts: 0 });
     assert.deepEqual(buildProductRows([], meta), []);
-    assert.deepEqual(buildDriverRows([], new Map()), []);
+    assert.deepEqual(buildUserRows([], new Map()), []);
   });
 
-  it("builds the comparative view per driver without mixing the drivers", () => {
+  it("builds the comparative view per user without mixing the users", () => {
     const rows = [
-      row({ driverId: "d1", productId: "p1", soldQuantity: 10, soldRevenue: 100, soldCost: 60 }),
-      row({ driverId: "d1", productId: "p2", soldQuantity: 4, soldRevenue: 40, soldCost: 30 }),
-      row({ driverId: "d2", productId: "p1", soldQuantity: 5, soldRevenue: 55, soldCost: 30 }),
+      row({ userId: "u1", productId: "p1", soldQuantity: 10, soldRevenue: 100, soldCost: 60 }),
+      row({ userId: "u1", productId: "p2", soldQuantity: 4, soldRevenue: 40, soldCost: 30 }),
+      row({ userId: "u2", productId: "p1", soldQuantity: 5, soldRevenue: 55, soldCost: 30 }),
     ];
-    const drivers = buildDriverRows(
+    const users = buildUserRows(
       rows,
       new Map([
-        ["d1", "Karim"],
-        ["d2", "Said"],
+        ["u1", "Karim"],
+        ["u2", "Said"],
       ]),
     );
-    const d1 = drivers.find((driver) => driver.driverId === "d1")!;
-    const d2 = drivers.find((driver) => driver.driverId === "d2")!;
+    const d1 = users.find((user) => user.userId === "u1")!;
+    const d2 = users.find((user) => user.userId === "u2")!;
+    assert.equal(d1.userName, "Karim");
+    assert.deepEqual(buildUserRows(rows, new Map(), { userIds: ["u2"] }).map((user) => user.userId), ["u2"]);
     assert.deepEqual([d1.quantity, d1.revenue, d1.margin, d1.productCount], [14, 140, 50, 2]);
     assert.deepEqual([d2.quantity, d2.revenue, d2.margin, d2.productCount], [5, 55, 25, 1]);
-    // The per-driver rows add up to the "all drivers" totals.
+    // The per-user rows add up to the "all users" totals.
     assert.equal(d1.revenue + d2.revenue, buildTotals(rows).revenue);
+  });
+});
+
+describe("sales analysis - « Produits vendus » preview", () => {
+  const ten = Array.from({ length: 10 }, (_, index) => ({ id: index }));
+
+  it("shows the first 4 rows (in the ranking order) and says how many are hidden", () => {
+    assert.equal(PRODUCTS_PREVIEW_COUNT, 4);
+    const preview = visibleProductRows(ten, false);
+    assert.deepEqual(preview.rows.map((row) => row.id), [0, 1, 2, 3]);
+    assert.equal(preview.hiddenCount, 6);
+  });
+
+  it("« Voir tous les produits » shows every row; « Réduire » goes back to 4 - from the same rows, nothing reloaded", () => {
+    assert.equal(visibleProductRows(ten, true).rows.length, 10);
+    assert.equal(visibleProductRows(ten, true).hiddenCount, 0);
+    assert.equal(visibleProductRows(ten, false).rows.length, 4);
+  });
+
+  it("4 rows or fewer: everything is shown, nothing to expand", () => {
+    assert.deepEqual(visibleProductRows(ten.slice(0, 4), false), { rows: ten.slice(0, 4), hiddenCount: 0 });
+    assert.deepEqual(visibleProductRows([], false), { rows: [], hiddenCount: 0 });
   });
 });
 
@@ -211,6 +262,18 @@ describe("coverage - customer rows", () => {
     { customerId: "c3", name: "Boulangerie" },
   ];
 
+  it("carries the owner of each customer; no owner = « Non attribué » (null)", () => {
+    const rows = buildCustomerRows(
+      [
+        { customerId: "c1", name: "A", ownerName: "Karim" },
+        { customerId: "c2", name: "B", ownerName: null },
+        { customerId: "c3", name: "C" },
+      ],
+      new Map(),
+    );
+    assert.deepEqual(rows.map((r) => r.ownerName), ["Karim", null, null]);
+  });
+
   it("counts a customer ONCE however many sales it made, and lists the whole portfolio", () => {
     const rows = buildCustomerRows(
       portfolio,
@@ -238,19 +301,24 @@ describe("coverage - customer rows", () => {
   });
 });
 
-describe("coverage - driver comparison sort", () => {
-  const drivers: CoverageDriverRow[] = [
-    { driverId: "a", driverName: "Karim", assigned: 50, buyers: 40, withoutPurchase: 10, rate: 80 },
-    { driverId: "b", driverName: "Said", assigned: 20, buyers: 5, withoutPurchase: 15, rate: 25 },
-    { driverId: "c", driverName: "Omar", assigned: 0, buyers: 0, withoutPurchase: 0, rate: null },
-    { driverId: "d", driverName: "Ali", assigned: 10, buyers: 10, withoutPurchase: 0, rate: 100 },
+describe("coverage - user comparison sort", () => {
+  const users: CoverageUserRow[] = [
+    { userId: "a", userName: "Karim", assigned: 50, buyers: 40, withoutPurchase: 10, rate: 80 },
+    { userId: "b", userName: "Said", assigned: 20, buyers: 5, withoutPurchase: 15, rate: 25 },
+    { userId: "c", userName: "Omar", assigned: 0, buyers: 0, withoutPurchase: 0, rate: null },
+    { userId: "d", userName: "Ali", assigned: 10, buyers: 10, withoutPurchase: 0, rate: 100 },
   ];
 
-  it("sorts by rate, buyers and without-purchase; drivers with no portfolio always go last", () => {
-    assert.deepEqual(sortCoverageDrivers(drivers, "rate", "desc").map((d) => d.driverId), ["d", "a", "b", "c"]);
-    assert.deepEqual(sortCoverageDrivers(drivers, "rate", "asc").map((d) => d.driverId), ["b", "a", "d", "c"]);
-    assert.deepEqual(sortCoverageDrivers(drivers, "buyers", "desc").map((d) => d.driverId)[0], "a");
-    assert.deepEqual(sortCoverageDrivers(drivers, "withoutPurchase", "desc").map((d) => d.driverId)[0], "b");
+  it("sorts by rate, buyers and without-purchase; users with no portfolio always go last", () => {
+    assert.deepEqual(sortCoverageUsers(users, "rate", "desc").map((d) => d.userId), ["d", "a", "b", "c"]);
+    assert.deepEqual(sortCoverageUsers(users, "rate", "asc").map((d) => d.userId), ["b", "a", "d", "c"]);
+    assert.deepEqual(sortCoverageUsers(users, "buyers", "desc").map((d) => d.userId)[0], "a");
+    assert.deepEqual(sortCoverageUsers(users, "withoutPurchase", "desc").map((d) => d.userId)[0], "b");
+  });
+
+  it("the summary of several portfolios is their sum (a customer is in one portfolio at most)", () => {
+    const union = summarize(50 + 20, 40 + 5);
+    assert.deepEqual(union, { assigned: 70, buyers: 45, withoutPurchase: 25, rate: 64.3 });
   });
 });
 
@@ -313,25 +381,38 @@ describe("filters validation", () => {
 
   it("takes the defaults when nothing is given", () => {
     assert.deepEqual(parseSalesFilters(params({}), now), {
-      driverId: "all",
+      userIds: [],
       month: "2026-10",
-      supplierId: "all",
+      supplierIds: [],
       metric: "revenue",
       sort: "revenue",
       direction: "desc",
     });
-    assert.deepEqual(parseCoverageFilters(params({}), now), { driverId: "all", week: "2026-10-12" });
+    assert.deepEqual(parseCoverageFilters(params({}), now), { userIds: [], week: "2026-10-12" });
   });
 
-  it("accepts the combined filters driver + month + supplier + metric + sort", () => {
+  it("accepts the combined filters users + month + suppliers + metric + sort", () => {
     const filters = parseSalesFilters(
-      params({ driverId: "drv_1", month: "2026-09", supplierId: "sup_2", metric: "margin", sort: "quantity", direction: "asc" }),
+      params({ userIds: "usr_1,usr_2", month: "2026-09", supplierIds: "sup_2,none", metric: "margin", sort: "quantity", direction: "asc" }),
       now,
     );
-    assert.deepEqual(filters, { driverId: "drv_1", month: "2026-09", supplierId: "sup_2", metric: "margin", sort: "quantity", direction: "asc" });
-    assert.equal(parseSalesFilters(params({ supplierId: "none" }), now).supplierId, "none");
+    assert.deepEqual(filters, {
+      userIds: ["usr_1", "usr_2"],
+      month: "2026-09",
+      supplierIds: ["sup_2", NO_SUPPLIER],
+      metric: "margin",
+      sort: "quantity",
+      direction: "asc",
+    });
+    assert.deepEqual(parseSalesFilters(params({ supplierIds: "none" }), now).supplierIds, [NO_SUPPLIER]);
     // The sort follows the chosen metric unless asked otherwise.
     assert.equal(parseSalesFilters(params({ metric: "quantity" }), now).sort, "quantity");
+  });
+
+  it("multiple selections: repeats removed, blanks ignored, empty = everything", () => {
+    assert.deepEqual(parseSalesFilters(params({ userIds: "a,b,a, ,b" }), now).userIds, ["a", "b"]);
+    assert.deepEqual(parseSalesFilters(params({ userIds: "" }), now).userIds, []);
+    assert.deepEqual(parseCoverageFilters(params({ userIds: `u1,${UNASSIGNED}` }), now).userIds, ["u1", UNASSIGNED]);
   });
 
   it("refuses invalid values with the offending field instead of silently changing them", () => {
@@ -345,11 +426,14 @@ describe("filters validation", () => {
     fails({ metric: "profit" }, "metric");
     fails({ sort: "name" }, "sort");
     fails({ direction: "up" }, "direction");
-    fails({ driverId: "x'; DROP TABLE" }, "driverId");
-    fails({ supplierId: "a b" }, "supplierId");
+    fails({ userIds: "x'; DROP TABLE" }, "userIds");
+    fails({ userIds: "ok,a b" }, "userIds");
+    fails({ supplierIds: "a b" }, "supplierIds");
+    fails({ supplierIds: UNASSIGNED + "!" }, "supplierIds");
+    fails({ userIds: Array.from({ length: MAX_SELECTION + 1 }, (_, i) => `u${i}`).join(",") }, "userIds");
     fails({ week: "2026-02-30" }, "week", parseCoverageFilters);
     fails({ week: "lundi" }, "week", parseCoverageFilters);
-    fails({ driverId: "../etc" }, "driverId", parseCoverageFilters);
+    fails({ userIds: "../etc" }, "userIds", parseCoverageFilters);
   });
 
   it("normalises any day of the week to its Monday", () => {

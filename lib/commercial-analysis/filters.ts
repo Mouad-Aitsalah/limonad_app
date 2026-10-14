@@ -1,7 +1,9 @@
 import { currentMonthParam, isValidMonthParam, normalizeWeekParam } from "@/lib/commercial-analysis/period";
 import { isValidBusinessDayParam } from "@/lib/business-day";
 import {
+  NO_SUPPLIER,
   SALES_METRICS,
+  UNASSIGNED,
   type CoverageFilters,
   type SalesAnalysisFilters,
   type SalesMetric,
@@ -29,11 +31,24 @@ type Source = { get(name: string): string | null };
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-function readId(source: Source, name: string, extra: readonly string[] = []): string {
-  const value = source.get(name)?.trim();
-  if (!value) return "all";
-  if (value === "all" || extra.includes(value) || ID_RE.test(value)) return value;
-  throw new AnalysisFilterError("Filtre invalide.", name);
+/** Upper bound of a multiple selection (longer than any real list of users / suppliers: refused). */
+export const MAX_SELECTION = 500;
+
+/**
+ * A multiple selection sent as ONE comma-separated parameter (?userIds=a,b). Missing or empty = []
+ * (= everything); duplicates are removed (a value selected twice never counts twice); every value must
+ * be a well-formed id or one of the `extra` tokens, else 422. Whether each id exists in the caller's
+ * organisation is checked by the server code against its own lists.
+ */
+export function readIdList(source: Source, name: string, extra: readonly string[] = []): string[] {
+  const raw = source.get(name)?.trim();
+  if (!raw) return [];
+  const values = [...new Set(raw.split(",").map((value) => value.trim()).filter(Boolean))];
+  if (values.length > MAX_SELECTION) throw new AnalysisFilterError("Sélection trop longue.", name);
+  for (const value of values) {
+    if (!extra.includes(value) && !ID_RE.test(value)) throw new AnalysisFilterError("Filtre invalide.", name);
+  }
+  return values;
 }
 
 function readMetric(source: Source, name: string, fallback: SalesMetric): SalesMetric {
@@ -52,9 +67,9 @@ export function parseSalesFilters(source: Source, now: Date = new Date()): Sales
     throw new AnalysisFilterError("Ordre de tri invalide.", "direction");
   }
   return {
-    driverId: readId(source, "driverId"),
+    userIds: readIdList(source, "userIds"),
     month: monthValue || currentMonthParam(now),
-    supplierId: readId(source, "supplierId", ["none"]),
+    supplierIds: readIdList(source, "supplierIds", [NO_SUPPLIER]),
     metric,
     sort: readMetric(source, "sort", metric),
     direction: (directionValue as SortDirection | undefined) ?? "desc",
@@ -65,7 +80,7 @@ export function parseCoverageFilters(source: Source, now: Date = new Date()): Co
   const weekValue = source.get("week")?.trim();
   if (weekValue && !isValidBusinessDayParam(weekValue)) throw new AnalysisFilterError("Semaine invalide.", "week");
   return {
-    driverId: readId(source, "driverId"),
+    userIds: readIdList(source, "userIds", [UNASSIGNED]),
     week: normalizeWeekParam(weekValue, now),
   };
 }

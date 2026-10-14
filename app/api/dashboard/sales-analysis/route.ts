@@ -6,10 +6,12 @@ import { getSalesAnalysis } from "@/lib/server/commercial-analysis";
 import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
- * GET /api/dashboard/sales-analysis?driverId&month&supplierId&metric&sort&direction
+ * GET /api/dashboard/sales-analysis?userIds=a,b&month&supplierIds=s1,none&metric&sort&direction
  * Dashboard « Analyse des ventes ». ADMIN ONLY (401 / 403 enforced in
  * getSalesAnalysis), the caller's own organisation only, read only. Every
- * filter is validated: an invalid value is a 422, never silently replaced.
+ * filter is validated: an invalid value is a 422, never silently replaced
+ * (userIds / supplierIds: comma-separated multiple selections, empty = all;
+ * every id must belong to the caller's organisation).
  */
 export async function GET(request: Request) {
   const moduleRejection = await rejectDisabledModule(request);

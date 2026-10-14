@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import type { DashboardForecastDto, DashboardForecastReady } from "@/types/dashboard-forecast";
 
 export const FORECAST_SECTION_TITLE = "Intelligence & Prévisions IA";
-const SECTION_DESCRIPTION =
+export const FORECAST_SECTION_DESCRIPTION =
   "Prévisions de ventes sur 7 jours et aide au réapprovisionnement. Consultatif : aucun bon de commande n'est créé.";
 
 export const FORECAST_INDICATIVE_NOTE =
@@ -26,9 +26,11 @@ const QUALITY_BANNER_CLASS = {
  * The frame of the section, in the look of the KPI cards: white card, soft shadow,
  * a thin violet-to-green accent line along the top and a tinted icon circle by the
  * title. Appearance only - the title, the description and everything inside are
- * unchanged.
+ * unchanged. `embedded`: the section is inside the Dashboard's collapsible bar
+ * (ForecastCollapsible), which already draws the card and the title - only the content.
  */
-function ForecastSectionFrame({ children }: { children: React.ReactNode }) {
+function ForecastSectionFrame({ children, embedded = false }: { children: React.ReactNode; embedded?: boolean }) {
+  if (embedded) return <div className="space-y-4">{children}</div>;
   return (
     <Card className="relative gap-0 rounded-[22px] border-slate-200/70 bg-white py-0 shadow-[0_1px_2px_rgb(16_32_56/0.04),0_12px_28px_-14px_rgb(16_32_56/0.14)]">
       <span
@@ -41,7 +43,7 @@ function ForecastSectionFrame({ children }: { children: React.ReactNode }) {
         </span>
         <div className="min-w-0">
           <h2 className="font-heading text-lg leading-snug font-semibold tracking-[-0.02em]">{FORECAST_SECTION_TITLE}</h2>
-          <p className="mt-0.5 text-sm leading-6 text-muted-foreground">{SECTION_DESCRIPTION}</p>
+          <p className="mt-0.5 text-sm leading-6 text-muted-foreground">{FORECAST_SECTION_DESCRIPTION}</p>
         </div>
       </div>
       <div className="space-y-4 px-5 pb-5 sm:px-6">{children}</div>
@@ -50,9 +52,9 @@ function ForecastSectionFrame({ children }: { children: React.ReactNode }) {
 }
 
 /** Loading placeholder shown while the section streams in. */
-export function ForecastSectionSkeleton() {
+export function ForecastSectionSkeleton({ embedded = false }: { embedded?: boolean } = {}) {
   return (
-    <ForecastSectionFrame>
+    <ForecastSectionFrame embedded={embedded}>
       <div role="status" aria-live="polite" className="space-y-4" data-testid="forecast-loading">
         <span className="sr-only">Chargement des prévisions…</span>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -199,9 +201,9 @@ function ReadyContent({ data }: { data: DashboardForecastReady }) {
 }
 
 /** Presentational: renders every state of the section from its DTO. */
-export function ForecastSectionView({ data }: { data: DashboardForecastDto }) {
+export function ForecastSectionView({ data, embedded = false }: { data: DashboardForecastDto; embedded?: boolean }) {
   return (
-    <ForecastSectionFrame>
+    <ForecastSectionFrame embedded={embedded}>
       {data.status === "error" ? (
         <Notice tone="error">{data.message}</Notice>
       ) : data.status === "empty" ? (

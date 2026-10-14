@@ -6,10 +6,11 @@ import { getCoverage } from "@/lib/server/commercial-analysis";
 import { rejectDisabledModule } from "@/lib/server/module-guard";
 
 /**
- * GET /api/dashboard/coverage?driverId&week
+ * GET /api/dashboard/coverage?userIds=a,b,unassigned&week
  * Dashboard « Couverture commerciale » (weekly, Monday -> Sunday). ADMIN ONLY
  * (401 / 403 enforced in getCoverage), the caller's own organisation only, read
- * only. `week` is any valid day (normalised to its Monday); an invalid value is a 422.
+ * only. `userIds`: comma-separated multiple selection (empty = all users; `unassigned`
+ * = « Non attribués »). `week` is any valid day (normalised to its Monday); an invalid value is a 422.
  */
 export async function GET(request: Request) {
   const moduleRejection = await rejectDisabledModule(request);
