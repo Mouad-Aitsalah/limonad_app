@@ -68,6 +68,7 @@ export const API_MODULE_RULES: readonly ApiModuleRule[] = [
   { path: "/api/cash-deposits/**", modules: ["deposits"] },
   { path: "/api/sales-history", modules: ["salesArchive"] },
   { path: "/api/daily-invoices", modules: ["dailyInvoices"] },
+  { path: "/api/daily-invoices/sales-grouping", modules: ["dailyInvoices"] },
 
   // --- Commandes en ligne + Espace client ------------------------------
   { path: "/api/customer-orders/**", modules: ["customerOrders"] },

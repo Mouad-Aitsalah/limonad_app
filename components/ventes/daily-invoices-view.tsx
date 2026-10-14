@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { DailyKpiCards } from "@/components/ventes/daily-kpi-cards";
 import { DailyInvoicesUserFilter } from "@/components/ventes/daily-invoices-user-filter";
+import { DailySalesGroupingButton } from "@/components/ventes/daily-sales-grouping-dialog";
 import { InvoicesTable } from "@/components/ventes/invoices-table";
 import { TableColumnsPanel } from "@/components/table-columns/table-columns-panel";
 import { paymentMethodOptions } from "@/components/ventes/orders-toolbar";
@@ -114,6 +115,8 @@ export function DailyInvoicesView({ initialData }: DailyInvoicesViewProps) {
               {data.totalCount} facture{data.totalCount > 1 ? "s" : ""}
             </p>
             <div className="flex flex-wrap items-center gap-2">
+              {/* Same filters as the page (day, users, payment method). */}
+              <DailySalesGroupingButton filters={{ day, userIds, paymentMethod }} />
               {/* admin only: renders nothing for another role */}
               <TableColumnsPanel pageKey="dailyInvoices" table="invoices" tableName="Factures" />
               <Button

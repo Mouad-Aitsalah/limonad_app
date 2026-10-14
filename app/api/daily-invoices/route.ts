@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "@/lib/server/auth";
-import { getDailyInvoicesPage } from "@/lib/server/daily-invoices";
+import { dailyParamsFromSearchParams, getDailyInvoicesPage } from "@/lib/server/daily-invoices";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { rejectDisabledModule } from "@/lib/server/module-guard";
 
@@ -12,17 +12,7 @@ export async function GET(request: Request) {
   if (moduleRejection) return moduleRejection;
   try {
     const url = new URL(request.url);
-    const pageSizeParam = url.searchParams.get("pageSize");
-    const userIdsParam = url.searchParams.get("userIds");
-    const page = await getDailyInvoicesPage({
-      day: url.searchParams.get("day") || undefined,
-      cursor: url.searchParams.get("cursor") || undefined,
-      pageSize: pageSizeParam ? Number(pageSizeParam) : undefined,
-      userIds: userIdsParam
-        ? userIdsParam.split(",").map((value) => value.trim()).filter(Boolean)
-        : undefined,
-      paymentMethod: url.searchParams.get("paymentMethod") || undefined,
-    });
+    const page = await getDailyInvoicesPage(dailyParamsFromSearchParams(url.searchParams));
     return NextResponse.json(page);
   } catch (error) {
     if (error instanceof AuthServiceError || error instanceof OperationsServiceError) {

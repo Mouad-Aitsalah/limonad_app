@@ -1,9 +1,9 @@
 import type { LucideIcon } from "lucide-react";
-import { Coins, CreditCard, FileText, Landmark, Receipt, TrendingUp } from "lucide-react";
+import { Coins, CreditCard, FileText, Landmark, Percent, Receipt, TrendingUp } from "lucide-react";
 
-import { layoutDailyKpis } from "@/lib/daily-invoice-kpis";
+import { formatMarkupRate, layoutDailyKpis, marginPartialNote } from "@/lib/daily-invoice-kpis";
 import { cn, formatCurrency } from "@/lib/utils";
-import type { DailyInvoicesKpisDto } from "@/types/daily-invoice";
+import type { DailyInvoicesKpisDto, DailyMarginDto } from "@/types/daily-invoice";
 
 /**
  * KPI block of "Factures journalières": three highlighted figures - Espèces,
@@ -13,14 +13,24 @@ import type { DailyInvoicesKpisDto } from "@/types/daily-invoice";
  */
 export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
   const { primary, secondary, extras } = layoutDailyKpis(kpis);
+  // Present only for the admin (the server sends no margin field to any other role).
+  const margin = kpis.margin;
 
   return (
     <div className="space-y-3 lg:space-y-4">
       {/* Espèces -> Crédit -> CA total, three cards of exactly the same size
           (equal columns, equal row height): one single row from 640 px up
           (tablet and desktop); on a phone two columns, so the third card wraps
-          cleanly onto its own row at the very same width and height. */}
-      <div className="grid auto-rows-fr grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:gap-4">
+          cleanly onto its own row at the very same width and height.
+          With the admin's « Marge totale (HT) » card: 2 x 2 up to 1024 px, then
+          the four cards on one row. */}
+      <div
+        className={
+          margin
+            ? "grid auto-rows-fr grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4 lg:gap-4"
+            : "grid auto-rows-fr grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:gap-4"
+        }
+      >
         <PrimaryKpi
           icon={Coins}
           label="Espèces"
@@ -43,6 +53,7 @@ export function DailyKpiCards({ kpis }: { kpis: DailyInvoicesKpisDto }) {
           iconClassName="bg-emerald-100 text-emerald-700"
           valueClassName="text-emerald-700"
         />
+        {margin ? <MarginKpi margin={margin} /> : null}
       </div>
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3">
@@ -123,6 +134,48 @@ function PrimaryKpi({
             long amount instead of being split in the middle ("D / H"). */}
         {breakableUnit(value)}
       </p>
+    </div>
+  );
+}
+
+/**
+ * « Marge totale (HT) »: the margin amount on the left, the taux de marque on the
+ * right (« — » when the CA HT of the reliable lines is 0), and a « partielle » note
+ * when lines without a reliable cost were left out (see lib/daily-sales-grouping.ts).
+ */
+function MarginKpi({ margin }: { margin: DailyMarginDto }) {
+  const partialNote = marginPartialNote(margin);
+  return (
+    <div
+      data-kpi="margin"
+      className="flex h-full min-w-0 flex-col justify-between gap-2 rounded-2xl bg-white p-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] lg:gap-2.5 lg:px-5 lg:py-4"
+    >
+      <div className="flex items-center gap-2 lg:gap-3">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 lg:h-9 lg:w-9">
+          <Percent aria-hidden="true" className="h-4 w-4" />
+        </span>
+        <p className="text-[13px] font-semibold text-muted-foreground lg:text-sm">Marge totale (HT)</p>
+      </div>
+      <div className="flex min-w-0 items-end justify-between gap-2">
+        <p
+          data-margin-amount
+          className="font-heading min-w-0 text-lg leading-none font-semibold tracking-tight tabular-nums break-words text-amber-700 sm:text-xl lg:text-2xl xl:text-3xl"
+        >
+          {breakableUnit(formatCurrency(margin.marginHT))}
+        </p>
+        <p
+          data-margin-rate
+          title="Taux de marque = marge HT / CA HT × 100"
+          className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-sm font-semibold tabular-nums text-amber-800 lg:text-base"
+        >
+          {formatMarkupRate(margin.markupRate)}
+        </p>
+      </div>
+      {partialNote ? (
+        <p data-margin-partial className="text-[11px] leading-snug text-amber-700" title={partialNote}>
+          Marge partielle · {partialNote}
+        </p>
+      ) : null}
     </div>
   );
 }
