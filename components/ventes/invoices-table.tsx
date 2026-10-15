@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Ban, ChevronDown, ChevronRight, Eye, FileX, Loader2, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Ban, ChevronDown, ChevronRight, Eye, FileX, Loader2, MoreHorizontal, Pencil, Printer, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ import { InvoiceDetailInline } from "@/components/ventes/invoice-detail-inline";
 import { InvoiceDiscountBadge } from "@/components/ventes/invoice-discount-badge";
 import { InvoiceStatusBadge } from "@/components/ventes/invoice-status-badge";
 import { paymentMethodLabels } from "@/components/ventes/orders-toolbar";
+import { useInvoicePrint } from "@/components/ventes/use-invoice-print";
 import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency } from "@/lib/utils";
 import type { SaleDto, SaleHistoryListItemDto } from "@/types/operations-dto";
@@ -99,6 +100,8 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
   >(null);
   const [cancelTarget, setCancelTarget] = React.useState<SaleHistoryListItemDto | null>(null);
   const [cancelling, setCancelling] = React.useState(false);
+  // « Imprimer la facture »: the one selected document, same mechanism on both pages (use-invoice-print.tsx).
+  const { printInvoice, printingId, printElement } = useInvoicePrint();
 
   const cancelIsDraft = cancelTarget?.status === "DRAFT";
 
@@ -297,6 +300,17 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
                                 <Eye aria-hidden="true" />
                                 {isCreditNote ? "Voir l'avoir" : "Voir détails"}
                               </DropdownMenuItem>
+                              <DropdownMenuItem
+                                disabled={printingId !== null}
+                                onClick={() => void printInvoice(invoice)}
+                              >
+                                {printingId === invoice.id ? (
+                                  <Loader2 aria-hidden="true" className="animate-spin" />
+                                ) : (
+                                  <Printer aria-hidden="true" />
+                                )}
+                                Imprimer la facture
+                              </DropdownMenuItem>
                               {canEdit ? (
                                 <DropdownMenuItem
                                   onClick={() => router.push(`/pos?editSaleId=${invoice.id}`)}
@@ -356,6 +370,8 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
         </TableBody>
       </Table>
       </div>
+
+      {printElement}
 
       <InvoiceDetailDialog
         listItem={viewingInvoice}

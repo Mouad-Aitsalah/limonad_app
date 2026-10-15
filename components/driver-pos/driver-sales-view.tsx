@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { LoaderCircle, MessageCircle, Receipt } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { LoaderCircle, MessageCircle, Printer, Receipt } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +12,10 @@ import {
   InvoiceDetailDialog,
   type InvoiceDetailFetchOutcome,
 } from "@/components/ventes/invoice-detail-dialog";
+import { InvoicePrint } from "@/components/ventes/invoice-print";
 import { AuthContext } from "@/hooks/use-auth";
 import { useCompanyIdentity, type CompanyIdentity } from "@/hooks/use-company-identity";
+import { saleToPrintableInvoice, type PrintableInvoice } from "@/lib/invoice-print";
 import { getOfflineSales, type OfflineSaleWithLines, type SyncStatus } from "@/lib/offline/driver-pos";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
@@ -222,6 +225,8 @@ export function DriverSalesView({
   const [selectedSale, setSelectedSale] = React.useState<SaleHistoryListItemDto | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [sharingSaleId, setSharingSaleId] = React.useState<string | null>(null);
+  const [printingSaleId, setPrintingSaleId] = React.useState<string | null>(null);
+  const [printDocument, setPrintDocument] = React.useState<PrintableInvoice | null>(null);
 
   // WhatsApp sharing only - SaleDto.customer never carries a phone (see
   // saleInclude in lib/server/sales-shared.ts), so it's resolved here from
@@ -305,6 +310,34 @@ export function DriverSalesView({
       toast.error(error instanceof Error ? error.message : "Impossible de générer la facture PDF.");
     } finally {
       setSharingSaleId(null);
+    }
+  }
+
+  // « Imprimer »: the driver's OWN sale, already in this list (loaded for this driver only by the server -
+  // nothing new is fetched, no other invoice becomes reachable). Browser (phone or PC): the A4 invoice of the
+  // admin pages, via window.print(). Android app: its WebView has no window.print(), so - exactly like the
+  // driver POS - the existing invoice PDF goes to the phone's print service (shareInvoicePdf "print").
+  async function printInvoice(sale: SaleDto) {
+    if (printingSaleId) return;
+    if (!Capacitor.isNativePlatform()) {
+      setPrintDocument(saleToPrintableInvoice(sale));
+      return;
+    }
+    setPrintingSaleId(sale.id);
+    try {
+      await shareInvoicePdf(
+        {
+          sale,
+          identity: resolvedIdentity,
+          customerPhone: sale.customer ? customerById.get(sale.customer.id)?.phone ?? null : null,
+        },
+        "print",
+      );
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      toast.error(error instanceof Error ? error.message : "Impossible de préparer la facture à imprimer.");
+    } finally {
+      setPrintingSaleId(null);
     }
   }
 
@@ -414,6 +447,23 @@ export function DriverSalesView({
                         {row.sale.tour.code}
                       </Badge>
                     ) : null}
+                    <button
+                      type="button"
+                      disabled={printingSaleId === row.sale.id}
+                      aria-label={`Imprimer la facture ${row.sale.displayNumber}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void printInvoice(row.sale);
+                      }}
+                      className="flex h-9 items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 active:bg-emerald-200 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:outline-none"
+                    >
+                      {printingSaleId === row.sale.id ? (
+                        <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Printer aria-hidden="true" className="h-4 w-4" />
+                      )}
+                      Imprimer
+                    </button>
                     <Button
                       type="button"
                       variant="ghost"
@@ -444,6 +494,8 @@ export function DriverSalesView({
           </div>
         )}
       </div>
+
+      <InvoicePrint invoice={printDocument} identity={resolvedIdentity} onDone={() => setPrintDocument(null)} />
 
       <InvoiceDetailDialog
         listItem={selectedSale}
