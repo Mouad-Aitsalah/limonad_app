@@ -39,8 +39,8 @@ export type ClientCatalogProductDto = {
   description: string | null;
   categoryId: string;
   categoryName: string;
-  /** TTC catalogue price (the POS's own price) - never the purchase price or a margin. */
-  priceTTC: number;
+  // No price of any kind: the Espace Client never shows one, so the server never sends it (prices are
+  // applied server-side when the order is recorded - client-portal-core.ts#submitClientOrder).
   /** Always present: a product without a valid photo is never in the catalogue. */
   imageUrl: string;
   /**
@@ -62,22 +62,20 @@ export type ClientCatalogDto = {
   firstPage: ClientCatalogPageDto;
 };
 
-/** Browser-side cart line (display only - the server re-prices everything at submission). */
+/** Browser-side cart line: what to show and how many - never a price (the server prices the order). */
 export type ClientCartLine = {
   productId: string;
   productName: string;
   reference: string;
-  priceTTC: number;
   imageUrl: string | null;
   quantity: number;
 };
 
+/** An order as the customer sees it: no amount (the order's prices stay on the staff side). */
 export type ClientOrderSummaryDto = {
   id: string;
   orderNumber: string;
   status: CustomerOrderStatusValue;
-  /** Estimated total frozen at submission. */
-  totalTTC: number;
   itemCount: number;
   createdAt: string;
   /** CONVERTED but the linked sale is still a pending (DRAFT) invoice. */

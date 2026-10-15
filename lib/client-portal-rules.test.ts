@@ -12,14 +12,12 @@ import {
   computeClientOrderTotals,
   customerCodeCandidates,
   customerOrderStatusLabel,
-  estimateClientCartTotal,
   formatCustomerOrderNumber,
   isInvoicePending,
   isValidProductPhoto,
   mergeOrderLines,
   normalizeContactPhone,
   organizationCodeCandidates,
-  totalsDiffer,
 } from "./client-portal-rules";
 
 const B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk";
@@ -85,6 +83,8 @@ test("client IP: first X-Forwarded-For address, else X-Real-IP, else unknown", (
 test("order input: only {productId, quantity} lines - prices, totals, customer or organisation are rejected", () => {
   const base = { idempotencyKey: "key-123456", lines: [{ productId: "p1", quantity: 2 }] };
   assert.equal(clientOrderInputSchema.safeParse(base).success, true);
+  // a tab opened before prices were hidden still sends expectedTotalTTC: accepted (then ignored by the server)
+  assert.equal(clientOrderInputSchema.safeParse({ ...base, expectedTotalTTC: 12.5 }).success, true);
   for (const forged of [
     { ...base, lines: [{ productId: "p1", quantity: 2, priceTTC: 1 }] },
     { ...base, lines: [{ productId: "p1", quantity: 2, unitPriceHT: 1 }] },
@@ -111,7 +111,7 @@ test("order input: only {productId, quantity} lines - prices, totals, customer o
   );
 });
 
-test("totals: server computation = POS computation, and the browser estimate from TTC prices matches it", () => {
+test("totals: the server computes the order exactly like a POS sale (the browser computes nothing)", () => {
   // Coca 4.17 HT @20% -> 5.00 TTC ; Pom's 3.75 HT @20% -> 4.50 TTC ; odd one 1.23 HT @10% -> 1.35 TTC
   const lines = [
     { productId: "coca", quantity: 2, unitPriceHT: 4.17, taxRate: 20 },
@@ -125,15 +125,6 @@ test("totals: server computation = POS computation, and the browser estimate fro
   // 24.85 rounded to the commercial 0.50 step
   assert.equal(server.totalTTC, 25);
   assert.equal(server.roundingAmount, 0.15);
-
-  const browser = estimateClientCartTotal([
-    { priceTTC: 5, quantity: 2 },
-    { priceTTC: 4.5, quantity: 3 },
-    { priceTTC: 1.35, quantity: 1 },
-  ]);
-  assert.equal(browser.totalTTC, server.totalTTC, "no false PRICE_CHANGED");
-  assert.equal(totalsDiffer(browser.totalTTC, server.totalTTC), false);
-  assert.equal(totalsDiffer(25, 25.5), true);
 });
 
 test("staff workflow: accept/reject transitions, POS only for ACCEPTED, CONVERTED only via the sale", () => {

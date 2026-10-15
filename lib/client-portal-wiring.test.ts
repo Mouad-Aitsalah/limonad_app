@@ -99,10 +99,15 @@ test("POS: the cart sends customerOrderId only while linked to an order; a new o
   assert.match(hook, /if \(latestRef\.current\.hasCartContent\(\)\) setPendingOrder\(order\);\s+else apply\(order\);/);
 });
 
-test("client cart: only {productId, quantity} is sent; prices shown come from the catalogue, totals from the POS formula", () => {
+test("client cart: only {productId, quantity} is sent - never a price or a total; the server prices the order", () => {
   const submit = code("../components/client/use-client-order-submit.ts");
   assert.match(submit, /lines: cart\.map\(\(line\) => \(\{ productId: line\.productId, quantity: line\.quantity \}\)\),/);
-  assert.match(code("../components/client/client-cart-view.tsx"), /const total = estimateClientCartTotal\(cart\)\.totalTTC;/);
+  assert.equal(/expectedTotalTTC|priceTTC|totalTTC/.test(submit), false);
+  // the server ignores any total a (legacy) browser still sends, and never returns a price in an error
+  const core = code("./server/client-portal-core.ts");
+  assert.equal(/expectedTotalTTC/.test(core.replace(/\/\/.*$/gm, "")), false, "never compared");
+  assert.equal(/PRICE_CHANGED|prices:/.test(core), false);
+  assert.match(core, /const totals = computeClientOrderTotals\(/);
 });
 
 test("POS offline: a cart linked to an online order is refused offline FIRST, with an explicit message, cart and link untouched", () => {

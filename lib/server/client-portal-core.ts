@@ -14,11 +14,9 @@ import {
   isValidProductPhoto,
   mergeOrderLines,
   organizationCodeCandidates,
-  totalsDiffer,
   type CustomerOrderStatusValue,
 } from "@/lib/client-portal-rules";
 import { formatCustomerCode } from "@/lib/customer-code";
-import { computePriceTTC } from "@/lib/product-pricing";
 import type {
   ClientCatalogCategoryDto,
   ClientCatalogPageDto,
@@ -252,8 +250,6 @@ type CatalogRow = {
   description: string | null;
   categoryId: string;
   categoryName: string;
-  salePrice: Prisma.Decimal;
-  taxRate: Prisma.Decimal;
   updatedAt: Date;
   // A data: photo is only fetched as its first 120 characters + its length -
   // never the whole (up to ~2.7 MB) base64 for every row of a page.
@@ -309,6 +305,7 @@ async function availabilityFor(db: ClientPortalDb, organizationId: string, produ
  * valid photo, filtered (search, category) and paginated IN THE DATABASE -
  * the browser never receives the whole catalogue to filter it. Cursor =
  * the last product id of the previous page (order: name, id).
+ * No price is read nor returned: the Espace Client never shows one.
  */
 export async function getClientCatalogPage(
   db: ClientPortalDb,
@@ -329,7 +326,7 @@ export async function getClientCatalogPage(
 
   const rows = await db.$queryRaw<CatalogRow[]>(Prisma.sql`
     SELECT p.id, p.name, p.reference, p.description, p."categoryId", c.name AS "categoryName",
-           p."salePrice", p."taxRate", p."updatedAt",
+           p."updatedAt",
            CASE WHEN lower(left(p."imageUrl", 5)) = 'data:' THEN left(p."imageUrl", 120) ELSE p."imageUrl" END AS "imageHead",
            length(p."imageUrl")::int AS "imageLength"
     FROM "Product" p
@@ -351,7 +348,6 @@ export async function getClientCatalogPage(
     description: row.description,
     categoryId: row.categoryId,
     categoryName: row.categoryName,
-    priceTTC: computePriceTTC(Number(row.salePrice), Number(row.taxRate)),
     imageUrl: clientPhotoUrl(row),
     available: availability.get(row.id) ?? false,
   }));
@@ -399,11 +395,11 @@ export type SubmittedClientOrder = {
   order: ClientOrderSummaryDto;
 };
 
+/** What the customer receives about an order: never an amount (the priced order stays staff-side). */
 function toSummary(order: {
   id: string;
   orderNumber: string;
   status: CustomerOrderStatusValue;
-  totalTTC: Prisma.Decimal;
   createdAt: Date;
   convertedSale: { status: string } | null;
   lines: Array<{ quantity: number }>;
@@ -412,7 +408,6 @@ function toSummary(order: {
     id: order.id,
     orderNumber: order.orderNumber,
     status: order.status,
-    totalTTC: Number(order.totalTTC),
     itemCount: order.lines.reduce((sum, line) => sum + line.quantity, 0),
     createdAt: order.createdAt.toISOString(),
     invoicePending: isInvoicePending(order.status, order.convertedSale?.status),
@@ -423,7 +418,6 @@ const summarySelect = {
   id: true,
   orderNumber: true,
   status: true,
-  totalTTC: true,
   createdAt: true,
   customerId: true,
   convertedSale: { select: { status: true } },
@@ -436,7 +430,8 @@ const summarySelect = {
  * customer is still ACTIVE, every product belongs to the organisation, is
  * ACTIVE and has a valid photo (i.e. is really in the catalogue), quantities
  * are bounded, prices come from Product.salePrice/taxRate and the total is
- * computed like a POS sale. The browser only ever sends {productId, quantity}.
+ * computed like a POS sale. The browser only ever sends {productId, quantity};
+ * the amounts are stored on the order (staff side) and never sent back to it.
  * Writes ONLY CustomerOrder (+ lines) and an AuditLog row.
  */
 export async function submitClientOrder(
@@ -486,7 +481,8 @@ export async function submitClientOrder(
 
     const productIds = lines.map((line) => line.productId);
     const products = await tx.$queryRaw<
-      Array<Pick<CatalogRow, "id" | "name" | "reference" | "salePrice" | "taxRate" | "imageHead" | "imageLength">>
+      // The prices are read here, server-side, to price the order - they never leave the server.
+      Array<Pick<CatalogRow, "id" | "name" | "reference" | "imageHead" | "imageLength"> & { salePrice: Prisma.Decimal; taxRate: Prisma.Decimal }>
     >(Prisma.sql`
       SELECT p.id, p.name, p.reference, p."salePrice", p."taxRate",
              CASE WHEN lower(left(p."imageUrl", 5)) = 'data:' THEN left(p."imageUrl", 120) ELSE p."imageUrl" END AS "imageHead",
@@ -517,20 +513,9 @@ export async function submitClientOrder(
       }),
     );
 
-    if (input.expectedTotalTTC !== undefined && totalsDiffer(input.expectedTotalTTC, totals.totalTTC)) {
-      throw new ClientPortalError(
-        "Les prix ont changé depuis l'ajout au panier. Vérifiez le nouveau total puis confirmez à nouveau.",
-        409,
-        "PRICE_CHANGED",
-        {
-          totalTTC: totals.totalTTC,
-          prices: totals.lines.map((line) => ({
-            productId: line.productId,
-            priceTTC: computePriceTTC(line.unitPriceHT, line.taxRate),
-          })),
-        },
-      );
-    }
+    // input.expectedTotalTTC (sent by browsers opened before prices were hidden) is deliberately IGNORED:
+    // the customer sees no price, the amounts below come from the database only, and comparing the two would
+    // let a client find a price by trying totals until one matches.
 
     const orderNumber = await deps.nextOrderNumber(tx, scope.organizationId);
     const order = await tx.customerOrder.create({

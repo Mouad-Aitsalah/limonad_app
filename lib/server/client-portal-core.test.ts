@@ -11,7 +11,6 @@ import { assertDevDatabaseOnly, assertLoopbackServer } from "@/lib/db-test-guard
 import {
   CLIENT_LOGIN_MAX_FAILURES_PER_IP,
   CLIENT_ORDER_MAX_PER_HOUR,
-  estimateClientCartTotal,
   formatCustomerOrderNumber,
 } from "@/lib/client-portal-rules";
 
@@ -38,6 +37,22 @@ import {
  * transaction that is always rolled back (nothing persists). Skipped when no
  * database is reachable.
  */
+
+/** Every key, at any depth, whose name looks like an amount (what the customer must never receive). */
+function priceLikeKeys(value: unknown): string[] {
+  const found: string[] = [];
+  const visit = (node: unknown) => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (node && typeof node === "object") {
+      for (const [key, child] of Object.entries(node)) {
+        if (/price|prix|total|tax|cost|margin|amount|ht$|ttc$/i.test(key)) found.push(key);
+        visit(child);
+      }
+    }
+  };
+  visit(value);
+  return found;
+}
 
 // Never against production or a hosted database (lib/db-test-guard.ts): throws before any connection is made.
 assertDevDatabaseOnly("lib/server/client-portal-core.test.ts");
@@ -109,14 +124,14 @@ async function product(
   tx: Tx,
   ctx: Ctx,
   name: string,
-  options: { imageUrl?: string | null; status?: "ACTIVE" | "INACTIVE"; salePrice?: number; depotStock?: number; truckStock?: number } = {},
+  options: { imageUrl?: string | null; status?: "ACTIVE" | "INACTIVE"; salePrice?: number; depotStock?: number; truckStock?: number; categoryId?: string } = {},
 ) {
   const created = await tx.product.create({
     data: {
       organizationId: ctx.organization.id,
       reference: `R-${uid()}`,
       name,
-      categoryId: ctx.category.id,
+      categoryId: options.categoryId ?? ctx.category.id,
       purchasePrice: 3,
       salePrice: options.salePrice ?? 4.17,
       taxRate: 20,
@@ -247,7 +262,7 @@ test("session re-check: a customer blocked after login, or another organisation'
 // Catalogue
 // ---------------------------------------------------------------------------
 
-test("catalogue: only ACTIVE products of the organisation with a valid photo; no cost, margin or quantity exposed", async (t) => {
+test("catalogue: only ACTIVE products of the organisation with a valid photo; no price, cost, margin or quantity exposed", async (t) => {
   if (!reachable) return t.skip("database unreachable");
   await inRollback(async (tx) => {
     const a = await makeOrganization(tx, "A");
@@ -267,15 +282,17 @@ test("catalogue: only ACTIVE products of the organisation with a valid photo; no
       assert.equal(page.products.some((p) => p.id === hidden.id), false, hidden.name);
     }
     const byName = new Map(page.products.map((p) => [p.name, p]));
-    assert.equal(byName.get("Coca-Cola")!.priceTTC, 5);
     assert.equal(byName.get("Coca-Cola")!.available, true);
     assert.equal(byName.get("Hawaii")!.available, false, "truck stock is not depot availability");
     assert.equal(byName.get("Pom's")!.available, false);
     assert.equal(byName.get("Pom's")!.imageUrl, "https://cdn.example.com/poms.jpg");
     assert.match(byName.get("Coca-Cola")!.imageUrl, new RegExp(`^/api/products/${coca.id}/image\\?v=\\d+$`));
-    for (const field of ["purchasePrice", "salePrice", "quantity", "availableQuantity", "margin", "organizationId"]) {
+    for (const field of ["priceTTC", "priceHT", "price", "purchasePrice", "salePrice", "taxRate", "quantity", "availableQuantity", "margin", "organizationId"]) {
       assert.equal(field in byName.get("Coca-Cola")!, false, field);
     }
+    // nothing price-like anywhere in what the browser receives
+    assert.deepEqual(priceLikeKeys(page), []);
+    assert.deepEqual(Object.keys(byName.get("Coca-Cola")!).sort(), ["available", "categoryId", "categoryName", "description", "id", "imageUrl", "name", "reference"]);
 
     // server-side search + pagination
     assert.deepEqual((await getClientCatalogPage(tx, a.organization.id, { q: "haw" })).products.map((p) => p.id), [hawai.id]);
@@ -291,6 +308,16 @@ test("catalogue: only ACTIVE products of the organisation with a valid photo; no
     assert.equal(await isClientCatalogProduct(tx, a.organization.id, coca.id), true);
     for (const hidden of [noPhoto, svg, inactive]) assert.equal(await isClientCatalogProduct(tx, a.organization.id, hidden.id), false);
     assert.equal(await isClientCatalogProduct(tx, a.organization.id, foreign.id), false, "other organisation");
+
+    // server-side category filter (the categories shown as chips), alone and with a search
+    const snacks = await tx.category.create({ data: { organizationId: a.organization.id, name: "Snacks A" } });
+    const chips = await product(tx, a, "Chips", { categoryId: snacks.id });
+    assert.deepEqual((await getClientCatalogCategories(tx, a.organization.id)).map((c) => c.name), ["Boissons A", "Snacks A"]);
+    assert.deepEqual((await getClientCatalogPage(tx, a.organization.id, { categoryId: snacks.id })).products.map((p) => p.id), [chips.id]);
+    const drinks = (await getClientCatalogPage(tx, a.organization.id, { categoryId: a.category.id })).products.map((p) => p.id);
+    assert.equal(drinks.includes(chips.id), false);
+    assert.deepEqual(drinks.sort(), [coca.id, hawai.id, url.id].sort());
+    assert.deepEqual((await getClientCatalogPage(tx, a.organization.id, { categoryId: snacks.id, q: "coca" })).products, []);
   });
 });
 
@@ -308,13 +335,8 @@ test("order: re-priced server-side, SUBMITTED, idempotent - and no sale, payment
     const scope = { organizationId: a.organization.id, customerId: karim.id, contactPhone: "0612345678" };
     const before = await businessCounts(tx);
 
-    const expected = estimateClientCartTotal([
-      { priceTTC: 5, quantity: 2 },
-      { priceTTC: 4.5, quantity: 3 },
-    ]).totalTTC;
     const input = {
       idempotencyKey: `k-${uid()}`,
-      expectedTotalTTC: expected,
       note: "Livraison le matin",
       lines: [
         { productId: coca.id, quantity: 1 },
@@ -325,10 +347,13 @@ test("order: re-priced server-side, SUBMITTED, idempotent - and no sale, payment
     const result = await submitClientOrder(orderDeps(tx), scope, input, { ip: "1.2.3.4" });
     assert.equal(result.created, true);
     assert.equal(result.order.status, "SUBMITTED");
-    assert.equal(result.order.totalTTC, 23.5);
     assert.equal(result.order.itemCount, 5);
+    // the customer receives no amount...
+    assert.deepEqual(priceLikeKeys(result.order), []);
 
+    // ...but the order is priced server-side, from the database, exactly like a POS sale
     const stored = await tx.customerOrder.findUniqueOrThrow({ where: { id: result.order.id }, include: { lines: true } });
+    assert.equal(Number(stored.totalTTC), 23.5);
     assert.equal(stored.organizationId, a.organization.id);
     assert.equal(stored.customerId, karim.id);
     assert.equal(stored.contactPhone, "0612345678");
@@ -350,11 +375,13 @@ test("order: re-priced server-side, SUBMITTED, idempotent - and no sale, payment
     assert.equal(await tx.customerOrder.count({ where: { customerId: karim.id } }), 1);
 
     assert.deepEqual(await businessCounts(tx), before, "no Sale / Payment / StockMovement / AccountingEntry / stock change");
-    assert.deepEqual((await listClientOrders(tx, scope)).map((o) => o.id), [result.order.id]);
+    const listed = await listClientOrders(tx, scope);
+    assert.deepEqual(listed.map((o) => o.id), [result.order.id]);
+    assert.deepEqual(priceLikeKeys(listed), [], "no amount in « Mes commandes »");
   });
 });
 
-test("order: price changed, unavailable or foreign products, other customer's key and the hourly limit are refused", async (t) => {
+test("order: a browser total is never trusted nor answered; unavailable or foreign products, other customer's key and the hourly limit are refused", async (t) => {
   if (!reachable) return t.skip("database unreachable");
   await inRollback(async (tx) => {
     const a = await makeOrganization(tx, "A");
@@ -369,13 +396,12 @@ test("order: price changed, unavailable or foreign products, other customer's ke
     const submit = (lines: Array<{ productId: string; quantity: number }>, extra: Record<string, unknown> = {}) =>
       submitClientOrder(orderDeps(tx), scope, { idempotencyKey: `k-${uid()}`, lines, ...extra }, { ip: "t" });
 
-    await assert.rejects(submit([{ productId: coca.id, quantity: 2 }], { expectedTotalTTC: 9 }), (error: unknown) => {
-      assert.ok(error instanceof ClientPortalError);
-      assert.equal(error.code, "PRICE_CHANGED");
-      assert.equal(error.details?.totalTTC, 10);
-      assert.deepEqual(error.details?.prices, [{ productId: coca.id, priceTTC: 5 }]);
-      return true;
-    });
+    // a (legacy) browser total, even a wrong one, is ignored: the order is priced from the database and no
+    // price comes back - so trying totals can never reveal a price
+    const legacy = await submit([{ productId: coca.id, quantity: 2 }], { expectedTotalTTC: 9 });
+    assert.equal(legacy.created, true);
+    assert.deepEqual(priceLikeKeys(legacy), []);
+    assert.equal(Number((await tx.customerOrder.findUniqueOrThrow({ where: { id: legacy.order.id } })).totalTTC), 10, "2 x 5.00 TTC from Product");
     for (const bad of [noPhoto, inactive, foreign]) {
       await assert.rejects(submit([{ productId: coca.id, quantity: 1 }, { productId: bad.id, quantity: 1 }]), (error: unknown) => {
         assert.ok(error instanceof ClientPortalError);
@@ -397,7 +423,8 @@ test("order: price changed, unavailable or foreign products, other customer's ke
       return true;
     });
 
-    for (let i = 0; i < CLIENT_ORDER_MAX_PER_HOUR; i += 1) await submit([{ productId: coca.id, quantity: 1 }]);
+    // already created for karim: the legacy order above
+    for (let i = 1; i < CLIENT_ORDER_MAX_PER_HOUR; i += 1) await submit([{ productId: coca.id, quantity: 1 }]);
     await assert.rejects(submit([{ productId: coca.id, quantity: 1 }]), (error: unknown) => {
       assert.ok(error instanceof ClientPortalError && error.code === "TOO_MANY_ORDERS" && error.status === 429);
       return true;

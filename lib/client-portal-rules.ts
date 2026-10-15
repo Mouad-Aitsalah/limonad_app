@@ -1,9 +1,8 @@
 import { z } from "zod";
 
 import { resolveCustomerCodeFromInput } from "@/lib/customer-code";
-import { roundMoney } from "@/lib/money";
 import { computeDiscountedLineTotals } from "@/lib/pos-discount";
-import { applyCommercialRounding, computeSaleTotals } from "@/lib/sale-rounding";
+import { computeSaleTotals } from "@/lib/sale-rounding";
 
 /**
  * Espace Client ("Commander en ligne") - the PURE rules, no database and no
@@ -142,7 +141,9 @@ export const clientOrderInputSchema = z
       .max(CLIENT_ORDER_MAX_LINES),
     note: z.string().trim().max(500).optional(),
     idempotencyKey: z.string().trim().min(8).max(120),
-    // What the client saw; a different server total -> PRICE_CHANGED (409).
+    // LEGACY, IGNORED: sent by browsers opened before the Espace Client stopped showing prices. Still
+    // accepted (the schema is strict) so such a tab can submit, but never compared nor trusted - the order
+    // is always priced from the database (client-portal-core.ts#submitClientOrder).
     expectedTotalTTC: z.number().nonnegative().max(100_000_000).optional(),
   })
   .strict();
@@ -186,21 +187,6 @@ export function computeClientOrderTotals(lines: PricedOrderLine[]) {
   });
   const { subtotalHT, taxAmount, roundingAmount, totalTTC } = computeSaleTotals(computed);
   return { lines: computed, subtotalHT, taxAmount, roundingAmount, totalTTC };
-}
-
-/**
- * The same estimate computed from the catalogue TTC prices the browser has:
- * a POS line is round(quantity x unit TTC) (computeDiscountedLineTotals with
- * no discount) and the sale total is the commercial rounding of their sum -
- * so this equals computeClientOrderTotals().totalTTC for unchanged prices.
- */
-export function estimateClientCartTotal(lines: Array<{ priceTTC: number; quantity: number }>) {
-  const beforeRounding = lines.reduce((sum, line) => sum + roundMoney(line.quantity * line.priceTTC), 0);
-  return applyCommercialRounding(beforeRounding);
-}
-
-export function totalsDiffer(a: number, b: number): boolean {
-  return Math.abs(a - b) > 0.009;
 }
 
 export function formatCustomerOrderNumber(sequence: number): string {

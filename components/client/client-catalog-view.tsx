@@ -1,18 +1,16 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Search } from "lucide-react";
+import { Loader2, PackageSearch, Search, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { ClientCartBar, ClientCartSheet } from "@/components/client/client-cart-sheet";
 import { ClientHeader } from "@/components/client/client-header";
+import { ClientProductCard } from "@/components/client/client-product-card";
 import { ClientProductDialog } from "@/components/client/client-product-dialog";
 import { useClientCatalog } from "@/components/client/use-client-catalog";
-import { ProductMedia } from "@/components/products/product-media";
-import { cartStorageKey, useClientCart } from "@/lib/client-cart-store";
-import { formatCurrency } from "@/lib/utils";
+import { cartCounts, cartStorageKey, useClientCart } from "@/lib/client-cart-store";
+import { cn } from "@/lib/utils";
 import type { ClientCatalogDto, ClientCatalogProductDto, ClientSessionDto } from "@/types/client-portal";
 
 type ClientCatalogViewProps = {
@@ -20,127 +18,174 @@ type ClientCatalogViewProps = {
   catalog: ClientCatalogDto;
 };
 
+const CART_FULL_MESSAGE = "Votre panier contient déjà le nombre maximum de produits différents.";
+
+/**
+ * Espace Client - the ordering page, mobile first: a compact header + search + categories kept at the top,
+ * product cards with an « Ajouter » button that becomes « − n + », a cart bar fixed at the bottom and the
+ * cart in a panel over the list (the position in the list is never lost). Search and categories are served
+ * by the server (useClientCatalog) and never touch the cart. No price anywhere.
+ */
 export function ClientCatalogView({ client, catalog }: ClientCatalogViewProps) {
-  const { addToCart } = useClientCart(cartStorageKey(client.organizationId, client.customerId));
+  const { cart, addToCart, updateQuantity } = useClientCart(cartStorageKey(client.organizationId, client.customerId));
   const { search, setSearch, categoryId, setCategoryId, products, nextCursor, loading, error, loadMore } =
     useClientCatalog(catalog.firstPage);
   const [selected, setSelected] = React.useState<ClientCatalogProductDto | null>(null);
+  const [cartOpen, setCartOpen] = React.useState(false);
 
-  function add(product: ClientCatalogProductDto, quantity: number) {
-    if (addToCart(product, quantity)) {
-      toast.success(`${product.name} × ${quantity} ajouté au panier.`);
-    } else {
-      toast.error("Votre panier contient déjà le nombre maximum de produits différents.");
-    }
+  const quantities = React.useMemo(() => new Map(cart.map((line) => [line.productId, line.quantity])), [cart]);
+  const { lineCount, itemCount } = cartCounts(cart);
+
+  function add(product: ClientCatalogProductDto, quantity = 1) {
+    if (!addToCart(product, quantity)) toast.error(CART_FULL_MESSAGE);
   }
 
-  return (
-    <div className="min-h-screen bg-emerald-50/30">
-      <ClientHeader client={client} organization={catalog.organization} subtitle="Espace Client · Catalogue" />
+  function changeQuantity(product: ClientCatalogProductDto, quantity: number) {
+    if (quantities.has(product.id)) updateQuantity(product.id, quantity);
+    else if (quantity > 0) add(product, quantity);
+  }
 
-      <main className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6">
-        <div className="relative">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Rechercher un produit (désignation ou référence)..."
-            aria-label="Rechercher un produit"
-            className="pl-10"
-          />
-          {loading ? (
-            <Loader2 aria-hidden="true" className="absolute top-1/2 right-3.5 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+  const hasFilter = search.trim().length > 0 || categoryId !== null;
+
+  return (
+    <div className="min-h-dvh bg-slate-50">
+      <div className="sticky top-0 z-20 bg-white shadow-[0_4px_16px_rgba(15,23,42,0.05)]">
+        <ClientHeader client={client} organization={catalog.organization} active="catalog" onOpenCart={() => setCartOpen(true)} />
+
+        <div className="mx-auto max-w-6xl space-y-2 px-3 pt-2 pb-2.5 sm:px-6">
+          <div className="relative">
+            <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3.5 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Rechercher un produit ou une référence"
+              aria-label="Rechercher un produit par désignation ou référence"
+              enterKeyHint="search"
+              className="h-12 w-full rounded-2xl border border-border bg-slate-50 pr-11 pl-11 text-base text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-emerald-400 focus:bg-white focus:ring-3 focus:ring-emerald-500/15 [&::-webkit-search-cancel-button]:appearance-none"
+            />
+            {loading ? (
+              <Loader2 aria-hidden="true" className="absolute top-1/2 right-3.5 h-5 w-5 -translate-y-1/2 animate-spin text-muted-foreground" />
+            ) : search ? (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute top-1/2 right-1.5 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground hover:bg-slate-100"
+                aria-label="Effacer la recherche"
+              >
+                <X aria-hidden="true" className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
+
+          {catalog.categories.length > 1 ? (
+            <div
+              role="tablist"
+              aria-label="Catégories"
+              className="-mx-3 flex gap-2 overflow-x-auto px-3 [scrollbar-width:none] sm:-mx-6 sm:px-6 [&::-webkit-scrollbar]:hidden"
+            >
+              <CategoryChip active={categoryId === null} onClick={() => setCategoryId(null)}>
+                Tout
+              </CategoryChip>
+              {catalog.categories.map((category) => (
+                <CategoryChip key={category.id} active={categoryId === category.id} onClick={() => setCategoryId(category.id)}>
+                  {category.name}
+                </CategoryChip>
+              ))}
+            </div>
           ) : null}
         </div>
+      </div>
 
-        {catalog.categories.length > 1 ? (
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => setCategoryId(null)} className={categoryChipClassName(categoryId === null)}>
-              Toutes les catégories
-            </button>
-            {catalog.categories.map((category) => (
-              <button
-                key={category.id}
-                type="button"
-                onClick={() => setCategoryId(category.id)}
-                className={categoryChipClassName(categoryId === category.id)}
-              >
-                {category.name}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
+      <main className={cn("mx-auto max-w-6xl px-3 pt-3 sm:px-6 sm:pt-5", lineCount > 0 ? "pb-28" : "pb-8")}>
         {error ? (
-          <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p role="alert" className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
           </p>
         ) : null}
 
         {products.length === 0 && !loading ? (
-          <p className="rounded-2xl border border-dashed border-border bg-white py-12 text-center text-sm text-muted-foreground">
-            {search || categoryId ? "Aucun produit ne correspond à votre recherche." : "Aucun produit n'est disponible pour le moment."}
-          </p>
-        ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {products.map((product) => (
-              <article
-                key={product.id}
-                className="flex flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-[0_10px_25px_rgba(15,23,42,0.05)]"
-              >
+          <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center" data-testid="client-catalog-empty">
+            <PackageSearch aria-hidden="true" className="h-10 w-10 text-emerald-600/70" />
+            <p className="text-base font-semibold text-foreground">
+              {hasFilter ? "Aucun produit ne correspond à votre recherche" : "Aucun produit n'est disponible pour le moment"}
+            </p>
+            {hasFilter ? (
+              <>
+                <p className="text-sm text-muted-foreground">Essayez un autre mot, une référence ou une autre catégorie.</p>
                 <button
                   type="button"
-                  onClick={() => setSelected(product)}
-                  className="text-left focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:outline-none"
-                  aria-label={`Voir la fiche de ${product.name}`}
+                  onClick={() => {
+                    setSearch("");
+                    setCategoryId(null);
+                  }}
+                  className="mt-1 h-11 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
                 >
-                  <ProductMedia imageUrl={product.imageUrl} alt={product.name} fit="cover" className="aspect-square w-full rounded-none" />
+                  Voir tous les produits
                 </button>
-                <div className="flex flex-1 flex-col gap-1.5 p-3">
-                  <p className="text-xs text-muted-foreground">Réf. {product.reference}</p>
-                  <button
-                    type="button"
-                    onClick={() => setSelected(product)}
-                    className="line-clamp-2 min-h-[2.5em] text-left text-sm font-medium text-foreground hover:text-emerald-700"
-                  >
-                    {product.name}
-                  </button>
-                  <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-                    <span className="font-semibold text-emerald-700 tabular-nums">{formatCurrency(product.priceTTC)}</span>
-                    {product.available ? (
-                      <Badge variant="secondary">Disponible</Badge>
-                    ) : (
-                      <Badge variant="outline">Sur commande</Badge>
-                    )}
-                  </div>
-                  <Button type="button" size="sm" className="mt-1 w-full" onClick={() => add(product, 1)}>
-                    Ajouter au panier
-                  </Button>
-                </div>
-              </article>
+              </>
+            ) : null}
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "grid grid-cols-2 gap-3 transition-opacity sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5",
+              loading && "opacity-60",
+            )}
+          >
+            {products.map((product) => (
+              <ClientProductCard
+                key={product.id}
+                product={product}
+                quantityInCart={quantities.get(product.id) ?? 0}
+                onAdd={(item) => add(item, 1)}
+                onQuantityChange={changeQuantity}
+                onOpenDetails={setSelected}
+              />
             ))}
           </div>
         )}
 
         {nextCursor ? (
-          <div className="flex justify-center">
-            <Button type="button" variant="outline" onClick={() => void loadMore()} disabled={loading}>
-              Voir plus de produits
-            </Button>
-          </div>
+          <button
+            type="button"
+            onClick={() => void loadMore()}
+            disabled={loading}
+            className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-border bg-white text-[15px] font-semibold text-foreground hover:bg-slate-50 disabled:opacity-60"
+          >
+            {loading ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
+            Voir plus de produits
+          </button>
         ) : null}
       </main>
 
-      <ClientProductDialog product={selected} onClose={() => setSelected(null)} onAdd={add} />
+      <ClientCartBar lineCount={lineCount} itemCount={itemCount} onOpen={() => setCartOpen(true)} />
+      <ClientCartSheet client={client} open={cartOpen} onOpenChange={setCartOpen} />
+      <ClientProductDialog
+        product={selected}
+        quantityInCart={selected ? (quantities.get(selected.id) ?? 0) : 0}
+        onClose={() => setSelected(null)}
+        onAdd={add}
+      />
     </div>
   );
 }
 
-function categoryChipClassName(active: boolean): string {
-  return active
-    ? "rounded-full bg-emerald-600 px-3.5 py-1.5 text-xs font-medium text-white transition"
-    : "rounded-full border border-border bg-white px-3.5 py-1.5 text-xs font-medium text-foreground transition hover:border-emerald-200 hover:bg-emerald-50";
+function CategoryChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "h-9 shrink-0 rounded-full px-4 text-sm font-semibold whitespace-nowrap transition-colors focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:outline-none",
+        active
+          ? "bg-emerald-600 text-white shadow-sm"
+          : "border border-border bg-white text-slate-700 hover:border-emerald-200 hover:bg-emerald-50",
+      )}
+    >
+      {children}
+    </button>
+  );
 }
