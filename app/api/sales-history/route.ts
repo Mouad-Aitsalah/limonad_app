@@ -23,6 +23,8 @@ export async function GET(request: Request) {
       dateTo: url.searchParams.get("dateTo") || undefined,
       paymentMethod: url.searchParams.get("paymentMethod") || undefined,
       posSessionId: url.searchParams.get("posSessionId") || undefined,
+      // Archives des factures only: also list the credit notes (« Rembourser » rows).
+      includeCreditNotes: url.searchParams.get("includeCreditNotes") === "1",
     });
     return NextResponse.json(page);
   } catch (error) {

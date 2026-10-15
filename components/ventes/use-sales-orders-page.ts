@@ -10,6 +10,8 @@ export type OrdersQueryFilters = {
   dateTo?: string;
   paymentMethod?: string;
   posSessionId?: string;
+  /** Archives des factures: also list the credit notes (payment « Rembourser »). Drill-downs leave it off. */
+  includeCreditNotes?: boolean;
 };
 
 const PAGE_SIZE = 25;
@@ -36,7 +38,7 @@ export function useSalesOrdersPage(
   const cursorStackRef = React.useRef<Array<string | null>>([null]);
   const skipNextResetRef = React.useRef(Boolean(initial));
 
-  const { search, dateFrom, dateTo, paymentMethod, posSessionId } = filters;
+  const { search, dateFrom, dateTo, paymentMethod, posSessionId, includeCreditNotes } = filters;
 
   const fetchPage = React.useCallback(
     async (cursor: string | null) => {
@@ -49,6 +51,7 @@ export function useSalesOrdersPage(
         if (dateTo) query.set("dateTo", dateTo);
         if (paymentMethod && paymentMethod !== "all") query.set("paymentMethod", paymentMethod);
         if (posSessionId) query.set("posSessionId", posSessionId);
+        if (includeCreditNotes) query.set("includeCreditNotes", "1");
 
         const response = await fetch(`/api/sales-history?${query.toString()}`);
         const body = (await response.json()) as SaleHistoryOrdersPageDto & { message?: string };
@@ -61,7 +64,7 @@ export function useSalesOrdersPage(
         setLoading(false);
       }
     },
-    [search, dateFrom, dateTo, paymentMethod, posSessionId],
+    [search, dateFrom, dateTo, paymentMethod, posSessionId, includeCreditNotes],
   );
 
   React.useEffect(() => {

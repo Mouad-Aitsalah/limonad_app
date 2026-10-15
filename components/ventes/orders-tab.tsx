@@ -51,6 +51,7 @@ export function OrdersTab({ initialPage }: OrdersTabProps) {
       dateFrom: filters.dateFrom,
       dateTo: filters.dateTo,
       paymentMethod: filters.paymentMethod,
+      includeCreditNotes: true,
     },
     initialPage,
   );

@@ -4,6 +4,17 @@ import { roundMoney } from "@/lib/money";
 import { businessDayRangeUtc, formatBusinessDayLabel } from "@/lib/business-day";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
+import {
+  creditNotePageWindow,
+  creditNotesBelongTo,
+  isRefundPaymentFilter,
+  mergeInvoiceAndCreditNoteRows,
+} from "@/lib/credit-note-list-rows";
+import {
+  countCreditNoteListItems,
+  loadCreditNoteListItems,
+  loadCursorSaleInstant,
+} from "@/lib/server/credit-note-list-rows";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { dailyParamsFromSearchParams, type DailyInvoicesQueryParams } from "@/lib/daily-invoices-filters";
 import { canSeeDailyMargin, groupDailySales, summarizeMargin } from "@/lib/daily-sales-grouping";
@@ -58,14 +69,19 @@ export function buildDailyScope(organizationId: string, params: DailyInvoicesPag
       ? (params.paymentMethod as NonNullable<Prisma.SaleWhereInput["paymentMethod"]>)
       : null;
 
+  // « Rembourser » lists the credit notes only: no sale matches it (empty id list), so the sales KPIs, margin
+  // and grouping of that filter are all zero - the refunds are never mixed into them.
+  const refundOnly = isRefundPaymentFilter(params.paymentMethod);
+
   const saleWhere: Prisma.SaleWhereInput = {
     organizationId,
     createdAt: { gte: start, lt: end },
     status: SOLD_STATUS,
     ...(userIds.length ? { createdByUserId: { in: userIds } } : {}),
     ...(methodFilter ? { paymentMethod: methodFilter } : {}),
+    ...(refundOnly ? { id: { in: [] } } : {}),
   };
-  return { day, start, end, saleWhere };
+  return { day, start, end, saleWhere, userIds, refundOnly };
 }
 
 // SaleLine.unitCostHT is exact for every line created once this migration had run;
@@ -244,7 +260,7 @@ export async function getDailyInvoicesPage(
   const organizationId = user.organizationId;
 
   const pageSize = clampPageSize(params.pageSize);
-  const { start, end, day, saleWhere } = buildDailyScope(organizationId, params);
+  const { start, end, day, saleWhere, userIds } = buildDailyScope(organizationId, params);
 
   const [rows, invoiceCount, revenueAgg, creditAgg, paymentGroups, userRows, margin] = await Promise.all([
     prisma.sale.findMany({
@@ -293,10 +309,31 @@ export async function getDailyInvoicesPage(
     );
   }
 
-  const items = pageRows.map((row) =>
-    mapOrderRowToListItemDto(row, row.totalTTC.toNumber() - (refundsBySaleId.get(row.id) ?? 0), {
-      includeDiscount: canSeeDiscountIndicator(user.role),
-    }),
+  // The day's credit notes (payment « Rembourser »): rows of the page window, information only - the KPIs
+  // below stay computed from the sales alone, so a refund is never counted a second time here.
+  const creditFilters = { range: { start, end }, userIds };
+  const [creditNoteItems, creditNoteCount] = creditNotesBelongTo(params)
+    ? await Promise.all([
+        loadCreditNoteListItems(
+          organizationId,
+          creditFilters,
+          creditNotePageWindow({
+            cursorSaleCreatedAt: params.cursor ? await loadCursorSaleInstant(organizationId, params.cursor) : null,
+            pageRows,
+            hasMore,
+          }),
+        ),
+        countCreditNoteListItems(organizationId, creditFilters),
+      ])
+    : [[], 0];
+
+  const items = mergeInvoiceAndCreditNoteRows(
+    pageRows.map((row) =>
+      mapOrderRowToListItemDto(row, row.totalTTC.toNumber() - (refundsBySaleId.get(row.id) ?? 0), {
+        includeDiscount: canSeeDiscountIndicator(user.role),
+      }),
+    ),
+    creditNoteItems,
   );
 
   const paymentSums = new Map<string, number>();
@@ -316,7 +353,7 @@ export async function getDailyInvoicesPage(
     items,
     nextCursor: hasMore ? pageRows[pageRows.length - 1].id : null,
     hasMore,
-    totalCount: invoiceCount,
+    totalCount: invoiceCount + creditNoteCount,
     kpis: {
       invoiceCount,
       revenueTotal,

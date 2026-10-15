@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import { CREDIT_NOTE_PAYMENT_LABEL, CREDIT_NOTE_PAYMENT_METHOD } from "@/lib/credit-note-list-rows";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -31,6 +32,8 @@ export const paymentMethodOptions = [
   { value: "BANK_TRANSFER", label: "Virement" },
   { value: "CREDIT", label: "Credit" },
   { value: "MIXED", label: "Mixte" },
+  // Credit notes (avoirs): refunded to the customer, not a way a sale is paid.
+  { value: CREDIT_NOTE_PAYMENT_METHOD, label: CREDIT_NOTE_PAYMENT_LABEL },
 ];
 
 export const paymentMethodLabels: Record<string, string> = Object.fromEntries(

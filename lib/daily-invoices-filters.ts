@@ -9,11 +9,21 @@
  *   absent values = the defaults: current business day, every user, every method.
  */
 
+import { CREDIT_NOTE_PAYMENT_METHOD } from "@/lib/credit-note-list-rows";
+
 export const DAILY_INVOICES_PATH = "/ventes/journalieres";
 export const DAILY_SALES_GROUPING_PATH = "/ventes/journalieres/regroupement";
 
-/** Same value set as the « Mode de règlement » filter (PaymentMethod enum). */
-export const DAILY_PAYMENT_METHODS = ["CASH", "CARD", "CHECK", "BANK_TRANSFER", "CREDIT", "MIXED"] as const;
+/** Same value set as the « Mode de règlement » filter (PaymentMethod enum) + « Rembourser » (the credit notes). */
+export const DAILY_PAYMENT_METHODS = [
+  "CASH",
+  "CARD",
+  "CHECK",
+  "BANK_TRANSFER",
+  "CREDIT",
+  "MIXED",
+  CREDIT_NOTE_PAYMENT_METHOD,
+] as const;
 
 export type DailyInvoicesFilters = {
   day: string;

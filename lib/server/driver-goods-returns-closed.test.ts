@@ -68,7 +68,7 @@ test("getReturnableProductsForCustomer is reserved to the desk roles - no driver
   const body = credit.slice(start, credit.indexOf("const driverReturnLineSchema"));
   assert.match(body, /requireOrganizationUser\(DESK_CREDIT_NOTE_ROLES\)/);
   assert.equal(/"driver"/.test(body.replace(/\/\/[^\n]*/g, "")), false, "no driver role left in the code of this function");
-  assert.match(credit, /const DESK_CREDIT_NOTE_ROLES: UserRole\[\] = \["admin", "depot_manager", "cashier"\];/);
+  assert.match(credit, /const DESK_CREDIT_NOTE_ROLES: UserRole\[\] = \["admin", "cashier"\];/);
 });
 
 test("no driver surface references the credit-note or driver-return API: driver pages, driver components, the mobile app, the offline code", () => {
@@ -95,9 +95,14 @@ test("no driver surface references the credit-note or driver-return API: driver 
 test("the credit-note menu entry and pages exclude the driver; the two fixed driver labels are untouched", () => {
   const nav = read("components/layout/nav-items.ts");
   assert.match(nav, /label: "Avoir client \/ fournisseur", href: "\/avoirs", roles: \["admin", "cashier"\]/);
-  for (const page of ["app/(dashboard)/avoirs/page.tsx", "app/(dashboard)/avoirs/[id]/page.tsx"]) {
+  // creating an avoir (the POS-style page): administrator and cashier only; reading one (the detail page) also the depot manager
+  const pages: Array<[string, RegExp]> = [
+    ["app/(dashboard)/avoirs/page.tsx", /const allowedRoles: UserRole\[\] = \["admin", "cashier"\];/],
+    ["app/(dashboard)/avoirs/[id]/page.tsx", /const allowedRoles: UserRole\[\] = \["admin", "depot_manager", "cashier"\];/],
+  ];
+  for (const [page, roles] of pages) {
     const text = read(page);
-    assert.match(text, /const allowedRoles: UserRole\[\] = \["admin", "depot_manager", "cashier"\];/, page);
+    assert.match(text, roles, page);
     assert.match(text, /redirect\("\/driver"\)/, page);
   }
   // decided: these static labels stay as they are

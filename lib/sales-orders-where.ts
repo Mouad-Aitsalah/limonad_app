@@ -1,3 +1,4 @@
+import { CREDIT_NOTE_PAYMENT_METHOD } from "@/lib/credit-note-list-rows";
 import type { Prisma } from "@/lib/generated/prisma/client";
 
 // Pure (no `server-only`, no Prisma client) so the archive filter can be unit
@@ -25,6 +26,12 @@ export type SalesOrdersPageParams = {
    * HTTP route forwards this flag.
    */
   includeDrafts?: boolean;
+  /**
+   * « Archives des factures » only: also list the credit notes (« avoirs », payment « Rembourser ») next to
+   * the invoices - information rows, never counted in a total (lib/credit-note-list-rows.ts). Opt-in, so the
+   * AI assistant's invoice lookup and the session / month drill-downs keep returning invoices only.
+   */
+  includeCreditNotes?: boolean;
 };
 
 function endOfDay(dateOnly: string): Date {
@@ -45,7 +52,9 @@ export function buildOrdersWhere(
   if (params.posSessionId) {
     where.posSessionId = params.posSessionId;
   }
-  if (params.paymentMethod && params.paymentMethod !== "all") {
+  // « Rembourser » is a credit note payment, not a Sale.paymentMethod value: it is never sent to the Sale
+  // query (the caller lists credit notes only in that case, see getSalesOrdersPage).
+  if (params.paymentMethod && params.paymentMethod !== "all" && params.paymentMethod !== CREDIT_NOTE_PAYMENT_METHOD) {
     where.paymentMethod = params.paymentMethod as Prisma.SaleWhereInput["paymentMethod"];
   }
   if (params.dateFrom || params.dateTo) {

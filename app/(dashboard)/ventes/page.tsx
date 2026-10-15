@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 export default async function VentesPage() {
   await requireModulePage("salesArchive");
   const [ordersPage, sessions, months] = await Promise.all([
-    getSalesOrdersPage(),
+    getSalesOrdersPage({ includeCreditNotes: true }),
     getSalesSessionsSummary(),
     getSalesMonthsSummary(),
   ]);

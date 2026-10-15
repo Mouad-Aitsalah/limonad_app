@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { CREDIT_NOTE_LIST_STATUS, CREDIT_NOTE_REVERSED_LIST_STATUS } from "@/lib/credit-note-list-rows";
 import { cn } from "@/lib/utils";
 
 const config: Record<string, { label: string; className: string }> = {
@@ -14,6 +15,15 @@ const config: Record<string, { label: string; className: string }> = {
   CREDIT_NOTED: {
     label: "Avoir emis",
     className: "border-purple-200 bg-purple-50 text-purple-700",
+  },
+  // A credit note listed next to the invoices (lib/credit-note-list-rows.ts).
+  [CREDIT_NOTE_LIST_STATUS]: {
+    label: "Avoir",
+    className: "border-purple-200 bg-purple-50 text-purple-700",
+  },
+  [CREDIT_NOTE_REVERSED_LIST_STATUS]: {
+    label: "Avoir annule",
+    className: "border-red-200 bg-red-50 text-red-600",
   },
 };
 

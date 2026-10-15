@@ -289,7 +289,10 @@ test("GET /api/credit-notes/returnables: the driver is refused (403) and nothing
 
   assert.equal((await call(routes.returnables.GET, "/api/credit-notes/returnables", { token: null, method: "GET", search })).status, 401);
 
-  for (const role of ["admin", "depot_manager", "cashier"] as const) {
+  const depotManager = await call(routes.returnables.GET, "/api/credit-notes/returnables", { token: org.tokens.depot_manager, method: "GET", search });
+  assert.equal(depotManager.status, 403, "the depot manager does not prepare a customer note");
+
+  for (const role of ["admin", "cashier"] as const) {
     const ok = await call(routes.returnables.GET, "/api/credit-notes/returnables", { token: org.tokens[role], method: "GET", search });
     assert.equal(ok.status, 200, role);
     const products = ok.json.products as Array<{ productId: string; returnableQuantity: number; origins: Array<{ invoiceNumber: string; saleLineId: string }> }>;

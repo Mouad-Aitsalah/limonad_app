@@ -191,14 +191,28 @@ test("the cashier creates a manual customer credit note: validated, cash refund 
   assert.equal(cashLine.credit.toNumber(), note.totalTTC);
 });
 
-test("every desk role may create a customer note; the driver role may not", { skip: SKIP }, async () => {
+test("only the administrator and the cashier create a customer note; the depot manager and the driver may not", { skip: SKIP }, async () => {
   const org = await makeOrg("roles");
-  for (const role of ["admin", "depot_manager", "cashier"] as const) {
+  for (const role of ["admin", "cashier"] as const) {
     const note = await notes.createManualCreditNoteAs(org.users[role], customerInput(org));
     assert.equal(note.status, "VALIDE", role);
   }
-  await rejectsWith(notes.createManualCreditNoteAs(org.users.driver, customerInput(org)), 403);
-  await rejectsWith(notes.saveCreditNoteDraftAs(org.users.driver, customerInput(org)), 403);
+  const before = await prisma.creditNote.count({ where: { organizationId: org.id } });
+  for (const role of ["depot_manager", "driver"] as const) {
+    await rejectsWith(notes.createManualCreditNoteAs(org.users[role], customerInput(org)), 403);
+    await rejectsWith(notes.saveCreditNoteDraftAs(org.users[role], customerInput(org)), 403);
+  }
+  assert.equal(await prisma.creditNote.count({ where: { organizationId: org.id } }), before, "nothing was written by the refused roles");
+});
+
+test("the depot manager can neither validate a draft nor use the returnables helper, but still reverses", { skip: SKIP }, async () => {
+  const org = await makeOrg("dm-validate");
+  const draft = await notes.saveCreditNoteDraftAs(org.users.admin, customerInput(org));
+  await rejectsWith(notes.validateCreditNoteAs(org.users.depot_manager, draft.id), 403);
+  assert.equal((await prisma.creditNote.findUniqueOrThrow({ where: { id: draft.id } })).status, "DRAFT");
+  const validated = await notes.validateCreditNoteAs(org.users.cashier, draft.id);
+  assert.equal(validated.status, "VALIDE");
+  assert.equal((await notes.reverseCreditNoteAs(org.users.depot_manager, validated.id)).status, "CONTREPASSE");
 });
 
 test("a customer note without a real justification is refused server-side, for every role; nothing is written", { skip: SKIP }, async () => {
@@ -256,9 +270,9 @@ test("the cashier's draft is priced the same way, and stays so when a cashier va
   assert.equal(await stockOf(org.productId, org.depotId), 2);
 });
 
-test("admin and depot manager keep the manual price", { skip: SKIP }, async () => {
+test("the admin keeps the manual price", { skip: SKIP }, async () => {
   const org = await makeOrg("free");
-  for (const role of ["admin", "depot_manager"] as const) {
+  for (const role of ["admin"] as const) {
     const note = await notes.createManualCreditNoteAs(
       org.users[role],
       customerInput(org, { lines: [{ productId: org.productId, quantityReturned: 1, unitPrice: 80, discountPercent: 10, taxRate: 20 }] }),
@@ -483,10 +497,10 @@ test("a cashier cannot validate an admin draft priced below the catalogue (403);
   assert.equal(await stockOf(org.productId, org.depotId), 3);
 });
 
-test("a cashier cannot validate a draft with a different DISCOUNT or a different VAT; depot manager and admin can", { skip: SKIP }, async () => {
+test("a cashier cannot validate a draft with a different DISCOUNT or a different VAT; the admin can", { skip: SKIP }, async () => {
   const org = await makeOrg("pv-disc");
   const withDiscount = await notes.saveCreditNoteDraftAs(
-    org.users.depot_manager,
+    org.users.admin,
     customerInput(org, { lines: [{ productId: org.productId, quantityReturned: 1, unitPrice: 100, discountPercent: 10, taxRate: 20 }] }),
   );
   await rejectsWith(notes.validateCreditNoteAs(org.users.cashier, withDiscount.id), 403, catalogueRefusal);
@@ -499,7 +513,7 @@ test("a cashier cannot validate a draft with a different DISCOUNT or a different
   await rejectsWith(notes.validateCreditNoteAs(org.users.cashier, withVat.id), 403, catalogueRefusal);
   await assertUntouchedDraft(org, withVat.id);
 
-  assert.equal((await notes.validateCreditNoteAs(org.users.depot_manager, withDiscount.id)).status, "VALIDE");
+  assert.equal((await notes.validateCreditNoteAs(org.users.admin, withDiscount.id)).status, "VALIDE");
   assert.equal((await notes.validateCreditNoteAs(org.users.admin, withVat.id)).status, "VALIDE");
 });
 
@@ -584,7 +598,7 @@ test("a VALIDATED or REVERSED note cannot be modified through /manual (any desk 
   const note = await notes.createManualCreditNoteAs(org.users.admin, customerInput(org));
   const before = await snapshot(note.id);
   const fx = await effects(org, note.id);
-  for (const role of ["cashier", "depot_manager", "admin"] as const) {
+  for (const role of ["cashier", "admin"] as const) {
     await rejectsWith(notes.createManualCreditNoteAs(org.users[role], edit(org, note.id, { comment: "tentative de modification", lines: [{ productId: org.productId, quantityReturned: 9 }] })), 422, /Seul un brouillon/);
     await rejectsWith(notes.saveCreditNoteDraftAs(org.users[role], edit(org, note.id, { comment: "tentative de retour en brouillon" })), 422, /Seul un brouillon/);
   }

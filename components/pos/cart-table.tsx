@@ -70,6 +70,8 @@ type CartTableProps = {
    * >= lg are untouched; so are prices, discounts, totals and permissions.
    */
   phoneStyle?: boolean;
+  /** Credit note screen: no per-unit discount column (an avoir is returned at the line price). */
+  hideDiscount?: boolean;
 };
 
 // Column widths are the single source of truth (`table-fixed` makes every
@@ -136,8 +138,10 @@ export function CartTable({
   onRemove,
   pcLayout = false,
   phoneStyle = false,
+  hideDiscount = false,
 }: CartTableProps) {
   const isTransfer = operationType === "transfer";
+  const showDiscount = !isTransfer && !hideDiscount;
   const priceEditable = canEditPrice && !isTransfer && !readOnly && !!onPriceChange;
   // PC counter POS only; the data is absent (-> false) for cashiers, drivers,
   // frozen / pending lines and transfers.
@@ -193,7 +197,7 @@ export function CartTable({
           <TableHead className={cn(COL.prix, "text-center", H_MOBILE, H_DESKTOP, phoneStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.prix])}>
             {isTransfer ? "Valeur unit." : "Prix TTC"}
           </TableHead>
-          {!isTransfer && (
+          {showDiscount && (
             <TableHead className={cn(COL.rem, "text-center", H_MOBILE, H_DESKTOP, phoneStyle && [H_MOBILE_BOLD, COL_DRIVER_MOBILE.rem])}>
               {/* Compact "Rem." on mobile (column too narrow for more);
                   "Rem. DH" on desktop so the unit is explicit - this field
@@ -391,7 +395,7 @@ export function CartTable({
                 </span>
               ) : null}
             </TableCell>
-            {!isTransfer && (
+            {showDiscount && (
               <TableCell
                 className={cn(
                   COL.rem,

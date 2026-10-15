@@ -188,25 +188,29 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
               CANCELLABLE_STATUSES.has(invoice.status) &&
               invoice.origin === "COUNTER";
             const isDraft = invoice.status === "DRAFT";
-            const expanded = expandedInvoiceId === invoice.id;
+            // A credit note row: its own detail page, no sale detail to unfold.
+            const isCreditNote = invoice.kind === "CREDIT_NOTE";
+            const expanded = !isCreditNote && expandedInvoiceId === invoice.id;
             return (
               <React.Fragment key={invoice.id}>
                 <TableRow>
                 <TableCell className="px-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`${expanded ? "Replier" : "Déplier"} la commande ${invoice.displayNumber}`}
-                    aria-expanded={expanded}
-                    onClick={() => setExpandedInvoiceId(expanded ? null : invoice.id)}
-                  >
-                    {expanded ? (
-                      <ChevronDown aria-hidden="true" className="h-4 w-4" />
-                    ) : (
-                      <ChevronRight aria-hidden="true" className="h-4 w-4" />
-                    )}
-                  </Button>
+                  {isCreditNote ? null : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`${expanded ? "Replier" : "Déplier"} la commande ${invoice.displayNumber}`}
+                      aria-expanded={expanded}
+                      onClick={() => setExpandedInvoiceId(expanded ? null : invoice.id)}
+                    >
+                      {expanded ? (
+                        <ChevronDown aria-hidden="true" className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight aria-hidden="true" className="h-4 w-4" />
+                      )}
+                    </Button>
+                  )}
                 </TableCell>
                 {columns.map((column) => {
                   switch (column) {
@@ -285,9 +289,13 @@ export function InvoicesTable({ invoices, onSaleChanged, dailyLayout = false }: 
                               <MoreHorizontal className="h-4 w-4" />
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => setViewingInvoice(invoice)}>
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  isCreditNote ? router.push(`/avoirs/${invoice.id}`) : setViewingInvoice(invoice)
+                                }
+                              >
                                 <Eye aria-hidden="true" />
-                                Voir détails
+                                {isCreditNote ? "Voir l'avoir" : "Voir détails"}
                               </DropdownMenuItem>
                               {canEdit ? (
                                 <DropdownMenuItem

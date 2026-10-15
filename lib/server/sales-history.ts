@@ -4,6 +4,17 @@ import { roundMoney as roundMoneyDecimal } from "@/lib/money";
 import { canSeeDiscountIndicator } from "@/lib/sale-discount-indicator";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
+import {
+  creditNotePageWindow,
+  creditNotesBelongTo,
+  isRefundPaymentFilter,
+  mergeInvoiceAndCreditNoteRows,
+} from "@/lib/credit-note-list-rows";
+import {
+  countCreditNoteListItems,
+  loadCreditNoteListItems,
+  loadCursorSaleInstant,
+} from "@/lib/server/credit-note-list-rows";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { mapOrderRowToListItemDto, orderListSelect } from "@/lib/server/sale-list-row";
 import { buildOrdersWhere, type SalesOrdersPageParams } from "@/lib/sales-orders-where";
@@ -81,20 +92,45 @@ export async function getSalesOrdersPage(
   const organizationId = currentUser.organizationId;
   const pageSize = clampPageSize(params.pageSize);
   const where = buildOrdersWhere(organizationId, params);
+  // « Rembourser » filters the credit notes, not the sales: no invoice matches it.
+  const refundOnly = isRefundPaymentFilter(params.paymentMethod);
 
-  const [rows, totalCount] = await Promise.all([
-    prisma.sale.findMany({
-      where,
-      select: orderListSelect,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: pageSize + 1,
-      ...(params.cursor ? { cursor: { id: params.cursor }, skip: 1 } : {}),
-    }),
-    prisma.sale.count({ where }),
-  ]);
+  const [rows, totalCount] = refundOnly
+    ? [[], 0]
+    : await Promise.all([
+        prisma.sale.findMany({
+          where,
+          select: orderListSelect,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: pageSize + 1,
+          ...(params.cursor ? { cursor: { id: params.cursor }, skip: 1 } : {}),
+        }),
+        prisma.sale.count({ where }),
+      ]);
 
   const hasMore = rows.length > pageSize;
   const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
+
+  // Credit notes (opt-in): rows of the page's time window, never added to any total (see
+  // lib/credit-note-list-rows.ts). Same search / date filters as the invoices.
+  const creditFilters = { search: params.search, dateFrom: params.dateFrom, dateTo: params.dateTo };
+  const withCreditNotes = params.includeCreditNotes === true && creditNotesBelongTo(params);
+  const [creditNoteItems, creditNoteCount] = withCreditNotes
+    ? await Promise.all([
+        loadCreditNoteListItems(
+          organizationId,
+          creditFilters,
+          refundOnly
+            ? { upper: null, lower: null }
+            : creditNotePageWindow({
+                cursorSaleCreatedAt: params.cursor ? await loadCursorSaleInstant(organizationId, params.cursor) : null,
+                pageRows,
+                hasMore,
+              }),
+        ),
+        countCreditNoteListItems(organizationId, creditFilters),
+      ])
+    : [[], 0];
 
   // Refunds looked up only for the sale ids actually on this page - never
   // the whole organization's credit notes just to compute `net` for one
@@ -124,14 +160,17 @@ export async function getSalesOrdersPage(
   }
 
   return {
-    items: pageRows.map((row) =>
-      mapOrderRowToListItemDto(row, row.totalTTC.toNumber() - (refundsBySaleId.get(row.id) ?? 0), {
-        includeDiscount: canSeeDiscountIndicator(currentUser.role),
-      }),
+    items: mergeInvoiceAndCreditNoteRows(
+      pageRows.map((row) =>
+        mapOrderRowToListItemDto(row, row.totalTTC.toNumber() - (refundsBySaleId.get(row.id) ?? 0), {
+          includeDiscount: canSeeDiscountIndicator(currentUser.role),
+        }),
+      ),
+      creditNoteItems,
     ),
     nextCursor: hasMore ? pageRows[pageRows.length - 1].id : null,
     hasMore,
-    totalCount,
+    totalCount: totalCount + creditNoteCount,
   };
 }
 

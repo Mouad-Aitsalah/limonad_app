@@ -13,7 +13,7 @@ type ProductCardProps = {
   onAdd: (productId: string) => boolean | void;
   onAdded?: (product: PosProduct, sourceElement: HTMLElement) => void;
   /** Counter POS custom display (see ProductGrid). Omitted = the card exactly as before. */
-  display?: { showPhotos: boolean };
+  display?: { showPhotos: boolean; showStock?: boolean };
 };
 
 /** Custom display: ONLY the product name follows the size variable - price, stock and the Ajouter pill keep their own classes. */
@@ -28,6 +28,8 @@ export function ProductCard({ product, onAdd, onAdded, display }: ProductCardPro
   // Negative sales are allowed: stock <= 0 never disables "Ajouter", it is
   // only ever shown in red (see posStockTone).
   const tone = posStockTone(product.quantiteStock);
+  // Credit note screen: the stock level of a product is not what the operator needs there.
+  const showStock = display?.showStock !== false;
   const [justAdded, setJustAdded] = React.useState(false);
   const resetAddedRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -61,7 +63,7 @@ export function ProductCard({ product, onAdd, onAdded, display }: ProductCardPro
         "max-lg:transition-transform max-lg:duration-150 max-lg:hover:translate-y-0 max-lg:motion-safe:active:scale-95 max-lg:motion-reduce:transition-none",
       )}
     >
-      {tone.alert && (
+      {showStock && tone.alert && (
         <span className="absolute top-1.5 right-1.5 z-10 rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-semibold text-red-600 max-lg:top-1 max-lg:right-1 max-lg:px-1 max-lg:text-[8px]">
           {product.quantiteStock < 0 ? (
             <>
@@ -121,14 +123,16 @@ export function ProductCard({ product, onAdd, onAdded, display }: ProductCardPro
             <span className="text-[12px] font-semibold text-emerald-700 max-lg:block max-lg:text-[11px] max-lg:leading-none">
               {formatCurrency(product.prixVenteTTC)}
             </span>
-            <p
-              className={cn(
-                "text-[10px] leading-tight max-lg:text-[9px]",
-                tone.textClassName,
-              )}
-            >
-              {tone.label(product.quantiteStock)}
-            </p>
+            {showStock ? (
+              <p
+                className={cn(
+                  "text-[10px] leading-tight max-lg:text-[9px]",
+                  tone.textClassName,
+                )}
+              >
+                {tone.label(product.quantiteStock)}
+              </p>
+            ) : null}
           </div>
           <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.06em] text-emerald-700 max-lg:px-1.5 max-lg:py-px max-lg:text-[8px] max-lg:tracking-normal">
             <span className="max-lg:hidden">Ajouter</span>

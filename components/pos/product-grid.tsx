@@ -14,7 +14,7 @@ type ProductGridProps = {
    * size, photo height) and the photos can be hidden. Omitted (the driver POS)
    * = the layout below, unchanged.
    */
-  display?: { showPhotos: boolean };
+  display?: { showPhotos: boolean; showStock?: boolean };
 };
 
 /** Custom display: as many cards per row as fit the available width (min width variable, never wider than the container). */

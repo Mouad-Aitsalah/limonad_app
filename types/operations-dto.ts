@@ -806,6 +806,14 @@ export interface SaleHistoryListItemDto {
   hasDiscount?: boolean;
   /** Discount amount as the customer sees it (TTC), with hasDiscount. */
   discountTTC?: number;
+  /**
+   * Set ONLY on a credit note (« avoir ») shown in the invoice lists: `id` is then the credit note's id,
+   * `totalTTC` / `net` are NEGATIVE (money going back), `paymentMethod` is "REFUND" (« Rembourser ») and
+   * `status` is "CREDIT_NOTE" / "CREDIT_NOTE_REVERSED". Absent on every sale. Never counted in a total.
+   */
+  kind?: "CREDIT_NOTE";
+  /** With kind: whose credit note it is (the `customer` field then carries the customer OR the supplier). */
+  partyType?: "client" | "fournisseur";
 }
 
 export interface SaleHistoryOrdersPageDto {

@@ -28,10 +28,12 @@ type PosProductGridProps = {
   products: PosProduct[];
   onAdd: (productId: string) => boolean | void;
   onAdded?: (product: PosProduct, sourceElement: HTMLElement) => void;
+  /** Credit note screen: hide the stock badge / level on the cards (default: shown, as in the POS). */
+  showStock?: boolean;
 };
 
 /** The counter POS grid in "custom display" mode (the driver POS keeps the plain ProductGrid). */
-export function PosProductGrid({ products, onAdd, onAdded }: PosProductGridProps) {
+export function PosProductGrid({ products, onAdd, onAdded, showStock = true }: PosProductGridProps) {
   const { showPhotos } = usePosDisplaySettings();
-  return <ProductGrid products={products} onAdd={onAdd} onAdded={onAdded} display={{ showPhotos }} />;
+  return <ProductGrid products={products} onAdd={onAdd} onAdded={onAdded} display={{ showPhotos, showStock }} />;
 }

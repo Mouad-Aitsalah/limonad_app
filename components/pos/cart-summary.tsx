@@ -7,9 +7,11 @@ import type { PosOperationType } from "@/types/pos";
 type CartSummaryProps = {
   totals: CartTotals;
   operationType: PosOperationType;
+  /** Label of the total line (default « Total à payer »; the credit note screen says « Total à rembourser »). */
+  totalLabel?: string;
 };
 
-export function CartSummary({ totals, operationType }: CartSummaryProps) {
+export function CartSummary({ totals, operationType, totalLabel = "Total à payer" }: CartSummaryProps) {
   if (operationType === "transfer") {
     return (
       <div className="space-y-2 rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
@@ -63,7 +65,7 @@ export function CartSummary({ totals, operationType }: CartSummaryProps) {
         </div>
       ) : null}
       <div className="flex items-center justify-between">
-        <span className="text-base font-semibold text-foreground">Total à payer</span>
+        <span className="text-base font-semibold text-foreground">{totalLabel}</span>
         <span className="text-2xl font-bold text-emerald-700 tabular-nums">
           {formatCurrency(totals.netAPayer)}
         </span>

@@ -153,8 +153,14 @@ const refundModeFromPrisma: Record<PrismaCreditNoteRefundMethod, CreditNoteRefun
   BANK: "avoir_sur_compte",
 };
 
-/** Roles that create and validate desk credit notes (customer and supplier). */
-const DESK_CREDIT_NOTE_ROLES: UserRole[] = ["admin", "depot_manager", "cashier"];
+/**
+ * Roles that CREATE and VALIDATE desk credit notes (customer and supplier), and that read the
+ * invoices a customer can still return: the administrator and the cashier only. The depot
+ * manager and the driver can neither create nor validate one, whatever the screen shows.
+ */
+const DESK_CREDIT_NOTE_ROLES: UserRole[] = ["admin", "cashier"];
+/** Roles that READ credit notes (list, detail): unchanged - the depot manager still consults them. */
+const CREDIT_NOTE_VIEW_ROLES: UserRole[] = ["admin", "depot_manager", "cashier"];
 /** Roles that reverse (contre-passer) a validated credit note - unchanged. */
 const CREDIT_NOTE_REVERSAL_ROLES: UserRole[] = ["admin", "depot_manager"];
 
@@ -324,8 +330,8 @@ type PersistedLine = {
 
 export async function getCreditNotes(sessionUser?: CurrentUser): Promise<CreditNote[]> {
   const currentUser = sessionUser
-    ? asOrganizationUser(assertUserRole(sessionUser, ["admin", "depot_manager", "cashier"]))
-    : await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+    ? asOrganizationUser(assertUserRole(sessionUser, CREDIT_NOTE_VIEW_ROLES))
+    : await requireOrganizationUser(CREDIT_NOTE_VIEW_ROLES);
   const notes = await prisma.creditNote.findMany({
     where: { organizationId: currentUser.organizationId },
     include: creditNoteInclude,
@@ -340,8 +346,8 @@ export async function getCreditNoteById(
   sessionUser?: CurrentUser,
 ): Promise<CreditNote> {
   const currentUser = sessionUser
-    ? asOrganizationUser(assertUserRole(sessionUser, ["admin", "depot_manager", "cashier"]))
-    : await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+    ? asOrganizationUser(assertUserRole(sessionUser, CREDIT_NOTE_VIEW_ROLES))
+    : await requireOrganizationUser(CREDIT_NOTE_VIEW_ROLES);
   const note = await prisma.creditNote.findFirst({
     where: { id, organizationId: currentUser.organizationId },
     include: creditNoteInclude,
