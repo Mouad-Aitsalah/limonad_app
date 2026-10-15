@@ -10,6 +10,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMarkupRate, marginPartialNote } from "@/lib/daily-invoice-kpis";
+import { assignProductTintIndexes, PRODUCT_TINTS } from "@/lib/daily-sales-colors";
 import {
   DAILY_SALES_GROUPING_PATH,
   dailyFiltersToQuery,
@@ -135,6 +136,8 @@ export function SalesGroupingReport({ data, error = null }: { data: DailySalesGr
   const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(new Set());
   const { totals } = data;
   const showMargin = Boolean(data.margin);
+  // One stable colour per product, computed on the FULL list so searching never changes a colour.
+  const tintIndexes = React.useMemo(() => assignProductTintIndexes(data.products.map((product) => product.productId)), [data.products]);
   const products = search.trim()
     ? data.products.filter((product) => fold(`${product.name} ${product.reference}`).includes(fold(search.trim())))
     : data.products;
@@ -244,6 +247,7 @@ export function SalesGroupingReport({ data, error = null }: { data: DailySalesGr
                   <ProductRows
                     key={product.productId}
                     product={product}
+                    tintIndex={tintIndexes.get(product.productId) ?? 0}
                     showMargin={showMargin}
                     expanded={!collapsed.has(product.productId)}
                     onToggle={() => toggle(product.productId)}
@@ -278,19 +282,23 @@ export function SalesGroupingReport({ data, error = null }: { data: DailySalesGr
 
 function ProductRows({
   product,
+  tintIndex,
   showMargin,
   expanded,
   onToggle,
 }: {
   product: DailySalesProductDto;
+  tintIndex: number;
   showMargin: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const columns = showMargin ? 6 : 4;
+  const tint = PRODUCT_TINTS[tintIndex % PRODUCT_TINTS.length];
   return (
-    <tbody data-product={product.productId} className="border-b border-border last:border-b-0">
+    // The same soft background on the whole group; the text and the margin colours are untouched.
+    <tbody data-product={product.productId} data-tint={tintIndex} className={cn("border-b-2", tint.bg, tint.border)}>
       <tr>
         <td colSpan={columns} className="pt-3 pb-1">
           <button
@@ -316,7 +324,7 @@ function ProductRows({
             </tr>
           ))
         : null}
-      <tr data-product-total className="bg-muted/30 font-semibold">
+      <tr data-product-total className="font-semibold">
         <td className="py-2 pr-3 pl-6">
           Sous-total
           {showMargin && product.margin?.partial ? (
