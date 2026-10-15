@@ -1,21 +1,21 @@
 "use client";
 
 import * as React from "react";
-import { Capacitor } from "@capacitor/core";
+import { flushSync } from "react-dom";
 import { LoaderCircle, MessageCircle, Printer, Receipt } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useDriverSalePrint } from "@/components/driver-pos/use-driver-sale-print";
+import { ReceiptPrint } from "@/components/pos/receipt-print";
 import {
   InvoiceDetailDialog,
   type InvoiceDetailFetchOutcome,
 } from "@/components/ventes/invoice-detail-dialog";
-import { InvoicePrint } from "@/components/ventes/invoice-print";
 import { AuthContext } from "@/hooks/use-auth";
 import { useCompanyIdentity, type CompanyIdentity } from "@/hooks/use-company-identity";
-import { saleToPrintableInvoice, type PrintableInvoice } from "@/lib/invoice-print";
 import { getOfflineSales, type OfflineSaleWithLines, type SyncStatus } from "@/lib/offline/driver-pos";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { formatCurrency } from "@/lib/utils";
@@ -225,8 +225,11 @@ export function DriverSalesView({
   const [selectedSale, setSelectedSale] = React.useState<SaleHistoryListItemDto | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [sharingSaleId, setSharingSaleId] = React.useState<string | null>(null);
+  // « Imprimer »: the SAME ticket and the SAME mechanism as the driver POS (useDriverSalePrint): the
+  // <ReceiptPrint> below + window.print() in a browser; on Android the Bluetooth thermal printer, else the
+  // invoice PDF to the phone's print service.
+  const [ticketSale, setTicketSale] = React.useState<SaleDto | null>(null);
   const [printingSaleId, setPrintingSaleId] = React.useState<string | null>(null);
-  const [printDocument, setPrintDocument] = React.useState<PrintableInvoice | null>(null);
 
   // WhatsApp sharing only - SaleDto.customer never carries a phone (see
   // saleInclude in lib/server/sales-shared.ts), so it's resolved here from
@@ -281,6 +284,11 @@ export function DriverSalesView({
     };
   }, [organizationId, driverId, fetchOfflineSales]);
 
+  const driverPrint = useDriverSalePrint({
+    identity: resolvedIdentity,
+    customerPhone: ticketSale?.customer ? customerById.get(ticketSale.customer.id)?.phone ?? null : null,
+  });
+
   const rows = React.useMemo<DisplayRow[]>(() => {
     const serverRows: DisplayRow[] = sales.map((sale) => ({ kind: "server", sale }));
     const offlineRows: DisplayRow[] = offlineSales.map((sale) => ({ kind: "offline", sale }));
@@ -313,29 +321,14 @@ export function DriverSalesView({
     }
   }
 
-  // « Imprimer »: the driver's OWN sale, already in this list (loaded for this driver only by the server -
-  // nothing new is fetched, no other invoice becomes reachable). Browser (phone or PC): the A4 invoice of the
-  // admin pages, via window.print(). Android app: its WebView has no window.print(), so - exactly like the
-  // driver POS - the existing invoice PDF goes to the phone's print service (shareInvoicePdf "print").
+  // The driver's OWN sale, already in this list (loaded for this driver only by the server): nothing new is
+  // fetched and no other invoice becomes reachable.
   async function printInvoice(sale: SaleDto) {
     if (printingSaleId) return;
-    if (!Capacitor.isNativePlatform()) {
-      setPrintDocument(saleToPrintableInvoice(sale));
-      return;
-    }
+    flushSync(() => setTicketSale(sale));
     setPrintingSaleId(sale.id);
     try {
-      await shareInvoicePdf(
-        {
-          sale,
-          identity: resolvedIdentity,
-          customerPhone: sale.customer ? customerById.get(sale.customer.id)?.phone ?? null : null,
-        },
-        "print",
-      );
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      toast.error(error instanceof Error ? error.message : "Impossible de préparer la facture à imprimer.");
+      await driverPrint.printSale(sale, null);
     } finally {
       setPrintingSaleId(null);
     }
@@ -495,7 +488,8 @@ export function DriverSalesView({
         )}
       </div>
 
-      <InvoicePrint invoice={printDocument} identity={resolvedIdentity} onDone={() => setPrintDocument(null)} />
+      <ReceiptPrint sale={ticketSale} identity={resolvedIdentity} />
+      {driverPrint.printerPanel}
 
       <InvoiceDetailDialog
         listItem={selectedSale}

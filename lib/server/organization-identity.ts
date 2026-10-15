@@ -19,17 +19,12 @@ export type OrganizationIdentity = {
   name: string;
   tradeName: string | null;
   logoUrl: string | null;
-  /** Contact details of the organisation, printed on the A4 invoice when filled (lib/invoice-print.ts). */
-  address: string | null;
-  city: string | null;
-  phone: string | null;
-  email: string | null;
 };
 
 async function readIdentity(organizationId: string): Promise<OrganizationIdentity> {
   const organization = await prisma.organization.findUnique({
     where: { id: organizationId },
-    select: { id: true, name: true, tradeName: true, logoUrl: true, address: true, city: true, phone: true, email: true },
+    select: { id: true, name: true, tradeName: true, logoUrl: true },
   });
   if (!organization) {
     throw new AuthServiceError("Organisation introuvable.", 404);
@@ -75,7 +70,7 @@ export async function updateCurrentOrganizationLogo(
   const organization = await prisma.organization.update({
     where: { id: user.organizationId },
     data: { logoUrl: value },
-    select: { id: true, name: true, tradeName: true, logoUrl: true, address: true, city: true, phone: true, email: true },
+    select: { id: true, name: true, tradeName: true, logoUrl: true },
   });
 
   await prisma.auditLog.create({

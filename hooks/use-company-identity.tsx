@@ -6,11 +6,6 @@ export type CompanyIdentity = {
   name: string;
   tradeName: string | null;
   logoUrl: string | null;
-  /** Optional contact details (printed on the A4 invoice); absent from identities built by the mobile shell. */
-  address?: string | null;
-  city?: string | null;
-  phone?: string | null;
-  email?: string | null;
 };
 
 /**

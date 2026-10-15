@@ -53,6 +53,16 @@ const paymentLabels: Record<string, string> = {
   BANK_TRANSFER: "Virement",
   CREDIT: "Crédit",
   MIXED: "Paiement mixte",
+  // A credit note (« avoir ») printed from the invoice lists (lib/invoice-print.ts) - never a POS sale.
+  REFUND: "Rembourser",
+};
+
+// Documents printed from Factures journalières / Archives des factures that the POS itself never prints:
+// their status is stated as is instead of being derived from the amounts paid.
+const DOCUMENT_STATUS_LABELS: Record<string, string> = {
+  CANCELLED: "ANNULÉE",
+  CREDIT_NOTE: "Avoir",
+  CREDIT_NOTE_REVERSED: "Avoir annulé",
 };
 
 function formatReceiptDate(value: string) {
@@ -120,6 +130,12 @@ export function ReceiptPrint({
   // A sale still DRAFT has not been collected yet: the payment method on the
   // row is only a placeholder, so the ticket must not look like a paid one.
   const awaitingPayment = sale.status === "DRAFT";
+  const documentStatus = DOCUMENT_STATUS_LABELS[sale.status] ?? null;
+  const numberLabel = offlineReference
+    ? "Référence : "
+    : sale.status === "CREDIT_NOTE" || sale.status === "CREDIT_NOTE_REVERSED"
+      ? "N° Avoir : "
+      : "N° Facture : ";
 
   return (
     <section
@@ -154,7 +170,7 @@ export function ReceiptPrint({
           // the ticket width. Same data, same formats - only the layout differs.
           <div className="receipt-print-meta-centered">
             <div>
-              <span>{offlineReference ? "Référence : " : "N° Facture : "}</span>
+              <span>{numberLabel}</span>
               <strong>{offlineReference ?? sale.displayNumber}</strong>
             </div>
             <div>
@@ -175,7 +191,7 @@ export function ReceiptPrint({
         ) : (
           <div className="receipt-print-meta">
             <div>
-              <span>{offlineReference ? "Référence : " : "N° Facture : "}</span>
+              <span>{numberLabel}</span>
               <strong>{offlineReference ?? sale.displayNumber}</strong>
             </div>
             <div className="receipt-print-right">{formatReceiptDate(receiptDate)}</div>
@@ -286,11 +302,12 @@ export function ReceiptPrint({
               ) : null}
               <p>
                 Statut :{" "}
-                {sale.creditAmount <= 0
-                  ? "Réglée"
-                  : sale.paidAmount > 0
-                    ? "Partiellement réglée"
-                    : "À crédit"}
+                {documentStatus ??
+                  (sale.creditAmount <= 0
+                    ? "Réglée"
+                    : sale.paidAmount > 0
+                      ? "Partiellement réglée"
+                      : "À crédit")}
               </p>
             </>
           )}
