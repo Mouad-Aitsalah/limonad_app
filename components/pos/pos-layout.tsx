@@ -48,6 +48,7 @@ import { buildPreviewSale } from "@/lib/pos-preview-sale";
 import { computeDiscountedLineTotals, reconstructDiscountUnitAmount } from "@/lib/pos-discount";
 import { computeSaleTotals } from "@/lib/sale-rounding";
 import { purchasePriceTTC } from "@/lib/pos-margin";
+import { ZERO_TOTAL_SALE_MESSAGE } from "@/lib/pos-price-input";
 import {
   resolveQuantityPrice,
   sumQuantitiesByProduct,
@@ -118,8 +119,11 @@ export type CartLineComputed = {
   tvaAmount: number;
   totalTTC: number;
   transferValue: number;
-  /** Purchase price TTC (admin counter POS only). Unknown -> no below-cost alert. */
+  /** Purchase price TTC (admin / cashier / driver POS). Unknown -> no cost-based colour, no below-cost alert. */
   purchasePriceTTC?: number | null;
+  /** The product's usual price TTC for this line (catalogue / quantity price, or the historical price of an
+   *  invoice being edited) - the reference of the price colour, whatever price is typed. Unknown -> neutral. */
+  originalUnitPriceTTC?: number | null;
 };
 
 export type CartTotals = {
@@ -200,8 +204,9 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
   // An ACCEPTED online customer order opened from "Commandes en ligne" (see useCustomerOrderPos).
   const customerOrderParam = searchParams.get("customerOrder");
   const { currentUser } = useAuth();
-  // Manual per-line price editing in the cart is ADMIN ONLY (client + server).
-  const canEditLinePrice = currentUser?.role === "admin";
+  // Manual per-line price editing in the cart: admin and cashier here (the driver POS has its own
+  // screen); enforced again by createCounterSale, which refuses a custom price from any other role.
+  const canEditLinePrice = currentUser?.role === "admin" || currentUser?.role === "cashier";
 
   const [context, setContext] = React.useState(initialContext);
   // Phase 4: network state + local mirror. While ONLINE nothing below changes
@@ -489,6 +494,9 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
         totalTTC,
         transferValue: 0,
         purchasePriceTTC: purchasePriceTTC(product?.prixAchatHT, tauxTVA),
+        // The usual price of this line: what the catalogue (or the invoice being edited) gives, whatever
+        // price was typed over it - the reference of the price colour.
+        originalUnitPriceTTC: roundCurrency(catalogueHT * (1 + tauxTVA / 100)),
       };
     });
   }, [cart, openPendingSale, productById, editLineInfoById, context.quantityPricingEnabled]);
@@ -701,16 +709,16 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
     );
   }
 
-  // Manual per-line price. The operator types a TTC value; it is stored HT
-  // (independent of the catalogue). An empty / non-finite value clears the
-  // override and the line falls back to the catalogue price.
-  function updatePrice(productId: string, unitPriceTTC: number | null) {
+  // Manual per-line price. The operator types a TTC value (PriceInput: an empty field is 0 DH, a zero is
+  // a real price); it is stored HT, independent of the catalogue. The line NEVER falls back to the
+  // catalogue price because the field is empty or zero - the override is only ever replaced by another
+  // typed price. A value that is not a usable price at all (NaN, negative) is ignored, the line keeps
+  // its current price.
+  function updatePrice(productId: string, unitPriceTTC: number) {
+    if (!Number.isFinite(unitPriceTTC) || unitPriceTTC < 0) return;
     setCart((prev) =>
       prev.map((line) => {
         if (line.productId !== productId) return line;
-        const clear =
-          unitPriceTTC == null || !Number.isFinite(unitPriceTTC) || unitPriceTTC < 0;
-        if (clear) return { ...line, priceOverrideHT: undefined };
         const taxRate =
           productById.get(productId)?.tauxTVA ??
           editLineInfoById.get(productId)?.tauxTVA ??
@@ -1357,6 +1365,11 @@ export function PosLayout({ initialContext, offlineShell = false }: PosLayoutPro
     });
     if (!built.ok) {
       toast.error(built.message);
+      return false;
+    }
+    // An invoice at 0 DH is refused by the server (accounting cannot post it): saved here it would never synchronise.
+    if (!(built.input.totals.totalTTC > 0)) {
+      toast.error(ZERO_TOTAL_SALE_MESSAGE);
       return false;
     }
     if (paidAmount !== undefined && paidAmount < built.input.totals.totalTTC) {

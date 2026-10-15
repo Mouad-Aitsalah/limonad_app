@@ -23,6 +23,7 @@ import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { readQuantityPricingEnabled } from "@/lib/server/organization-settings";
 import {
+  assertSaleHasAmount,
   createMixedPayments,
   mapSaleToDto,
   nextMovementNumber,
@@ -95,7 +96,8 @@ const reviseSchema = z.object({
         // Optional per-line manual unit price HT from the POS edit cart.
         // Absent = keep the line's historical price (existing product) or the
         // catalogue price (product added during the edit).
-        unitPriceHT: z.coerce.number().positive().max(MONEY_RANGE_MAX_NUMBER).optional(),
+        // 0 is a valid price (a free line); negative is refused. Admin only (reviseSale).
+        unitPriceHT: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
@@ -533,6 +535,7 @@ export async function reviseSale(saleId: string, input: unknown): Promise<SaleDt
         assertMoneyRange(subtotalHT, "subtotalHT");
         assertMoneyRange(roundingAmount, "roundingAmount");
         assertMoneyRange(totalTTC, "totalTTC");
+        assertSaleHasAmount(totalTTC);
 
         const isDraft = sale.status === "DRAFT";
         const stampDecimal = await computeCashSaleStampAmount(tx, {

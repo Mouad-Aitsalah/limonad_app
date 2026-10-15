@@ -30,6 +30,7 @@ import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { readQuantityPricingEnabled } from "@/lib/server/organization-settings";
 import { toLightweightProductImageUrl, toLightweightSupplierLogoUrl } from "@/lib/server/product-image-url";
 import {
+  assertSaleHasAmount,
   createMixedPayments,
   mapSaleToDto,
   nextInvoiceNumber,
@@ -100,10 +101,11 @@ const counterSaleSchema = z.object({
         // lib/pos-discount.ts. Re-clamped server-side to the unit's own TTC
         // price regardless of what the client sends.
         discountUnitAmount: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
-        // Optional per-line manual unit price HT (POS cart price edit).
-        // Honoured ONLY for an admin session - see createCounterSale.
+        // Optional per-line manual unit price HT (POS cart price edit). 0 is a
+        // valid price (a free line); negative / non-numeric is refused.
+        // Honoured ONLY for an admin or cashier session - see createCounterSale.
         // Absent = the product's catalogue price is used (the default source).
-        unitPriceHT: z.coerce.number().positive().max(MONEY_RANGE_MAX_NUMBER).optional(),
+        unitPriceHT: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
@@ -252,8 +254,9 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
         semiWholesalePrice: true,
         semiWholesaleMinQty: true,
         wholesaleMinQty: true,
-        // Admin-only below-cost alert in the cart (see purchasePriceHT below).
-        purchasePrice: sessionUser.role === "admin",
+        // Cost-based price colour in the cart (see purchasePriceHT below): only the
+        // roles that may type a price get the cost (lib/pos-price-permissions.ts).
+        purchasePrice: sessionUser.role === "admin" || sessionUser.role === "cashier",
         taxRate: true,
         defaultSupplierId: true,
         defaultSupplier: { select: { name: true, logoUrl: true, updatedAt: true } },
@@ -320,7 +323,9 @@ export async function getCounterPosContext(): Promise<CounterPosContextDto> {
       salePriceTTC: computePriceTTC(salePriceHT, taxRate),
       // Display of the cart price only - createCounterSale re-reads the tiers.
       ...(quantityTiers ? { quantityTiers } : {}),
-      ...(sessionUser.role === "admin" && "purchasePrice" in product && product.purchasePrice
+      ...((sessionUser.role === "admin" || sessionUser.role === "cashier") &&
+      "purchasePrice" in product &&
+      product.purchasePrice
         ? { purchasePriceHT: product.purchasePrice.toNumber() }
         : {}),
       taxRate,
@@ -513,9 +518,10 @@ export async function createCounterSale(
       const quantityByProduct = sumQuantitiesByProduct(lines);
 
       // A manual per-line price from the POS cart is honoured only for an
-      // admin session (and then wins over the quantity price); every other
-      // role always sells at the catalogue / quantity price.
-      const canOverrideLinePrice = sessionUser.role === "admin";
+      // admin or cashier session (and then wins over the quantity price);
+      // every other role (depot manager) always sells at the catalogue /
+      // quantity price, whatever the request carries.
+      const canOverrideLinePrice = sessionUser.role === "admin" || sessionUser.role === "cashier";
       const computedLines = lines.map((line) => {
         const product = products.find((item) => item.id === line.productId);
         if (!product) throw new OperationsServiceError("Produit introuvable.", 422);
@@ -584,6 +590,7 @@ export async function createCounterSale(
       assertMoneyRange(totalBeforeRounding, "totalBeforeRounding");
       assertMoneyRange(roundingAmount, "roundingAmount");
       assertMoneyRange(totalTTC, "totalTTC");
+      assertSaleHasAmount(totalTTC);
       const stampAmount = await computeCashSaleStampAmount(tx, {
         organizationId: sessionUser.organizationId,
         totalTTC,

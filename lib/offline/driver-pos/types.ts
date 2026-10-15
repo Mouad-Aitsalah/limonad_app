@@ -70,6 +70,8 @@ export type CachedProduct = {
    *  every online context fetch (see bootstrap.ts). Null only for a cache
    *  written before this column existed - see schema.ts's v3 migration. */
   priceToken: string | null;
+  /** Product cost (HT), cached for the price colour only (schema.ts v8). Null = unknown -> neutral colour. */
+  purchasePriceHT: number | null;
   syncedAt: string;
 };
 
@@ -150,6 +152,12 @@ export type OfflineSaleLineInput = {
    * server still accepts it) or if the cached product itself had no token.
    */
   priceToken: string | null;
+  /**
+   * The unit price TTC the driver typed for this line (0 is a price), when he typed one - schema.ts v8.
+   * `unitPriceSnapshot` stays the catalogue price shown (what `priceToken` signs); the line's totals are
+   * computed from this price when present. Absent / null = sold at `unitPriceSnapshot`.
+   */
+  customUnitPriceTTC?: number | null;
 };
 
 export type OfflineSaleInput = {

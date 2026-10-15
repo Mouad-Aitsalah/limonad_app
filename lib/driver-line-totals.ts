@@ -55,6 +55,16 @@ export type DriverLineTotals = {
   totalTTC: number;
 };
 
+/**
+ * The unit price of a line the driver typed himself (TTC, 0 allowed): the TTC price IS the typed one
+ * (rounded to the cent), the HT price is derived from it. Shared by the driver cart and
+ * createDriverSale, so the price shown, sent and stored are the same two numbers.
+ */
+export function priceFromCustomTTC(customUnitPriceTTC: number, taxRate: number) {
+  const unitPriceTTC = roundMoney(customUnitPriceTTC);
+  return { unitPriceTTC, unitPriceHT: roundMoney(unitPriceTTC / (1 + taxRate / 100)) };
+}
+
 export function computeDriverLineTotals({
   unitPriceHT,
   unitPriceTTC,

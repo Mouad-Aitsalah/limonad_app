@@ -83,7 +83,9 @@ import {
   type SyncBatchResult,
 } from "@/lib/offline/driver-pos";
 import { OfflineSalesDialog, type OfflineSaleRowData } from "@/components/driver-pos/offline-sales-dialog";
-import { computeDriverLineTotals } from "@/lib/driver-line-totals";
+import { computeDriverLineTotals, priceFromCustomTTC } from "@/lib/driver-line-totals";
+import { purchasePriceTTC } from "@/lib/pos-margin";
+import { ZERO_TOTAL_SALE_MESSAGE } from "@/lib/pos-price-input";
 import { roundMoney } from "@/lib/money";
 import { shareInvoicePdf } from "@/lib/share-invoice";
 import { ThermalPrinterPanel } from "@/components/driver-pos/thermal-printer-panel";
@@ -105,6 +107,12 @@ export type CartLine = {
   productId: string;
   quantity: number;
   discountRate: number;
+  /**
+   * The unit price TTC the driver typed for THIS line (0 is a price). Absent = the catalogue price. It is
+   * part of the line sent to POST /api/driver/sales as is (`lines: cart`), re-validated by the server, and
+   * never touches the product's catalogue price or cost.
+   */
+  customUnitPriceTTC?: number;
 };
 
 // Phase 2 - "9. VALIDATION / ENCAISSEMENT OFFLINE". Still used, unchanged,
@@ -914,16 +922,22 @@ export function DriverPosView({
   const cartLinesForTable = React.useMemo<CartLineComputed[]>(
     () =>
       cartRows.map((row) => {
-        const baseHT = row.product.salePriceHT * row.quantity;
-        const discountUnitAmount = discountRateToUnitAmount(row.discountRate, row.product.salePriceTTC);
+        const price = appliedPrice(row.product, row);
+        const baseHT = price.unitPriceHT * row.quantity;
+        const discountUnitAmount = discountRateToUnitAmount(row.discountRate, price.unitPriceTTC);
         return {
           productId: row.productId,
           designation: row.product.name,
           reference: row.product.reference,
           quantity: row.quantity,
           discountUnitAmount,
-          unitPriceHT: row.product.salePriceHT,
-          unitPriceTTC: row.product.salePriceTTC,
+          unitPriceHT: price.unitPriceHT,
+          unitPriceTTC: price.unitPriceTTC,
+          priceOverridden: price.custom,
+          // Reference of the price colour: the catalogue price, whatever was typed over it.
+          originalUnitPriceTTC: row.product.salePriceTTC,
+          // The cost (when the context carried it): unknown -> neutral colour, never an invented cost.
+          purchasePriceTTC: purchasePriceTTC(row.product.purchasePriceHT, row.product.taxRate),
           tauxTVA: row.product.taxRate,
           baseHT,
           discountAmount: round(baseHT - row.totals.totalHT),
@@ -943,7 +957,7 @@ export function DriverPosView({
   // the % the cart line/server actually store (see discountUnitAmountToRate).
   function updateDiscount(productId: string, discountUnitAmount: number) {
     const row = cartRows.find((line) => line.productId === productId);
-    const unitPriceTTC = row?.product.salePriceTTC ?? 0;
+    const unitPriceTTC = row ? appliedPrice(row.product, row).unitPriceTTC : 0;
     const safeAmount = Number.isFinite(discountUnitAmount) ? Math.max(0, discountUnitAmount) : 0;
     if (safeAmount > unitPriceTTC) {
       toast.error("La remise ne peut pas dépasser le prix unitaire.");
@@ -951,6 +965,19 @@ export function DriverPosView({
     const discountRate = discountUnitAmountToRate(safeAmount, unitPriceTTC);
     setCart((current) =>
       current.map((line) => (line.productId === productId ? { ...line, discountRate } : line)),
+    );
+  }
+
+  // Custom unit price of one line (the "Prix TTC" field of the shared CartTable). The field gives a number
+  // at every keystroke (an empty field is 0 DH): it is stored on the line as is - 0 stays 0, an empty
+  // field never brings the catalogue price back. Only this line changes; quantity, discount and the other
+  // lines keep their values. A value that is not a usable price is ignored.
+  function updatePrice(productId: string, unitPriceTTC: number) {
+    if (!Number.isFinite(unitPriceTTC) || unitPriceTTC < 0) return;
+    setCart((current) =>
+      current.map((line) =>
+        line.productId === productId ? { ...line, customUnitPriceTTC: round(unitPriceTTC) } : line,
+      ),
     );
   }
 
@@ -978,7 +1005,7 @@ export function DriverPosView({
     return {
       designation: row.product.name,
       quantity: row.quantity,
-      priceTTC: row.product.salePriceTTC,
+      priceTTC: appliedPrice(row.product, row).unitPriceTTC,
       imageUrl: row.product.imageUrl,
     };
   }, [cartRows, lastAddedProductId]);
@@ -1211,6 +1238,11 @@ export function DriverPosView({
   // as the driver had them (see "11. EN CAS D'ÉCHEC SQLITE").
   async function validateOfflineCashSale() {
     if (cartRows.length === 0) return;
+    // An invoice at 0 DH is refused by the server (accounting cannot post it): saved here it would never synchronise.
+    if (!(totals.ttc > 0)) {
+      toast.error(ZERO_TOTAL_SALE_MESSAGE);
+      return;
+    }
     const organizationId = currentUser?.organizationId ?? null;
     const driverId = context.driver.id;
     if (!organizationId || !driverId) {
@@ -1260,6 +1292,12 @@ export function DriverPosView({
         // only if this product's cache entry itself has no token yet (a
         // cache written before this phase shipped).
         priceToken: row.product.priceToken ?? null,
+        // unitPriceSnapshot + priceToken above stay the signed CATALOGUE price; the price the driver
+        // typed (0 included) travels apart, so the server still verifies the token as before and then
+        // prices the line at the typed price.
+        ...(row.customUnitPriceTTC !== undefined
+          ? { customUnitPriceTTC: appliedPrice(row.product, row).unitPriceTTC }
+          : {}),
       })),
     };
 
@@ -1324,11 +1362,11 @@ export function DriverPosView({
           productReference: row.product.reference,
           productName: row.product.name,
           quantity: row.quantity,
-          unitPriceHT: row.product.salePriceHT,
+          unitPriceHT: appliedPrice(row.product, row).unitPriceHT,
           // FIX DRIVER POS "REM." FIELD - buildPreviewSale expects a DH
           // amount (lib/pos-discount.ts), not the % this cart line actually
           // stores - see discountRateToUnitAmount's own doc comment.
-          discountUnitAmount: discountRateToUnitAmount(row.discountRate, row.product.salePriceTTC),
+          discountUnitAmount: discountRateToUnitAmount(row.discountRate, appliedPrice(row.product, row).unitPriceTTC),
           taxRate: row.product.taxRate,
         })),
       });
@@ -1562,11 +1600,11 @@ export function DriverPosView({
         productReference: row.product.reference,
         productName: row.product.name,
         quantity: row.quantity,
-        unitPriceHT: row.product.salePriceHT,
+        unitPriceHT: appliedPrice(row.product, row).unitPriceHT,
         // FIX DRIVER POS "REM." FIELD - buildPreviewSale expects a DH
         // amount (lib/pos-discount.ts), not the % this cart line actually
         // stores - see discountRateToUnitAmount's own doc comment.
-        discountUnitAmount: discountRateToUnitAmount(row.discountRate, row.product.salePriceTTC),
+        discountUnitAmount: discountRateToUnitAmount(row.discountRate, appliedPrice(row.product, row).unitPriceTTC),
         taxRate: row.product.taxRate,
       })),
     });
@@ -1923,6 +1961,8 @@ export function DriverPosView({
                   onDecrement={decrementQuantity}
                   onQuantityChange={updateQuantity}
                   onDiscountChange={updateDiscount}
+                  canEditPrice
+                  onPriceChange={updatePrice}
                   onRemove={removeProduct}
                   phoneStyle
                 />
@@ -2256,6 +2296,7 @@ function findOfflineSalePayloadIssue(input: {
     totalHT: number;
     taxAmount: number;
     totalTTC: number;
+    customUnitPriceTTC?: number | null;
   }>;
 }): string | null {
   if (!input.organizationId) return "organizationId manquant";
@@ -2285,6 +2326,10 @@ function findOfflineSalePayloadIssue(input: {
       ["totalHT", line.totalHT],
       ["taxAmount", line.taxAmount],
       ["totalTTC", line.totalTTC],
+      // Optional: only a line with a typed price has one (0 is valid, NaN / negative is not).
+      ...(line.customUnitPriceTTC == null
+        ? []
+        : ([["customUnitPriceTTC", line.customUnitPriceTTC]] as Array<[string, number]>)),
     ];
     for (const [name, value] of lineNumericFields) {
       if (!Number.isFinite(value)) return `ligne ${line.productId}: ${name} invalide (${String(value)})`;
@@ -2296,10 +2341,23 @@ function findOfflineSalePayloadIssue(input: {
 // Same shared formula as the server (lib/driver-line-totals.ts): priced from
 // the TTC unit price the driver sees, so the cart total equals what the API
 // records (62.50 x 2 = 125.00).
+/**
+ * The unit price applied on a cart line: the price the driver typed (0 included - `!== undefined`, never a
+ * truthiness test) or, without one, the catalogue price. The ONE place the cart, the ticket, the offline
+ * sale and the discount conversion read the price from.
+ */
+function appliedPrice(product: DriverPosProductDto, line: Pick<CartLine, "customUnitPriceTTC">) {
+  if (line.customUnitPriceTTC === undefined) {
+    return { unitPriceHT: product.salePriceHT, unitPriceTTC: product.salePriceTTC, custom: false };
+  }
+  return { ...priceFromCustomTTC(line.customUnitPriceTTC, product.taxRate), custom: true };
+}
+
 function computeLine(product: DriverPosProductDto, line: CartLine) {
+  const price = appliedPrice(product, line);
   const { discountAmount, totalHT, taxAmount, totalTTC } = computeDriverLineTotals({
-    unitPriceHT: product.salePriceHT,
-    unitPriceTTC: product.salePriceTTC,
+    unitPriceHT: price.unitPriceHT,
+    unitPriceTTC: price.unitPriceTTC,
     taxRate: product.taxRate,
     quantity: line.quantity,
     discountRate: line.discountRate,

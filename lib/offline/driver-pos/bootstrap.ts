@@ -98,6 +98,8 @@ export async function hydrateDriverOfflineCache(
         // a future caller of hydrateDriverOfflineCache that isn't the
         // driver POS - see DriverPosProductDto's own doc comment).
         priceToken: product.priceToken ?? null,
+        // The cost, cached for the price colour only (null = unknown -> neutral colour).
+        purchasePriceHT: product.purchasePriceHT ?? null,
       })),
     );
     console.log(

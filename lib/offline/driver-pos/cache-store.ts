@@ -29,8 +29,8 @@ export async function saveCachedProducts(
         `INSERT INTO cached_products (
            id, organizationId, driverId, reference, barcode, name, imageUrl,
            salePriceHT, salePriceTTC, taxRate, availableQuantity,
-           supplierId, supplierName, priceToken, syncedAt
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           supplierId, supplierName, priceToken, purchasePriceHT, syncedAt
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           product.id,
           scope.organizationId,
@@ -46,6 +46,7 @@ export async function saveCachedProducts(
           product.supplierId,
           product.supplierName,
           product.priceToken,
+          product.purchasePriceHT,
           syncedAt,
         ],
         false,
@@ -249,6 +250,7 @@ function mapProductRow(row: Record<string, unknown>): CachedProduct {
     supplierId: (row.supplierId as string | null) ?? null,
     supplierName: (row.supplierName as string | null) ?? null,
     priceToken: (row.priceToken as string | null) ?? null,
+    purchasePriceHT: row.purchasePriceHT == null ? null : Number(row.purchasePriceHT),
     syncedAt: String(row.syncedAt),
   };
 }

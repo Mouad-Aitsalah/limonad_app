@@ -30,11 +30,13 @@ import type { OfflineSaleLineInput, OfflineSaleWithLines } from "./types";
 
 /**
  * The server rebuilds the unit HT from the signed TTC price
- * (roundMoney(TTC / (1 + tax))). Since TTC is the HT price rounded to the
- * cent, that always recovers the catalogue HT exactly (the rounding error is
- * under half a cent before division), so a line with no discount has
- * totalHT equal to the undiscounted gross - only float noise is tolerated.
- * (Measured on 20 000 random price/tax/quantity combinations: 0 differences.)
+ * (roundMoney(TTC / (1 + tax))), and prices the line TTC-first
+ * (lib/driver-line-totals.ts). A line with no discount therefore has stored
+ * totals equal to those two figures - only float noise is tolerated. The
+ * older comparison with unit HT x quantity alone is kept as a second way to
+ * recognise an undiscounted line, but it is NOT sufficient by itself: it
+ * differs by a cent from the TTC-first total for some price/quantity pairs
+ * (see resolveLineDiscountRate).
  */
 const NO_DISCOUNT_EPSILON = 0.005;
 /** A reconstructed percentage must reproduce the stored totals to the cent. */
@@ -67,14 +69,28 @@ export function resolveLineDiscountRate(line: OfflineSaleLineInput): DiscountRes
 
   // discountSnapshot is 0: either a genuinely undiscounted line, or a legacy
   // discounted one. Compare the stored HT total with the undiscounted gross.
-  const undiscounted = serverLineTotals(line.unitPriceSnapshot, line.taxRateSnapshot, line.quantity, 0);
+  // The gross is priced at the price actually applied: the custom price when the
+  // driver typed one (0 included - `??`, never `||`), else the catalogue price.
+  const appliedUnitPriceTTC = line.customUnitPriceTTC ?? line.unitPriceSnapshot;
+  const undiscounted = serverLineTotals(appliedUnitPriceTTC, line.taxRateSnapshot, line.quantity, 0);
   if (undiscounted.grossHT <= 0) return { ok: true, discountRate: 0 };
+  // The cart prices a line TTC-first (lib/driver-line-totals.ts): totalTTC = unit TTC x quantity,
+  // totalHT = roundMoney(totalTTC / (1 + VAT)). That is NOT unit HT x quantity: for some prices the two
+  // differ by one cent (20 DH x 2: 33.33 against 16.67 x 2 = 33.34). A line whose stored totals are exactly
+  // what the cart computes with no discount is an undiscounted line - checking it against the HT gross alone
+  // wrongly sent it to the reconstruction below, which then refused the sale.
+  if (
+    Math.abs(line.totalTTC - undiscounted.totalTTC) <= NO_DISCOUNT_EPSILON &&
+    Math.abs(line.totalHT - undiscounted.totalHT) <= NO_DISCOUNT_EPSILON
+  ) {
+    return { ok: true, discountRate: 0 };
+  }
   if (Math.abs(line.totalHT - undiscounted.grossHT) <= NO_DISCOUNT_EPSILON) {
     return { ok: true, discountRate: 0 };
   }
 
   const rate = roundMoney(Math.min(100, Math.max(0, (1 - line.totalHT / undiscounted.grossHT) * 100)));
-  const check = serverLineTotals(line.unitPriceSnapshot, line.taxRateSnapshot, line.quantity, rate);
+  const check = serverLineTotals(appliedUnitPriceTTC, line.taxRateSnapshot, line.quantity, rate);
   if (
     Math.abs(check.totalHT - line.totalHT) <= VERIFY_TOLERANCE &&
     Math.abs(check.totalTTC - line.totalTTC) <= VERIFY_TOLERANCE
@@ -99,6 +115,8 @@ export type SyncSaleBody = {
     unitPriceTTC: number;
     priceToken: string | null;
     discountRate: number;
+    /** Only when the driver typed a price for the line (0 allowed); absent = catalogue price. */
+    customUnitPriceTTC?: number;
   }>;
 };
 
@@ -115,6 +133,7 @@ export function buildSyncPayload(sale: OfflineSaleWithLines): SyncPayloadResult 
       unitPriceTTC: line.unitPriceSnapshot,
       priceToken: line.priceToken,
       discountRate: discount.discountRate,
+      ...(line.customUnitPriceTTC != null ? { customUnitPriceTTC: line.customUnitPriceTTC } : {}),
     });
   }
   return {

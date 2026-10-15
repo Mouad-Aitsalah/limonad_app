@@ -678,10 +678,11 @@ export interface DriverPosProductDto {
    *  which issues or needs a token - only getDriverPosContext (online) and
    *  the offline cache reconstruction (pos-context.ts) ever set it. */
   priceToken?: string;
-  /** Product.purchasePrice (HT). ADMIN-ONLY and COUNTER-POS-ONLY: set by
-   *  getCounterPosContext / searchPosProducts for the admin role so the cart
-   *  can flag a below-cost unit price. Never sent to cashiers or drivers, and
-   *  never used for pricing or totals. Absent = unknown -> no alert. */
+  /** Product.purchasePrice (HT). Sent only to the roles that may type a price on a
+   *  sale line (admin, cashier, driver - lib/pos-price-permissions.ts) by
+   *  getCounterPosContext / getDriverPosContext / searchPosProducts, so the cart
+   *  can colour that price against the cost. Never sent to the depot manager, and
+   *  never used for pricing or totals. Absent = unknown -> neutral colour. */
   purchasePriceHT?: number;
   /** COUNTER-POS-ONLY: the product's quantity pricing tiers (HT), present only
    *  when all four are set and valid (lib/quantity-pricing.ts). Used to show the
@@ -943,6 +944,8 @@ export type DriverSaleInput = {
     productId: string;
     quantity: number;
     discountRate?: number;
+    /** Driver POS only: the unit price TTC typed for this line (0 allowed). Absent = catalogue price. */
+    customUnitPriceTTC?: number;
   }[];
 };
 

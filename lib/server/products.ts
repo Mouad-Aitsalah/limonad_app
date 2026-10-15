@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { MONEY_RANGE_MAX_NUMBER } from "@/lib/money";
 import { computePriceTTC } from "@/lib/product-pricing";
+import { canEditPosLinePrice } from "@/lib/pos-price-permissions";
 import { quantityTierValuesFromRow, readCompleteQuantityTiers } from "@/lib/quantity-pricing";
 import { prisma } from "@/lib/prisma";
 import { assertMoneyRange, OperationsServiceError } from "@/lib/server/depots";
@@ -506,11 +507,13 @@ export async function getProductPickerPreload(params?: {
  * The POS product shape (DriverPosProductDto) for a set of product rows, with
  * the available stock at `locationId` (0 when there is no stock row). Shared by
  * searchPosProducts and getPosProductsByIds so both return exactly the same
- * fields - the purchase price is only ever selected for an admin session.
+ * fields - the purchase price is only ever selected for the roles that may type
+ * a price on a sale line (lib/pos-price-permissions.ts): the cart needs it to
+ * colour that price.
  */
 function posProductLoader(
   organizationId: string,
-  isAdmin: boolean,
+  withPurchasePrice: boolean,
   locationId: string,
   /** Counter POS roles only: the driver POS always sells at the wholesale price. */
   withQuantityTiers: boolean,
@@ -527,9 +530,9 @@ function posProductLoader(
     semiWholesalePrice: true,
     semiWholesaleMinQty: true,
     wholesaleMinQty: true,
-    // Admin-only below-cost alert in the counter POS cart; other roles never
-    // select the purchase price.
-    purchasePrice: isAdmin,
+    // Cost-based price colour in the POS cart; roles that cannot type a price
+    // (depot manager) never select the purchase price.
+    purchasePrice: withPurchasePrice,
     taxRate: true,
     defaultSupplierId: true,
     defaultSupplier: { select: { name: true, logoUrl: true } },
@@ -580,7 +583,7 @@ function posProductLoader(
         salePriceHT,
         salePriceTTC: computePriceTTC(salePriceHT, taxRate),
         ...(quantityTiers ? { quantityTiers } : {}),
-        ...(isAdmin && product.purchasePrice
+        ...(withPurchasePrice && product.purchasePrice
           ? { purchasePriceHT: product.purchasePrice.toNumber() }
           : {}),
         taxRate,
@@ -633,7 +636,7 @@ export async function searchPosProducts(params: {
 
   const { productSelect, withLevels } = posProductLoader(
     organizationId,
-    currentUser.role === "admin",
+    canEditPosLinePrice(currentUser.role),
     params.locationId,
     currentUser.role !== "driver",
   );
@@ -700,7 +703,7 @@ export async function getPosProductsByIds(params: {
 
   const { productSelect, withLevels } = posProductLoader(
     currentUser.organizationId,
-    currentUser.role === "admin",
+    canEditPosLinePrice(currentUser.role),
     params.locationId,
     currentUser.role !== "driver",
   );

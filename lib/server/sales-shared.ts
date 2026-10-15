@@ -127,6 +127,22 @@ export function normalizeSaleLines<T extends RawSaleLineInput>(lines: T[]) {
 }
 
 /**
+ * A sale whose final total is 0 DH (every line at 0 DH, or a 100 % discount) cannot be posted: the
+ * accounting engine refuses an invoice entry whose lines are all zero, with a message that means nothing
+ * to the operator. It is refused up front, in the same transaction and before anything is written (no
+ * stock movement, no number), with a message that says what to do. A free LINE inside a sale that has a
+ * total is fine - only the whole invoice at 0 DH is refused.
+ */
+export function assertSaleHasAmount(totalTTC: number) {
+  if (!(totalTTC > 0)) {
+    throw new OperationsServiceError(
+      "Le total de la vente doit etre superieur a 0 DH. Ajoutez un article payant ou corrigez les prix.",
+      422,
+    );
+  }
+}
+
+/**
  * LEGACY MIXED handling: "some cash now, the rest on credit" - a single
  * paidAmount with no record of which instrument it was paid in. Kept
  * exactly as-is for the driver POS (components/driver-pos), which still

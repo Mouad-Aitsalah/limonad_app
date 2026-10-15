@@ -50,8 +50,8 @@ export const counterSaleSyncSchema = z.object({
         productId: z.string().trim().min(1),
         quantity: z.coerce.number().int().positive().max(1_000_000),
         discountUnitAmount: money,
-        /** Present only for a manual price (honoured for an admin only). */
-        unitPriceHT: z.coerce.number().positive().max(MONEY_RANGE_MAX_NUMBER).optional(),
+        /** Present only for a manual price (honoured for an admin or a cashier only; 0 is a valid price). */
+        unitPriceHT: z.coerce.number().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
       }),
     )
     .min(1)

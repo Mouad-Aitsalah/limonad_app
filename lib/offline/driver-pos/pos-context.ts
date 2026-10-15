@@ -115,6 +115,7 @@ export async function loadCachedDriverPosContext(params: {
     // the signing secret) - null only for a cache written before this
     // column existed.
     priceToken: product.priceToken ?? undefined,
+    ...(product.purchasePriceHT != null ? { purchasePriceHT: product.purchasePriceHT } : {}),
   }));
 
   const dtoCustomers: CustomerDto[] = customers.map((customer) => ({

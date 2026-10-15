@@ -91,9 +91,9 @@ test("amounts keep their value and format (discounted total of a 120-unit line)"
 
 // ---- POS layout (admin + cashier) ------------------------------------------------------------
 
-test("the permissions of the counter POS are untouched", () => {
+test("the counter POS offers the price field to the admin and the cashier only (the depot manager keeps a plain price)", () => {
   const layout = read("./pos-layout.tsx");
-  assert.match(layout, /const canEditLinePrice = currentUser\?\.role === "admin";/);
+  assert.match(layout, /const canEditLinePrice = currentUser\?\.role === "admin" \|\| currentUser\?\.role === "cashier";/);
   assert.match(layout, /canEditPrice=\{canEditLinePrice\}/);
 });
 

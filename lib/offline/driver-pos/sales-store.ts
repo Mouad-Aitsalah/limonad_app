@@ -72,7 +72,7 @@ const EXPECTED_OFFLINE_SCHEMA_COLUMNS: Record<string, string[]> = {
   offline_sale_lines: [
     "id", "offlineSaleId", "productId", "productNameSnapshot", "quantity",
     "unitPriceSnapshot", "taxRateSnapshot", "discountSnapshot", "totalHT", "taxAmount", "totalTTC",
-    "priceToken",
+    "priceToken", "customUnitPriceTTC",
   ],
   sync_outbox: [
     "id", "entityType", "entityLocalId", "operation", "createdAt",
@@ -187,8 +187,8 @@ export async function createOfflineSale(
         `INSERT INTO offline_sale_lines (
            id, offlineSaleId, productId, productNameSnapshot, quantity,
            unitPriceSnapshot, taxRateSnapshot, discountSnapshot,
-           totalHT, taxAmount, totalTTC, priceToken
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           totalHT, taxAmount, totalTTC, priceToken, customUnitPriceTTC
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           generateUuid(),
           localId,
@@ -202,6 +202,8 @@ export async function createOfflineSale(
           line.taxAmount,
           line.totalTTC,
           line.priceToken,
+          // NULL = no custom price (0 is a price: `??`, never `||`).
+          line.customUnitPriceTTC ?? null,
         ],
         false,
       );
@@ -317,6 +319,7 @@ export async function getOfflineSales(scope: {
         taxAmount: Number(line.taxAmount),
         totalTTC: Number(line.totalTTC),
         priceToken: (line.priceToken as string | null) ?? null,
+        customUnitPriceTTC: line.customUnitPriceTTC == null ? null : Number(line.customUnitPriceTTC),
       })),
     });
   }

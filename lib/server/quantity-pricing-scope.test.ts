@@ -17,12 +17,12 @@ test("createCounterSale: setting read from the DATABASE for the session's organi
   assert.match(create, /const quantityPricingEnabled = await readQuantityPricingEnabled\(tx, sessionUser\.organizationId\);/);
   assert.match(create, /retailPrice: true,\s*semiWholesalePrice: true,\s*semiWholesaleMinQty: true,\s*wholesaleMinQty: true,/);
   assert.match(create, /const quantityByProduct = sumQuantitiesByProduct\(lines\);/);
-  // admin manual price first, otherwise the quantity / wholesale price from the database
+  // admin / cashier manual price first, otherwise the quantity / wholesale price from the database
   assert.match(
     create,
     /canOverrideLinePrice && line\.unitPriceHT != null\s*\? roundMoney\(line\.unitPriceHT\)\s*: resolveQuantityPrice\(\{\s*enabled: quantityPricingEnabled,\s*wholesalePriceHT: product\.salePrice\.toNumber\(\),\s*tiers: quantityTierValuesFromRow\(product\),/,
   );
-  assert.match(create, /const canOverrideLinePrice = sessionUser\.role === "admin";/);
+  assert.match(create, /const canOverrideLinePrice = sessionUser\.role === "admin" \|\| sessionUser\.role === "cashier";/);
 });
 
 test("the sale request cannot carry a tier, a setting or a trusted price: the line schema is unchanged", () => {

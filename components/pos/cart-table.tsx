@@ -10,7 +10,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PriceInput } from "@/components/pos/price-input";
 import { isSellingBelowCost } from "@/lib/pos-margin";
+import { PRICE_TONE_CLASS, PRICE_TONE_TEXT_CLASS, priceTone } from "@/lib/pos-price-tone";
 import { QUANTITY_PRICE_TIER_LABELS } from "@/lib/quantity-pricing";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { CartLineComputed } from "@/components/pos/pos-layout";
@@ -37,14 +39,15 @@ type CartTableProps = {
   lines: CartLineComputed[];
   operationType: PosOperationType;
   readOnly?: boolean;
-  /** Admin-only: turn the "Prix TTC" cell into an editable per-line input. */
+  /** Admin / cashier / driver (lib/pos-price-permissions.ts): turn the "Prix TTC" cell into an editable per-line input. */
   canEditPrice?: boolean;
   onIncrement: (productId: string) => void;
   onDecrement: (productId: string) => void;
   onQuantityChange: (productId: string, quantity: number) => void;
   /** DH taken off the unit's TTC price - see lib/pos-discount.ts. */
   onDiscountChange: (productId: string, discountUnitAmount: number) => void;
-  onPriceChange?: (productId: string, unitPriceTTC: number | null) => void;
+  /** The unit price TTC the operator typed (an empty field is 0 DH - never the catalogue price). */
+  onPriceChange?: (productId: string, unitPriceTTC: number) => void;
   onRemove: (productId: string) => void;
   /**
    * Counter-POS PC layout (>= lg only; < lg is identical either way): the
@@ -140,6 +143,15 @@ export function CartTable({
   // frozen / pending lines and transfers.
   const belowCost = (line: CartLineComputed) =>
     pcLayout && !isTransfer && isSellingBelowCost(line.unitPriceTTC, line.purchasePriceTTC);
+  // Colour of the applied price against the usual price and the purchase price (lib/pos-price-tone.ts).
+  const toneOf = (line: CartLineComputed) =>
+    isTransfer
+      ? "neutral"
+      : priceTone({
+          applied: line.unitPriceTTC,
+          original: line.originalUnitPriceTTC,
+          purchase: line.purchasePriceTTC,
+        });
 
   // Same amount and format everywhere. Driver phone only: the no-break space
   // before "DH" becomes a regular one so the unit can drop under a 4-digit
@@ -325,20 +337,13 @@ export function CartTable({
               )}
             >
               {priceEditable ? (
-                <input
+                <PriceInput
                   data-below-cost={belowCost(line) ? "true" : undefined}
+                  data-price-tone={toneOf(line)}
                   title={belowCost(line) ? "Prix inférieur au prix d'achat" : undefined}
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={Number(line.unitPriceTTC.toFixed(2))}
+                  value={line.unitPriceTTC}
                   onFocus={selectAllOnFocus}
-                  onChange={(event) =>
-                    onPriceChange!(
-                      line.productId,
-                      event.target.value === "" ? null : Number(event.target.value),
-                    )
-                  }
+                  onValueChange={(price) => onPriceChange!(line.productId, price)}
                   aria-label={`Prix TTC de ${line.designation}`}
                   className={cn(
                     "h-7 w-9 rounded-md border bg-transparent text-center text-sm outline-none focus-visible:border-emerald-500 focus-visible:ring-3 focus-visible:ring-emerald-500/15 lg:w-20",
@@ -346,14 +351,16 @@ export function CartTable({
                     // same 17.6px as the quantity (`!`: the global phone rule forces 1rem).
                     phoneStyle && "max-lg:w-[62px] max-lg:text-[17.6px]!",
                     pcLayout && "lg:h-[2.625rem] lg:w-[6.5rem] lg:text-[21px]",
-                    // Below-cost warning (PC counter POS only, display only).
-                    // The focus variants are repeated because the base focus
-                    // style (emerald) would otherwise win while typing.
-                    belowCost(line) &&
-                      "lg:border-red-400 lg:bg-red-50 lg:text-red-700 lg:focus-visible:border-red-500 lg:focus-visible:ring-red-500/20",
-                    line.priceOverridden
-                      ? "border-amber-400 font-medium text-amber-700"
-                      : "border-input",
+                    // Price colour (display only): green above the usual price, orange between the
+                    // purchase price and the usual price, red at or under the purchase price (or 0).
+                    // Neutral otherwise; a manual price whose colour is unknown keeps the amber marker.
+                    toneOf(line) !== "neutral"
+                      ? PRICE_TONE_CLASS[toneOf(line) as "above" | "between" | "below"]
+                      : line.priceOverridden &&
+                          line.originalUnitPriceTTC != null &&
+                          line.unitPriceTTC !== line.originalUnitPriceTTC
+                        ? "border-amber-400 font-medium text-amber-700"
+                        : "border-input",
                   )}
                 />
               ) : (
@@ -366,6 +373,8 @@ export function CartTable({
                     // is wider than the column.
                     phoneStyle && "max-lg:block max-lg:text-[17.6px] max-lg:leading-tight max-lg:whitespace-normal max-lg:[overflow-wrap:anywhere]",
                     pcLayout && "lg:text-[21px] lg:font-medium",
+                    toneOf(line) !== "neutral" &&
+                      PRICE_TONE_TEXT_CLASS[toneOf(line) as "above" | "between" | "below"],
                   )}
                 >
                   {money(isTransfer ? line.unitPriceHT : line.unitPriceTTC)}

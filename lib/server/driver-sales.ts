@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { businessDayRangeUtc, getCurrentBusinessDayParam } from "@/lib/business-day";
 import { driverOwnCustomersWhere } from "@/lib/driver-customer-scope";
-import { computeDriverLineTotals } from "@/lib/driver-line-totals";
+import { computeDriverLineTotals, priceFromCustomTTC } from "@/lib/driver-line-totals";
 import { addMoney, MONEY_RANGE_MAX_NUMBER, subtractMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { computePriceTTC } from "@/lib/product-pricing";
@@ -35,6 +35,7 @@ import {
   type OfflineSyncErrorCode,
 } from "@/lib/server/offline-sync-errors";
 import {
+  assertSaleHasAmount,
   mapSaleToDto,
   nextInvoiceNumber,
   nextMovementNumber,
@@ -87,6 +88,13 @@ const driverSaleSchema = z.object({
         // computed amount by assertMoneyRange below regardless).
         quantity: z.coerce.number().int().positive().max(1_000_000),
         discountRate: z.coerce.number().min(0).max(100).optional(),
+        // Optional custom unit price TTC for THIS sale line (the driver POS price
+        // field). 0 is a valid price. Deliberately NOT z.coerce: a JSON null or ""
+        // must never turn into a silent 0 DH - only a real number is accepted, the
+        // product's catalogue price and cost are never touched. Reachable by
+        // drivers only (requireOrganizationUser(["driver"]) above); the amount is
+        // bounded by assertMoneyRange below and priced like any other line.
+        customUnitPriceTTC: z.number().finite().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
       }),
     )
     .min(1, "Ajoutez au moins un produit."),
@@ -184,6 +192,9 @@ export async function getDriverPosContext(
         imageUrl: true,
         updatedAt: true,
         salePrice: true,
+        // The driver POS colours the price he types against the cost
+        // (lib/pos-price-tone.ts) - display only, never used for a price or a total.
+        purchasePrice: true,
         taxRate: true,
         defaultSupplierId: true,
         defaultSupplier: { select: { name: true, logoUrl: true } },
@@ -266,6 +277,7 @@ export async function getDriverPosContext(
         imageUrl: toLightweightProductImageUrl(product.id, product.imageUrl, product.updatedAt),
         salePriceHT,
         salePriceTTC,
+        purchasePriceHT: product.purchasePrice.toNumber(),
         taxRate,
         // No stock row on this truck -> shown as 0 (still sellable).
         availableQuantity: level ? level.quantity - level.reservedQuantity : 0,
@@ -470,9 +482,21 @@ export async function createDriverSale(
         // customer, never today's Product.salePrice. Absent (every ONLINE
         // sale - this map is always undefined there), unchanged behaviour:
         // priced from the live product, exactly as before this phase.
-        const verifiedUnitPriceTTC = opts.verifiedUnitPriceTTCByProductId?.get(line.productId);
-        const unitPriceHT =
-          verifiedUnitPriceTTC !== undefined
+        const catalogueVerifiedUnitPriceTTC = opts.verifiedUnitPriceTTCByProductId?.get(line.productId);
+        // A custom price typed by the driver for this sale (see driverSaleSchema) wins over the
+        // catalogue / verified offline price, and is then priced exactly like a verified price:
+        // from the TTC unit price the driver saw. Absent (every sale made before the field
+        // existed) = unchanged behaviour.
+        const customPrice =
+          line.customUnitPriceTTC !== undefined
+            ? priceFromCustomTTC(line.customUnitPriceTTC, taxRate)
+            : null;
+        const verifiedUnitPriceTTC = customPrice
+          ? customPrice.unitPriceTTC
+          : catalogueVerifiedUnitPriceTTC;
+        const unitPriceHT = customPrice
+          ? customPrice.unitPriceHT
+          : verifiedUnitPriceTTC !== undefined
             ? roundMoney(verifiedUnitPriceTTC / (1 + taxRate / 100))
             : product.salePrice.toNumber();
         // BI Phase 2A: snapshot of the cost of the day, frozen on the line
@@ -536,6 +560,7 @@ export async function createDriverSale(
       assertMoneyRange(totalBeforeRounding, "totalBeforeRounding");
       assertMoneyRange(roundingAmount, "roundingAmount");
       assertMoneyRange(totalTTC, "totalTTC");
+      assertSaleHasAmount(totalTTC);
       const stampAmount = await computeCashSaleStampAmount(tx, {
         organizationId: user.organizationId,
         totalTTC,
@@ -848,6 +873,12 @@ const offlineSaleSyncSchema = z.object({
         // and createDriverSale applies to the HT gross. Absent = 0, exactly
         // the behaviour before this field existed.
         discountRate: z.coerce.number().min(0).max(100).optional(),
+        // The custom unit price TTC the driver typed for this line (0 allowed), when he
+        // typed one. `unitPriceTTC` + `priceToken` above keep meaning "the catalogue
+        // price the device showed, as signed" and are verified exactly as before; this
+        // field is the price actually applied on top, validated again by createDriverSale
+        // (driverSaleSchema). Not z.coerce: null / "" must never become a silent 0 DH.
+        customUnitPriceTTC: z.number().finite().min(0).max(MONEY_RANGE_MAX_NUMBER).optional(),
       }),
     )
     .min(1, "Le panier hors connexion est vide."),
@@ -1096,6 +1127,7 @@ export async function syncOfflineDriverSale(
       productId: line.productId,
       quantity: line.quantity,
       discountRate: line.discountRate ?? 0,
+      ...(line.customUnitPriceTTC !== undefined ? { customUnitPriceTTC: line.customUnitPriceTTC } : {}),
     })),
   };
 

@@ -363,6 +363,21 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `ALTER TABLE offline_sales ADD COLUMN roundingAmount REAL`,
     ],
   },
+  {
+    // Custom unit price on the driver POS. Both columns are nullable and additive (plain ALTER TABLEs,
+    // existing rows untouched):
+    //  - cached_products.purchasePriceHT: the product's cost, cached so the price colour
+    //    (lib/pos-price-tone.ts) also works offline. NULL on a cache written before this version (and
+    //    until the next online context fetch) = unknown cost = neutral colour, never an invented cost.
+    //  - offline_sale_lines.customUnitPriceTTC: the unit price TTC the driver typed for the line (0 is a
+    //    price). NULL = no custom price: the line sells at unitPriceSnapshot (the signed catalogue price),
+    //    exactly like every sale saved before this version.
+    version: 8,
+    statements: [
+      `ALTER TABLE cached_products ADD COLUMN purchasePriceHT REAL`,
+      `ALTER TABLE offline_sale_lines ADD COLUMN customUnitPriceTTC REAL`,
+    ],
+  },
 ];
 
 /** Highest version defined above - passed to the plugin's own
