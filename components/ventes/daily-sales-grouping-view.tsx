@@ -10,7 +10,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMarkupRate, marginPartialNote } from "@/lib/daily-invoice-kpis";
-import { assignProductTintIndexes, PRODUCT_TINTS } from "@/lib/daily-sales-colors";
 import {
   DAILY_SALES_GROUPING_PATH,
   dailyFiltersToQuery,
@@ -136,8 +135,6 @@ export function SalesGroupingReport({ data, error = null }: { data: DailySalesGr
   const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(new Set());
   const { totals } = data;
   const showMargin = Boolean(data.margin);
-  // One stable colour per product, computed on the FULL list so searching never changes a colour.
-  const tintIndexes = React.useMemo(() => assignProductTintIndexes(data.products.map((product) => product.productId)), [data.products]);
   const products = search.trim()
     ? data.products.filter((product) => fold(`${product.name} ${product.reference}`).includes(fold(search.trim())))
     : data.products;
@@ -247,7 +244,6 @@ export function SalesGroupingReport({ data, error = null }: { data: DailySalesGr
                   <ProductRows
                     key={product.productId}
                     product={product}
-                    tintIndex={tintIndexes.get(product.productId) ?? 0}
                     showMargin={showMargin}
                     expanded={!collapsed.has(product.productId)}
                     onToggle={() => toggle(product.productId)}
@@ -282,33 +278,31 @@ export function SalesGroupingReport({ data, error = null }: { data: DailySalesGr
 
 function ProductRows({
   product,
-  tintIndex,
   showMargin,
   expanded,
   onToggle,
 }: {
   product: DailySalesProductDto;
-  tintIndex: number;
   showMargin: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const columns = showMargin ? 6 : 4;
-  const tint = PRODUCT_TINTS[tintIndex % PRODUCT_TINTS.length];
   return (
-    // The same soft background on the whole group; the text and the margin colours are untouched.
-    <tbody data-product={product.productId} data-tint={tintIndex} className={cn("border-b-2", tint.bg, tint.border)}>
+    // Plain white rows; a thin light-grey line closes each group. Only the product name is coloured.
+    <tbody data-product={product.productId} className="border-b border-gray-200 last:border-b-0">
       <tr>
         <td colSpan={columns} className="pt-3 pb-1">
           <button
             type="button"
             aria-expanded={expanded}
             onClick={onToggle}
-            className="flex items-center gap-1.5 text-left font-semibold text-foreground"
+            className="flex items-center gap-1.5 text-left"
           >
             <Chevron aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
-            {product.name}
+            {/* The ONLY coloured element of a group: same teal for every product. */}
+            <span data-product-name className="font-semibold text-teal-800">{product.name}</span>
             <span className="text-xs font-normal text-muted-foreground">{product.reference}</span>
           </button>
         </td>
