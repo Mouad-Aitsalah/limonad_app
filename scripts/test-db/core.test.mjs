@@ -631,6 +631,34 @@ test("child environment: PG*, NODE_OPTIONS, other database URLs and the admin UR
   }
 });
 
+test("child environment: the executable search path is exempt from the hosted-service marker scan whatever its casing (Windows names it Path)", () => {
+  const url = "postgresql://admin:s3cretpw@localhost:5432/commdis_d2_test?schema=public";
+  const options = { adminUrl: ADMIN, throwawayUrl: url, productionFragments: ["ep-test-fragment-0000"] };
+  // A developer machine legitimately has tools such as "Azure Data Studio" or a "vercel" CLI folder on its PATH.
+  const searchPath = "C:\\Windows;C:\\Program Files\\Azure Data Studio\\bin;C:\\Users\\dev\\AppData\\Roaming\\npm\\vercel-tools";
+  for (const name of ["PATH", "Path", "path"]) {
+    const env = buildChildEnv({ [name]: searchPath }, { throwawayUrl: url, stubsDir: "/s", dotenvPath: "/e" });
+    assert.equal(env[name], searchPath, `${name} is inherited`);
+    assert.doesNotThrow(() => assertChildEnvSafe(env, options), `${name}: a tool folder on the search path is not a hosted database`);
+  }
+});
+
+test("child environment: the casing exemption is for the search path ONLY - any other variable carrying a hosted marker is still refused", () => {
+  const url = "postgresql://admin:s3cretpw@localhost:5432/commdis_d2_test?schema=public";
+  const options = { adminUrl: ADMIN, throwawayUrl: url, productionFragments: ["ep-test-fragment-0000"] };
+  const good = buildChildEnv({ Path: "C:\\Windows" }, { throwawayUrl: url, stubsDir: "/s", dotenvPath: "/e" });
+  for (const poisoned of [{ TEMP: "C:\\Users\\x\\neon" }, { USERPROFILE: "C:\\vercel" }, { APPDATA: "https://x.amazonaws.com" }, { OTHER: "supabase" }, { PATHEXT: "azure" }, { MYPATH: "C:\\Program Files\\Azure Data Studio\\bin" }]) {
+    assert.throws(() => assertChildEnvSafe({ ...good, ...poisoned }, options), Refusal, JSON.stringify(poisoned));
+  }
+  // and the exemption does not hide a database URL or the production endpoint placed in the search path
+  for (const value of ["C:\\bin;s3cretpw", ADMIN, "C:\\bin;ep-test-fragment-0000.neon.tech"]) {
+    for (const name of ["PATH", "Path"]) {
+      const withoutPath = Object.fromEntries(Object.entries(good).filter(([key]) => key !== "Path"));
+      assert.throws(() => assertChildEnvSafe({ ...withoutPath, [name]: value }, options), Refusal, `${name}=${value.slice(0, 30)}`);
+    }
+  }
+});
+
 test("child environment: only the allow-list is inherited (Windows-style casing too); database variables are forced", () => {
   const url = "postgresql://u:p@localhost:5432/commdis_d2_test?schema=public";
   const env = buildChildEnv({ Path: "C:\\bin", SystemRoot: "C:\\Windows", LC_ALL: "C", PGPASSWORD: "x", GEMINI_API_KEY: "k", DATABASE_URL: "prod", DIRECT_URL: "prod", APP_ENV: "production", NODE_OPTIONS: "--x", npm_config_x: "1" }, { throwawayUrl: url, stubsDir: "/s", dotenvPath: "/e" });

@@ -269,7 +269,9 @@ export function assertChildEnvSafe(env, { adminUrl, throwawayUrl, productionFrag
     if (adminPassword && adminPassword.length >= 4 && rest.includes(adminPassword)) refuse(`internal check: the administrative password is present in ${key}.`);
     if (/^postgres(ql)?:\/\//i.test(value) && value !== throwawayUrl) refuse(`internal check: ${key} carries a database URL other than the throwaway one.`);
     if (productionFragments.some((fragment) => fragment && value.includes(fragment))) refuse(`internal check: ${key} carries the known production endpoint.`);
-    if (key !== "PATH" && !/^(DATABASE_URL|DIRECT_URL|D2_TEST_DATABASE_URL)$/.test(key) && FORBIDDEN_MARKERS.some((marker) => marker.test(value))) {
+    // The executable search path lists tool folders ("Azure Data Studio", a "vercel" CLI...): not a hosted database. Windows
+    // names it `Path` (buildChildEnv keeps the parent's casing), so the comparison ignores the case - like the allow-list.
+    if (key.toUpperCase() !== "PATH" && !/^(DATABASE_URL|DIRECT_URL|D2_TEST_DATABASE_URL)$/.test(key) && FORBIDDEN_MARKERS.some((marker) => marker.test(value))) {
       refuse(`internal check: ${key} carries a hosted-service marker.`);
     }
   }
