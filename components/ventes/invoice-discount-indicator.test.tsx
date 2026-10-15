@@ -67,13 +67,16 @@ test("badge: a discreet REMISE tag that states the amount for accessibility", ()
   assert.match(renderToStaticMarkup(<InvoiceDiscountBadge />), /aria-label="Remise accordée sur cette facture"/);
 });
 
-test("inline detail (archives + daily rows): an invoice WITH a discount shows the badge and the discount row", () => {
-  const out = text(renderToStaticMarkup(<InvoiceDetailInline listItem={listItem({ hasDiscount: true, discountTTC: 1 })} sale={sale} />));
+test("inline detail (archives + daily rows): an invoice WITH a discount shows the badge, and the summary keeps only the Total TTC", () => {
+  const markup = renderToStaticMarkup(<InvoiceDetailInline listItem={listItem({ hasDiscount: true, discountTTC: 1 })} sale={sale} />);
+  const out = text(markup);
   assert.ok(out.includes("|REMISE|"));
-  assert.ok(out.includes("|Remise accordée (incluse)|"));
-  assert.ok(out.includes(`|${formatCurrency(1).split(String.fromCharCode(160)).join(" ")}|`));
-  // the existing rows are all still there
-  for (const label of ["Total HT", "TVA", "Total TTC"]) assert.ok(out.includes(`|${label}|`), label);
+  assert.ok(markup.includes(`Remise accordée sur cette facture : ${formatCurrency(1)}`), "the badge still states the amount");
+  // compact summary: one amount only
+  assert.ok(out.includes("|Total TTC|"));
+  for (const removed of ["Total HT", "TVA", "Remise accordée (incluse)", "Arrondi", "Net (après avoirs)"]) {
+    assert.equal(out.includes(`|${removed}|`), false, removed);
+  }
 });
 
 test("inline detail: an invoice WITHOUT a discount (or a row the server did not flag) shows neither", () => {

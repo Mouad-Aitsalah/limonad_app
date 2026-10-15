@@ -133,7 +133,10 @@ test("the inline detail keeps the visible width of the scrollable invoice list, 
   assert.match(list, /<div className="@container">\s*<Table>/);
   assert.match(list, /<TableCell colSpan=\{columns\.length \+ 1\} className="bg-muted\/10 p-0">/);
   assert.match(list, /<div className="sticky left-0 w-\[100cqw\] p-2 whitespace-normal sm:p-4">/);
-  assert.match(read("./invoice-detail-inline.tsx"), /rounded-2xl border border-border bg-muted\/20 p-3 sm:p-5/);
+  // compact detail: no outer card around the products card (no nested cards)
+  const inline = read("./invoice-detail-inline.tsx");
+  assert.match(inline, /<div className="mx-auto w-full max-w-3xl space-y-2">/);
+  assert.equal(/bg-muted\/20 p-3 sm:p-5/.test(inline), false);
 });
 
 test("both order details (inline row and dialog) use this one table; nothing else changed in their totals", () => {
@@ -144,11 +147,15 @@ test("both order details (inline row and dialog) use this one table; nothing els
     // "REMISE" indicator row fed by the (role-gated) list row - never recomputed from the lines here
     const withoutIndicator = source.replace(/Remise accordée \(incluse\)/g, "");
     assert.equal(/Remise|reconstructDiscountUnitAmount|unitPriceHT/.test(withoutIndicator), false, file);
-    // the invoice totals block is untouched
-    assert.match(source, /formatCurrency\(sale\.subtotalHT\)/, file);
-    assert.match(source, /formatCurrency\(sale\.taxAmount\)/, file);
+    // both show the invoice's stored Total TTC
     assert.match(source, /formatCurrency\(sale\.totalTTC\)/, file);
   }
+  // the dialog keeps its full totals block; the inline detail shows the Total TTC only (no HT, no VAT)
+  const dialog = read("./invoice-detail-dialog.tsx");
+  assert.match(dialog, /formatCurrency\(sale\.subtotalHT\)/);
+  assert.match(dialog, /formatCurrency\(sale\.taxAmount\)/);
+  const inline = read("./invoice-detail-inline.tsx");
+  assert.equal(/sale\.subtotalHT|sale\.taxAmount/.test(inline), false);
   // Prix TTC reuses the invoice PDF's catalogue-price function (no new VAT logic, no discount);
   // Total TTC reads the stored line amount and recomputes nothing.
   const table = read("./invoice-lines-table.tsx");

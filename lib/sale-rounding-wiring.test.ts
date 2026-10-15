@@ -225,11 +225,14 @@ test("documents show an 'Arrondi' line only when the sale has one", () => {
     ["./invoice-pdf.ts", /if \(roundingAmount !== 0\)/],
     ["./whatsapp-invoice.ts", /\(sale\.roundingAmount \?\? 0\) !== 0/],
     ["../components/ventes/invoice-detail-dialog.tsx", /\(sale\.roundingAmount \?\? 0\) !== 0/],
-    ["../components/ventes/invoice-detail-inline.tsx", /\(sale\.roundingAmount \?\? 0\) !== 0/],
     ["../components/credit-notes/credit-note-summary.tsx", /roundingAmount !== 0/],
     ["../components/credit-notes/credit-note-detail-view.tsx", /roundingAmount !== 0/],
   ];
   for (const [file, pattern] of checks) assert.match(read(file), pattern, file);
+  // the compact unfolded detail of the invoice lists shows one amount, the stored Total TTC (rounding included)
+  const inline = read("../components/ventes/invoice-detail-inline.tsx");
+  assert.match(inline, /formatCurrency\(sale\.totalTTC\)/);
+  assert.equal(/roundingAmount/.test(inline), false);
 });
 
 test("unit prices and lines are not rounded to 0.50 anywhere: only the sale total is", () => {
