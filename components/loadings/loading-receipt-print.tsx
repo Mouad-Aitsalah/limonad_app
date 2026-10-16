@@ -24,7 +24,7 @@ export function LoadingReceiptPrint({ ticket }: { ticket: LoadingTicketInput | n
       <div className="receipt-print-ticket">
         <header className="receipt-print-header">
           <p className="receipt-print-brand">{ticket.brandName ?? "AITSALAH STORE"}</p>
-          <p style={{ fontSize: "14px", fontWeight: 700 }}>TRANSFERT DE STOCK</p>
+          <p className="receipt-print-loading-title">TRANSFERT DE STOCK</p>
         </header>
         <div className="receipt-print-separator" />
         <div>Date : {dateLabel}</div>
@@ -61,10 +61,10 @@ export function LoadingReceiptPrint({ ticket }: { ticket: LoadingTicketInput | n
             );
           })}
         </div>
-        <div style={{ marginTop: "1.5mm" }}>
+        <div className="receipt-print-loading-count">
           Produits comptés : {counted} / {total}
         </div>
-        <div style={{ fontSize: "8px" }}>Décalage = restant réel - restant théorique (- manque, + surplus)</div>
+        <div className="receipt-print-loading-note">Décalage = restant réel - restant théorique (- manque, + surplus)</div>
       </div>
     </section>
   );

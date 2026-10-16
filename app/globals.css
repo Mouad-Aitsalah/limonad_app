@@ -612,35 +612,91 @@ body {
      Decalage. Same dashed look as the separators above: a DASHED vertical rule
      between the columns and a DASHED horizontal rule under the titles and
      under every product (borders, so they always print). Quantities are
-     right-aligned tabular figures; the name clips at two lines. A shortage is
+     right-aligned tabular figures; the name wraps, never clipped (see SIZE below). A shortage is
      bold, a surplus bold-italic, so the sign is never the only cue. */
+  /* SIZE: this ticket is printed x1.4 (+40 %) compared with its former look
+     (brand 16px, title 14px, text 10px, rows 11px, column titles 7.5px,
+     separators 1.8mm, rules 1px, cell padding 0.7 x 0.6mm). ONE mechanism only:
+     every length below is calc(former value * --loading-scale) - no zoom, no
+     transform: scale(), no @page scaling, so nothing can compound. The paper is
+     unchanged (80mm, 2mm padding = 76mm of content), so two things cannot grow
+     x1.4 and are justified: (1) the grid columns - 52.3mm for the 5 quantity
+     columns (a 4-digit quantity at 15.4px is 9.1mm wide), the product column
+     takes the remaining ~23.7mm and WRAPS (no 2-line clip: a name is never
+     cut); (2) the column titles are x1.2 instead of x1.4 (--loading-head-scale)
+     and the quantity cells use a 0.3mm x scale side padding: "CHARGE" at x1.4
+     is 12mm wide and would overflow its column or squeeze the product column to
+     16mm. Everything is scoped to [data-document="loading"]: the shared ticket
+     classes of the invoice, the driver ticket and the cash deposit keep their
+     own rules above. */
   .receipt-print-area[data-document="loading"] {
     box-sizing: border-box !important;
+    --loading-scale: 1.4;
+    --loading-head-scale: 1.2;
+  }
+
+  .receipt-print-area[data-document="loading"] .receipt-print-ticket {
+    font-size: calc(10px * var(--loading-scale));
+  }
+
+  .receipt-print-area[data-document="loading"] .receipt-print-header {
+    margin-bottom: calc(2mm * var(--loading-scale));
+  }
+
+  .receipt-print-area[data-document="loading"] .receipt-print-brand {
+    font-size: calc(16px * var(--loading-scale));
+  }
+
+  .receipt-print-area[data-document="loading"] .receipt-print-loading-title {
+    font-size: calc(14px * var(--loading-scale));
+    font-weight: 700;
+  }
+
+  .receipt-print-area[data-document="loading"] .receipt-print-separator {
+    margin: calc(1.8mm * var(--loading-scale)) 0;
+    border-top: calc(1px * var(--loading-scale)) dashed #000;
+  }
+
+  .receipt-print-area[data-document="loading"] .receipt-print-product {
+    max-height: none;
+  }
+
+  .receipt-print-area[data-document="loading"] .receipt-print-loading-count {
+    margin-top: calc(1.5mm * var(--loading-scale));
+  }
+
+  .receipt-print-area[data-document="loading"] .receipt-print-loading-note {
+    font-size: calc(8px * var(--loading-scale));
   }
 
   .receipt-print-loading-table {
-    border-top: 1px dashed #000;
+    border-top: calc(1px * var(--loading-scale)) dashed #000;
   }
 
   .receipt-print-loading-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) repeat(5, 9.6mm);
+    grid-template-columns: minmax(0, 1fr) 11.5mm repeat(4, 10.2mm);
     align-items: stretch;
-    border-bottom: 1px dashed #000;
-    font-size: 11px;
+    border-bottom: calc(1px * var(--loading-scale)) dashed #000;
+    font-size: calc(11px * var(--loading-scale));
   }
 
   .receipt-print-loading-row > span {
-    padding: 0.7mm 0.6mm;
+    padding: calc(0.7mm * var(--loading-scale)) calc(0.6mm * var(--loading-scale));
+  }
+
+  .receipt-print-loading-row > .receipt-print-number {
+    padding-left: calc(0.3mm * var(--loading-scale));
+    padding-right: calc(0.3mm * var(--loading-scale));
   }
 
   .receipt-print-loading-row > span + span {
-    border-left: 1px dashed #000;
+    border-left: calc(1px * var(--loading-scale)) dashed #000;
   }
 
   .receipt-print-loading-head {
     align-items: end;
-    font-size: 7.5px;
+    font-size: calc(7.5px * var(--loading-head-scale));
     font-weight: 700;
     line-height: 1.15;
   }

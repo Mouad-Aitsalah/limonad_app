@@ -77,9 +77,9 @@ test("printed ticket: date, driver, truck, the 6 columns, dashes for a missing c
 
 test("print styles: dashed vertical separators between columns, dashed rules between products, aligned quantities, existing tickets untouched", () => {
   const css = read("../../app/globals.css");
-  assert.match(css, /\.receipt-print-loading-row > span \+ span \{\s*border-left: 1px dashed #000;/);
-  assert.match(css, /\.receipt-print-loading-row \{[^}]*border-bottom: 1px dashed #000;/);
-  assert.match(css, /\.receipt-print-loading-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) repeat\(5, 9\.6mm\);/);
+  assert.match(css, /\.receipt-print-loading-row > span \+ span \{\s*border-left: calc\(1px \* var\(--loading-scale\)\) dashed #000;/);
+  assert.match(css, /\.receipt-print-loading-row \{[^}]*border-bottom: calc\(1px \* var\(--loading-scale\)\) dashed #000;/);
+  assert.match(css, /\.receipt-print-loading-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) 11\.5mm repeat\(4, 10\.2mm\);/);
   assert.match(css, /\.receipt-print-number,\s*\.receipt-print-right \{\s*text-align: right;\s*font-variant-numeric: tabular-nums;/);
   assert.match(css, /\[data-gap="shortage"\] \.receipt-print-loading-gap \{\s*font-weight: 800;/);
   // the invoice ticket rules are still there, unchanged
@@ -110,4 +110,34 @@ test("the detail page: « Décalage » column, frozen theoretical, counted indic
   assert.match(detail, /\{formatGap\(gap\)\}/);
   assert.match(detail, /label="Produits comptes"/);
   assert.doesNotMatch(detail, /Veuillez saisir la quantite restante reelle pour tous les produits/);
+});
+
+test("printed ticket is x1.4 through ONE mechanism (a CSS variable), scoped to the transfer ticket, paper unchanged", () => {
+  const css = read("../../app/globals.css");
+  const printBlock = css.slice(css.indexOf("@media print {"));
+  // 80 mm paper, 2 mm padding (76 mm of content) - not touched
+  assert.match(printBlock, /size: 80mm auto;/);
+  assert.match(printBlock, /\.receipt-print-area \{[^}]*width: 80mm !important;[^}]*padding: 2mm !important;/);
+  assert.match(printBlock, /\[data-document="loading"\] \{\s*box-sizing: border-box !important;\s*--loading-scale: 1\.4;\s*--loading-head-scale: 1\.2;/);
+  // every enlarged size derives from the variable: former value * 1.4
+  for (const rule of [
+    /\.receipt-print-ticket \{\s*font-size: calc\(10px \* var\(--loading-scale\)\);/,
+    /\.receipt-print-brand \{\s*font-size: calc\(16px \* var\(--loading-scale\)\);/,
+    /\.receipt-print-loading-title \{\s*font-size: calc\(14px \* var\(--loading-scale\)\);/,
+    /\.receipt-print-separator \{\s*margin: calc\(1\.8mm \* var\(--loading-scale\)\) 0;\s*border-top: calc\(1px \* var\(--loading-scale\)\) dashed #000;/,
+    /\.receipt-print-loading-row \{[^}]*font-size: calc\(11px \* var\(--loading-scale\)\);/,
+    /\.receipt-print-loading-note \{\s*font-size: calc\(8px \* var\(--loading-scale\)\);/,
+    /\.receipt-print-loading-head \{[^}]*font-size: calc\(7\.5px \* var\(--loading-head-scale\)\);/,
+  ]) {
+    assert.match(printBlock, rule);
+  }
+  // no compounded scaling anywhere in the print rules of this ticket
+  const loadingRules = printBlock.slice(printBlock.indexOf("--loading-scale: 1.4;"), printBlock.indexOf("Product columns, left to right"));
+  assert.doesNotMatch(loadingRules.replace(/\/\*[\s\S]*?\*\//g, ""), /zoom|transform|scale\(/);
+  // a product name is never clipped
+  assert.match(loadingRules, /\[data-document="loading"\] \.receipt-print-product \{\s*max-height: none;/);
+  // the shared ticket classes keep their former sizes for the other tickets
+  assert.match(printBlock, /\.receipt-print-ticket \{\s*width: 100%;\s*color: #000;\s*font-family: Arial, system-ui, sans-serif;\s*font-size: 10px;/);
+  assert.match(printBlock, /\.receipt-print-brand \{\s*font-size: 16px;/);
+  assert.match(printBlock, /\.receipt-print-separator \{\s*margin: 1\.8mm 0;\s*border-top: 1px dashed #000;/);
 });
