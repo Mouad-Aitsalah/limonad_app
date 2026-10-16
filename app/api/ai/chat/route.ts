@@ -30,6 +30,7 @@ import {
   purchaseRecommendationsDeclaration,
 } from "@/lib/server/assistant-purchase-tool";
 import { rejectUntrustedOrigin } from "@/lib/server/csrf";
+import { DashboardLockedError, requireDashboardAccess } from "@/lib/server/dashboard-security";
 import { getSaleById } from "@/lib/server/driver-sales";
 import { OperationsServiceError } from "@/lib/server/depots";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
@@ -53,6 +54,14 @@ const bodySchema = z.object({
   message: z.string().trim().min(1).max(600),
   conversationId: z.string().trim().min(1).max(191).optional(),
 });
+
+/** Assistant tools that return the same figures as the Dashboard (see requireDashboardAccess). */
+const DASHBOARD_FIGURE_TOOLS: ReadonlySet<string> = new Set([
+  "get_sales_summary",
+  "get_top_selling_products",
+  "get_customer_receivables_summary",
+  "list_top_customer_receivables",
+]);
 
 const noArgumentsSchema = z.object({}).strict();
 
@@ -443,6 +452,18 @@ export async function POST(request: Request) {
     ): Promise<Record<string, unknown>> => {
       if (!isAssistantToolAllowed(functionCall.name, user.disabledModules)) {
         return { error: "Ce module n'est pas activé pour votre organisation." };
+      }
+      // Dashboard figures (sales totals, top products, receivables) stay behind the dashboard password when the
+      // SUPER_ADMIN switched the dashboard security on: the assistant must not be a way around it.
+      if (functionCall.name && DASHBOARD_FIGURE_TOOLS.has(functionCall.name)) {
+        try {
+          await requireDashboardAccess(user);
+        } catch (error) {
+          if (error instanceof DashboardLockedError) {
+            return { error: "Ces chiffres sont protégés par le mot de passe du dashboard. Ouvrez le Dashboard et saisissez son mot de passe." };
+          }
+          throw error;
+        }
       }
       if (functionCall.name === "get_product_count") {
         if (!noArgumentsSchema.safeParse(functionCall.args ?? {}).success) {

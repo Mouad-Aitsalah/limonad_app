@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { OrganizationDetailView } from "@/components/organizations/organization-detail-view";
 import { getOrganizationById } from "@/lib/server/organizations";
 import { getOrganizationConnections } from "@/lib/server/organization-connections";
+import { getOrganizationDashboardSecurity } from "@/lib/server/dashboard-security";
 import { getOrganizationModules } from "@/lib/server/organization-modules";
 
 export const metadata: Metadata = {
@@ -27,6 +28,8 @@ export default async function OrganizationDetailPage({
   const initialModules = await getOrganizationModules(id)
     .then((result) => result.modules)
     .catch(() => null);
+  // And the dashboard security (retry offered if it cannot be read, e.g. migration not applied yet).
+  const initialDashboardSecurity = await getOrganizationDashboardSecurity(id).catch(() => null);
 
   return (
     <div className="space-y-6">
@@ -43,6 +46,7 @@ export default async function OrganizationDetailPage({
         organization={organization}
         initialConnections={initialConnections}
         initialModules={initialModules}
+        initialDashboardSecurity={initialDashboardSecurity}
       />
     </div>
   );

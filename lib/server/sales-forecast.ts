@@ -2,6 +2,7 @@ import "server-only";
 
 import { buildSalesForecast, type SalesForecastOptions, type SalesForecastResult } from "@/lib/forecasting/sales-forecast";
 import { prisma } from "@/lib/prisma";
+import { requireDashboardAccess } from "@/lib/server/dashboard-security";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 
 /**
@@ -11,5 +12,6 @@ import { requireOrganizationUser } from "@/lib/server/organization-context";
  */
 export async function getSalesForecast(options: SalesForecastOptions = {}): Promise<SalesForecastResult> {
   const user = await requireOrganizationUser(["admin", "depot_manager"]);
+  await requireDashboardAccess(user);
   return buildSalesForecast(prisma, user.organizationId, options);
 }

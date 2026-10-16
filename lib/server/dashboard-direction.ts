@@ -24,6 +24,7 @@ import {
   type BiPeriod,
 } from "@/lib/server/dashboard-bi";
 import { getCustomerDebt } from "@/lib/server/customer-settlements";
+import { requireDashboardAccess } from "@/lib/server/dashboard-security";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import type {
   DirectionCategoryPoint,
@@ -102,6 +103,8 @@ export async function getDirectionDashboardData(
   searchParams: Record<string, string | string[] | undefined>,
 ): Promise<DirectionDashboardDto> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  // Dashboard security (SUPER_ADMIN switch): no data without a valid grant. No-op when it is off.
+  await requireDashboardAccess(currentUser);
   const organizationId = currentUser.organizationId;
 
   const resolution = resolveDirectionPeriod(searchParams);

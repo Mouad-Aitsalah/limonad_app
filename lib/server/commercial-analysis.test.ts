@@ -741,8 +741,8 @@ test("both analyses are admin-only ON THE SERVER, and the organisation comes fro
   const core = code("./commercial-analysis-core.ts");
   assert.match(code("../commercial-analysis/access.ts"), /COMMERCIAL_ANALYSIS_VIEW_ROLES: UserRole\[\] = \["admin"\];/);
   assert.match(server, /export const COMMERCIAL_ANALYSIS_ROLES = COMMERCIAL_ANALYSIS_VIEW_ROLES;/);
-  assert.match(server, /export async function getSalesAnalysis\(filters: SalesAnalysisFilters\)[^{]*\{\s+const user = await requireOrganizationUser\(\[\.\.\.COMMERCIAL_ANALYSIS_ROLES\]\);\s+return loadSalesAnalysis\(prisma, user\.organizationId, filters\);/);
-  assert.match(server, /export async function getCoverage\(filters: CoverageFilters\)[^{]*\{\s+const user = await requireOrganizationUser\(\[\.\.\.COMMERCIAL_ANALYSIS_ROLES\]\);\s+return loadCoverage\(prisma, user\.organizationId, filters\);/);
+  assert.match(server, /export async function getSalesAnalysis\(filters: SalesAnalysisFilters\)[^{]*\{\s+const user = await requireOrganizationUser\(\[\.\.\.COMMERCIAL_ANALYSIS_ROLES\]\);\s+await requireDashboardAccess\(user\);\s+return loadSalesAnalysis\(prisma, user\.organizationId, filters\);/);
+  assert.match(server, /export async function getCoverage\(filters: CoverageFilters\)[^{]*\{\s+const user = await requireOrganizationUser\(\[\.\.\.COMMERCIAL_ANALYSIS_ROLES\]\);\s+await requireDashboardAccess\(user\);\s+return loadCoverage\(prisma, user\.organizationId, filters\);/);
   assert.match(server, /^import "server-only";/);
   // the cores decide nothing about access, never import the session or the global client, and are read only
   assert.equal(/requireOrganizationUser|@\/lib\/prisma|server-only/.test(core), false);

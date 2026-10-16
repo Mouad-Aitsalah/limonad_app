@@ -178,6 +178,16 @@ async function resolveSessionToken(): Promise<string | null> {
   return cookieStore.get(SESSION_COOKIE)?.value ?? null;
 }
 
+/**
+ * SHA-256 of the token the current request authenticates with (cookie or Bearer), or null.
+ * Lets a server-side authorization (e.g. the dashboard access grant) be tied to THIS session:
+ * it never leaves the server and is useless without the matching session row.
+ */
+export async function getCurrentSessionTokenHash(): Promise<string | null> {
+  const token = await resolveSessionToken();
+  return token ? hashSessionToken(token) : null;
+}
+
 export async function getCurrentSessionUser(): Promise<CurrentUser | null> {
   const token = await resolveSessionToken();
   if (!token) return null;

@@ -4,6 +4,7 @@ import { Prisma } from "@/lib/generated/prisma/client";
 import type { PurchaseStatus, SaleStatus } from "@/lib/generated/prisma/client";
 import { roundMoney } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { requireDashboardAccess } from "@/lib/server/dashboard-security";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 
 const postedSaleStatuses = ["VALIDATED", "PARTIALLY_PAID", "PAID", "CREDIT"] satisfies SaleStatus[];
@@ -92,6 +93,7 @@ export type DashboardData = {
  */
 export async function getDashboardData(): Promise<DashboardData> {
   const currentUser = await requireOrganizationUser(["admin", "depot_manager", "cashier"]);
+  await requireDashboardAccess(currentUser);
   const organizationId = currentUser.organizationId;
 
   const today = startOfDay(new Date());

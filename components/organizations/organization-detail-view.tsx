@@ -3,6 +3,7 @@
 import { Building2, Package, ShoppingCart, Truck, Users } from "lucide-react";
 
 import { OrganizationConnectionsPanel } from "@/components/organizations/organization-connections-panel";
+import { OrganizationDashboardSecurityPanel } from "@/components/organizations/organization-dashboard-security-panel";
 import { OrganizationFormDialog } from "@/components/organizations/organization-form-dialog";
 import { OrganizationModulesPanel } from "@/components/organizations/organization-modules-panel";
 import { OrganizationStatusBadge } from "@/components/organizations/organization-status-badge";
@@ -17,6 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { OrganizationDashboardSecurityDto } from "@/lib/dashboard-security";
 import type { ModuleState } from "@/lib/modules/settings";
 import type { OrganizationConnectionsSnapshot } from "@/lib/session-activity";
 import type { OrganizationDetailDto } from "@/types/organization";
@@ -25,12 +27,15 @@ export function OrganizationDetailView({
   organization,
   initialConnections = null,
   initialModules = null,
+  initialDashboardSecurity = null,
 }: {
   organization: OrganizationDetailDto;
   /** Server-rendered live-connections snapshot (null = unavailable, the panel then polls). */
   initialConnections?: OrganizationConnectionsSnapshot | null;
   /** Server-rendered "Modules autorisés" (null = unavailable, the panel offers a retry). */
   initialModules?: ModuleState[] | null;
+  /** Server-rendered "Sécurité du dashboard" (null = unavailable, the panel offers a retry). */
+  initialDashboardSecurity?: OrganizationDashboardSecurityDto | null;
 }) {
   return (
     <div className="space-y-6">
@@ -121,6 +126,8 @@ export function OrganizationDetailView({
       </div>
 
       <OrganizationModulesPanel organizationId={organization.id} initialModules={initialModules} />
+
+      <OrganizationDashboardSecurityPanel organizationId={organization.id} initialSecurity={initialDashboardSecurity} />
 
       <Card className="ring-0 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
         <CardContent className="space-y-4">

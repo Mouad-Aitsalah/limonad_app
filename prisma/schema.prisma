@@ -454,8 +454,8 @@ model UserTablePreference {
 }
 
 model Organization {
-  id                        String                     @id @default(cuid())
-  code                      String                     @unique
+  id                        String                         @id @default(cuid())
+  code                      String                         @unique
   name                      String
   tradeName                 String?
   address                   String?
@@ -471,7 +471,7 @@ model Organization {
   // Automatic price by quantity in the counter POS (Paramètres -> Tarification,
   // admin only). Off by default = every sale is priced at Product.salePrice
   // (prix gros) exactly as before. See lib/quantity-pricing.ts.
-  quantityPricingEnabled    Boolean                    @default(false)
+  quantityPricingEnabled    Boolean                        @default(false)
   // Columns shown in the /produits table, chosen by an admin for the whole
   // organisation: { "columns": { "<column-key>": true | false } }. Display
   // only - null = the default columns. See lib/product-columns.ts.
@@ -482,7 +482,7 @@ model Organization {
   // every module. Disabling a module never deletes its data. Enforced on the
   // server (pages + API routes) - see lib/modules.
   moduleSettings            Json?
-  status                    OrganizationStatus         @default(ACTIVE)
+  status                    OrganizationStatus             @default(ACTIVE)
   users                     User[]
   depots                    Depot[]
   trucks                    Truck[]
@@ -523,8 +523,10 @@ model Organization {
   customerOrders            CustomerOrder[]
   purchaseForecastSnapshots PurchaseForecastSnapshot[]
   tablePreferences          UserTablePreference[]
-  createdAt                 DateTime                   @default(now())
-  updatedAt                 DateTime                   @updatedAt
+  dashboardSecurity         OrganizationDashboardSecurity?
+  dashboardAccessGrants     DashboardAccessGrant[]
+  createdAt                 DateTime                       @default(now())
+  updatedAt                 DateTime                       @updatedAt
 }
 
 model AiConversation {
@@ -646,6 +648,74 @@ model CustomerOrderLine {
  * `key` is "ip:<address>" or "org:<organizationCode>"; rows older than the
  * window are purged opportunistically.
  */
+/**
+ * « Sécurité du dashboard » of ONE organisation (SUPER_ADMIN switch, Organisations
+ * -> detail). Kept in its own table so the password hash never travels with an
+ * Organization row/DTO. No row = security off = the dashboard behaves exactly as
+ * before. The hash is bcrypt, never the password itself; the SUPER_ADMIN can
+ * reset it (securityVersion + 1, hash cleared) but never read it.
+ * securityVersion invalidates every DashboardAccessGrant already issued
+ * (reset, enabling/disabling the security).
+ */
+enum DashboardRenewalPeriod {
+  ONE_WEEK
+  TWO_WEEKS
+  ONE_MONTH
+  TWO_MONTHS
+  THREE_MONTHS
+  SIX_MONTHS
+}
+
+model OrganizationDashboardSecurity {
+  id                String                 @id @default(cuid())
+  organizationId    String                 @unique
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  enabled           Boolean                @default(false)
+  renewalEnabled    Boolean                @default(false)
+  renewalPeriod     DashboardRenewalPeriod @default(ONE_MONTH)
+  passwordHash      String?
+  passwordSetAt     DateTime?
+  passwordExpiresAt DateTime?
+  securityVersion   Int                    @default(1)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+}
+
+/**
+ * Temporary authorization to open the dashboard, issued after the dashboard
+ * password was validated. The browser only holds an opaque random token
+ * (httpOnly cookie); only its SHA-256 is stored here. A grant is tied to the
+ * authenticated session (sessionTokenHash), the user, the organisation and the
+ * securityVersion at issue time, expires on idle (expiresAt, slid on use) and
+ * is deleted on leaving the dashboard or on a reset.
+ */
+model DashboardAccessGrant {
+  id               String       @id @default(cuid())
+  tokenHash        String       @unique
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId           String
+  sessionTokenHash String
+  securityVersion  Int
+  createdAt        DateTime     @default(now())
+  expiresAt        DateTime
+
+  @@index([organizationId])
+  @@index([sessionTokenHash])
+  @@index([expiresAt])
+}
+
+/**
+ * Failed dashboard-password attempts (brute-force throttle, DB-backed so it works on Vercel).
+ */
+model DashboardUnlockAttempt {
+  id        String   @id @default(cuid())
+  key       String
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
+}
+
 model ClientLoginAttempt {
   id        String   @id @default(cuid())
   key       String

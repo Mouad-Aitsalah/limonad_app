@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Suspense } from "react";
 
 import { CommercialAnalysisTabs } from "@/components/dashboard/commercial/commercial-analysis-tabs";
@@ -21,7 +22,11 @@ import { DirectionWatchlistCard } from "@/components/dashboard/direction-watchli
 import { canViewCommercialAnalysis } from "@/lib/commercial-analysis/access";
 import { canViewReceivables } from "@/lib/receivables/access";
 import { canViewForecast } from "@/lib/forecasting/forecast-access";
+import { DashboardLeaveGuard } from "@/components/dashboard/security/dashboard-leave-guard";
+import { DashboardSecurityGate } from "@/components/dashboard/security/dashboard-security-gate";
 import { getCurrentSessionUser } from "@/lib/server/auth";
+import { resolveDashboardAccess, DASHBOARD_VIEW_ROLES } from "@/lib/server/dashboard-security";
+import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { getDirectionDashboardData } from "@/lib/server/dashboard-direction";
 import { requireModulePage } from "@/lib/server/module-guard";
 
@@ -43,6 +48,12 @@ type DashboardPageProps = {
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   await requireModulePage("dashboard");
+  // Dashboard security (SUPER_ADMIN switch): while a password must be created / renewed / entered, render the gate
+  // and NOTHING else - no dashboard data is read. Off = this block does nothing.
+  // A full document request (no RSC header: address bar, reload, new tab) is a NEW visit and asks the password again.
+  const newVisit = !(await headers()).get("rsc");
+  const access = await resolveDashboardAccess(await requireOrganizationUser([...DASHBOARD_VIEW_ROLES]), { newVisit });
+  if (access.status === "gate") return <DashboardSecurityGate gate={access.gate} />;
   const params = await searchParams;
   const data = await getDirectionDashboardData(params);
   const kpis = data.kpis;
@@ -60,6 +71,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   return (
     <div className="space-y-6">
+      {access.secured ? <DashboardLeaveGuard /> : null}
       <DirectionPeriodBar activeKey={data.period.key} />
 
       <div className={KPI_ROW_CLASS}>

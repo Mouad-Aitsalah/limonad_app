@@ -3,6 +3,7 @@ import "server-only";
 import { FORECAST_VIEW_ROLES } from "@/lib/forecasting/forecast-access";
 import { getDashboardForecastFor, loadDashboardForecast } from "@/lib/forecasting/dashboard-forecast";
 import { prisma } from "@/lib/prisma";
+import { requireDashboardAccess } from "@/lib/server/dashboard-security";
 import { requireOrganizationUser } from "@/lib/server/organization-context";
 import { reportUnexpected } from "@/lib/server/report-error";
 import type { DashboardForecastDto } from "@/types/dashboard-forecast";
@@ -17,7 +18,11 @@ import type { DashboardForecastDto } from "@/types/dashboard-forecast";
  */
 export async function getDashboardForecast(): Promise<DashboardForecastDto> {
   return loadDashboardForecast({
-    requireUser: () => requireOrganizationUser(FORECAST_VIEW_ROLES),
+    requireUser: async () => {
+      const user = await requireOrganizationUser(FORECAST_VIEW_ROLES);
+      await requireDashboardAccess(user);
+      return user;
+    },
     load: (organizationId) => getDashboardForecastFor(prisma, organizationId),
     report: (error) => reportUnexpected(error, { route: "dashboard forecast section", area: "forecasting", op: "getDashboardForecast" }),
   });
