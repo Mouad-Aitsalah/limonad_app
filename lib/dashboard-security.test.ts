@@ -97,3 +97,33 @@ test("temporary authorization and brute-force limits are sane", () => {
   assert.ok(DASHBOARD_MAX_FAILED_ATTEMPTS >= 3 && DASHBOARD_MAX_FAILED_ATTEMPTS <= 10);
   assert.ok(DASHBOARD_ATTEMPT_WINDOW_MS >= 5 * 60 * 1000);
 });
+
+// ---- new visit detection (real Headers objects) ------------------------------------------------
+
+import { isFullDocumentLoad } from "@/lib/dashboard-security";
+
+const hdr = (init: Record<string, string>) => new Headers(init);
+
+test("new visit: a real full page load (Sec-Fetch-Dest: document) is detected", () => {
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "document", "sec-fetch-mode": "navigate", "sec-fetch-site": "none" })), true);
+  assert.equal(isFullDocumentLoad(hdr({ "Sec-Fetch-Dest": "Document" })), true, "case-insensitive, mode absent is fine");
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "document", "sec-fetch-mode": "navigate", "sec-fetch-site": "same-origin" })), true, "a reload / link click");
+});
+
+test("new visit: router.refresh(), in-app navigations and prefetches are NOT new visits", () => {
+  // Next sends them with fetch(): destination "empty", mode "cors"; its own rsc headers never reach headers()
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", "sec-fetch-site": "same-origin" })), false, "router.refresh() / in-app navigation");
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", "next-router-prefetch": "1" })), false, "link prefetch");
+  assert.equal(isFullDocumentLoad(hdr({ rsc: "1", "sec-fetch-dest": "empty" })), false);
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "iframe", "sec-fetch-mode": "navigate" })), false);
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "script" })), false);
+});
+
+test("new visit: missing or ambiguous headers are prudent - never a new visit, so a fresh authorization is never revoked", () => {
+  assert.equal(isFullDocumentLoad(hdr({})), false, "old browser / stripped header");
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "" })), false);
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "document", "sec-fetch-mode": "cors" })), false, "contradictory mode");
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "document", "sec-fetch-mode": "navigate", "sec-purpose": "prefetch;prerender" })), false, "speculative load");
+  assert.equal(isFullDocumentLoad(hdr({ "sec-fetch-dest": "document", purpose: "prefetch" })), false);
+  assert.equal(isFullDocumentLoad({ get: () => null }), false);
+});

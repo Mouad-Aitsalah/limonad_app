@@ -145,8 +145,18 @@ test("the assistant cannot be a way around the password: dashboard-figure tools 
   assert.match(chat, /DASHBOARD_FIGURE_TOOLS\.has\(functionCall\.name\)[\s\S]*?requireDashboardAccess\(user\)/);
 });
 
-test("the dashboard page treats a full document request (no RSC header) as a new visit", () => {
+test("the dashboard page detects a new visit from Sec-Fetch-Dest (Next hides the rsc header), never from get(rsc)", () => {
   const page = read("app/(dashboard)/dashboard/page.tsx");
-  assert.match(page, /const newVisit = !\(await headers\(\)\)\.get\("rsc"\)/);
+  assert.match(page, /const newVisit = isFullDocumentLoad\(await headers\(\)\)/);
   assert.match(page, /resolveDashboardAccess\([\s\S]*?\{ newVisit \}\)/);
+  // nothing relies on the rsc request header any more: headers() never exposes it
+  for (const file of [
+    "app/(dashboard)/dashboard/page.tsx",
+    "lib/server/dashboard-security.ts",
+    "lib/dashboard-security.ts",
+    "components/dashboard/security/dashboard-security-gate.tsx",
+  ]) {
+    const code = read(file).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
+    assert.doesNotMatch(code, /\.get\(\s*["'](?:rsc|RSC)["']\s*\)/, file);
+  }
 });

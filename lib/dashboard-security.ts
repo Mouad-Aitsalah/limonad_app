@@ -137,3 +137,22 @@ export type OrganizationDashboardSecurityDto = {
   passwordExpiresAt: string | null;
   state: DashboardSecurityState;
 };
+
+// --- new visit detection ---------------------------------------------------------------------
+
+/**
+ * True only for a REAL full page load of the dashboard (address bar, reload, bookmark, link from elsewhere,
+ * new tab). Next.js hides its own RSC headers from headers() - `rsc` is ALWAYS absent there - so the browser's
+ * fetch metadata is used instead: a document load carries `Sec-Fetch-Dest: document`, whereas
+ * router.refresh(), in-app navigations and prefetches are fetch() calls (`Sec-Fetch-Dest: empty`).
+ * Prudent by design: a missing or ambiguous header (old browser, proxy that strips it, prefetch / prerender
+ * purpose, a non-navigate mode) is NOT a new visit, so a freshly created authorization is never revoked by mistake.
+ */
+export function isFullDocumentLoad(headers: { get(name: string): string | null }): boolean {
+  if (headers.get("sec-fetch-dest")?.trim().toLowerCase() !== "document") return false;
+  const mode = headers.get("sec-fetch-mode")?.trim().toLowerCase();
+  if (mode && mode !== "navigate") return false;
+  const purpose = `${headers.get("sec-purpose") ?? ""} ${headers.get("purpose") ?? ""}`.toLowerCase();
+  if (purpose.includes("prefetch") || purpose.includes("prerender")) return false;
+  return true;
+}

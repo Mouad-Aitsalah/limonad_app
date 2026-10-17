@@ -15,22 +15,88 @@ import {
   type DashboardGateDto,
 } from "@/lib/dashboard-security";
 
+import {
+  INITIAL_GATE_STATE,
+  REFRESH_TIMEOUT_MS,
+  UNEXPECTED_RESPONSE_MESSAGE,
+  gateReducer,
+  postSecurityRequest,
+  type GateState,
+} from "./dashboard-gate-state";
+
 const UNLOCK_ENDPOINT = "/api/dashboard/security/unlock";
 const PASSWORD_ENDPOINT = "/api/dashboard/security/password";
 
-async function postJson(url: string, payload: Record<string, string>): Promise<{ ok: boolean; message: string | null }> {
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (response.ok) return { ok: true, message: null };
-    const body = (await response.json().catch(() => ({}))) as { message?: string };
-    return { ok: false, message: body.message ?? "Une erreur est survenue. Réessayez." };
-  } catch {
-    return { ok: false, message: "Connexion impossible. Vérifiez votre réseau puis réessayez." };
-  }
+/**
+ * Submits a password form and follows it to the end. The request has a 20 s timeout and always settles
+ * (dashboard-gate-state.ts), a refusal / network error / timeout puts the screen back to idle with a message, and
+ * after a VALIDATED password the screen waits for router.refresh() (in a transition): if the dashboard has not
+ * replaced the screen when the refresh ends - or after 20 s - it says so explicitly instead of spinning forever,
+ * and never presents that case as a wrong password.
+ */
+function useGateSubmission(endpoint: string) {
+  const router = useRouter();
+  const [state, dispatch] = React.useReducer(gateReducer, INITIAL_GATE_STATE);
+  const [refreshing, startRefresh] = React.useTransition();
+  const sawRefreshing = React.useRef(false);
+
+  const submit = React.useCallback(
+    async (payload: Record<string, string>): Promise<boolean> => {
+      dispatch({ type: "submit" });
+      try {
+        const result = await postSecurityRequest(endpoint, payload);
+        if (!result.ok) {
+          dispatch({ type: "rejected", message: result.message });
+          return false;
+        }
+        sawRefreshing.current = false;
+        dispatch({ type: "validated" });
+        startRefresh(() => router.refresh());
+        return true;
+      } catch {
+        dispatch({ type: "rejected", message: UNEXPECTED_RESPONSE_MESSAGE });
+        return false;
+      }
+    },
+    [endpoint, router],
+  );
+
+  React.useEffect(() => {
+    if (state.phase !== "refreshing") return;
+    if (refreshing) {
+      sawRefreshing.current = true;
+      return;
+    }
+    if (sawRefreshing.current) {
+      sawRefreshing.current = false;
+      dispatch({ type: "refresh-ended" });
+    }
+  }, [refreshing, state.phase]);
+
+  React.useEffect(() => {
+    if (state.phase !== "refreshing") return;
+    const timer = window.setTimeout(() => dispatch({ type: "refresh-ended" }), REFRESH_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [state.phase]);
+
+  return { state, submit, pending: state.phase !== "idle" };
+}
+
+/** Explains a failure and, when the password was accepted but the dashboard did not open, offers the reload. */
+function GateMessage({ state, testId }: { state: GateState; testId: string }) {
+  if (!state.error) return null;
+  return (
+    <div className="space-y-2">
+      <p role="alert" className="text-sm text-destructive" data-testid={testId}>
+        {state.error}
+      </p>
+      {state.refreshFailed ? (
+        <Button type="button" variant="outline" size="sm" data-testid="dashboard-gate-reload" onClick={() => window.location.reload()}>
+          Recharger la page
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 function PasswordField({
@@ -83,24 +149,14 @@ function PasswordField({
 function UnlockDialog() {
   const router = useRouter();
   const [password, setPassword] = React.useState("");
-  const [error, setError] = React.useState<string | null>(null);
-  const [pending, setPending] = React.useState(false);
+  const { state, submit: send, pending } = useGateSubmission(UNLOCK_ENDPOINT);
   const fieldId = React.useId();
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!password || pending) return;
-    setPending(true);
-    setError(null);
-    const result = await postJson(UNLOCK_ENDPOINT, { password });
-    if (result.ok) {
-      setPassword("");
-      router.refresh();
-      return;
-    }
-    setError(result.message);
+    await send({ password });
     setPassword("");
-    setPending(false);
   }
 
   return (
@@ -123,11 +179,7 @@ function UnlockDialog() {
             autoComplete="off"
             disabled={pending}
           />
-          {error ? (
-            <p role="alert" className="text-sm text-destructive" data-testid="dashboard-unlock-error">
-              {error}
-            </p>
-          ) : null}
+          <GateMessage state={state} testId="dashboard-unlock-error" />
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button type="button" variant="outline" disabled={pending} onClick={() => router.back()}>
               Annuler
@@ -163,11 +215,9 @@ function PasswordRules({ password }: { password: string }) {
 
 /** First creation / renewal of the dashboard password (admin of the organisation only). */
 function PasswordSetupCard({ gate }: { gate: DashboardGateDto }) {
-  const router = useRouter();
   const [password, setPassword] = React.useState("");
   const [confirmation, setConfirmation] = React.useState("");
-  const [error, setError] = React.useState<string | null>(null);
-  const [pending, setPending] = React.useState(false);
+  const { state, submit: send, pending } = useGateSubmission(PASSWORD_ENDPOINT);
   const idPrefix = React.useId();
   const renewal = gate.state === "renewal_required";
   const mismatch = confirmation.length > 0 && password !== confirmation;
@@ -181,17 +231,10 @@ function PasswordSetupCard({ gate }: { gate: DashboardGateDto }) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!ready || pending) return;
-    setPending(true);
-    setError(null);
-    const result = await postJson(PASSWORD_ENDPOINT, { password, confirmation });
-    if (result.ok) {
+    if (await send({ password, confirmation })) {
       setPassword("");
       setConfirmation("");
-      router.refresh();
-      return;
     }
-    setError(result.message);
-    setPending(false);
   }
 
   return (
@@ -238,11 +281,7 @@ function PasswordSetupCard({ gate }: { gate: DashboardGateDto }) {
                 Les deux mots de passe ne correspondent pas.
               </p>
             ) : null}
-            {error ? (
-              <p role="alert" className="text-sm text-destructive" data-testid="dashboard-password-error">
-                {error}
-              </p>
-            ) : null}
+            <GateMessage state={state} testId="dashboard-password-error" />
             <Button type="submit" className="w-full" disabled={!ready || pending}>
               {pending ? "Enregistrement…" : renewal ? "Renouveler et ouvrir le dashboard" : "Créer et ouvrir le dashboard"}
             </Button>

@@ -22,6 +22,7 @@ import { DirectionWatchlistCard } from "@/components/dashboard/direction-watchli
 import { canViewCommercialAnalysis } from "@/lib/commercial-analysis/access";
 import { canViewReceivables } from "@/lib/receivables/access";
 import { canViewForecast } from "@/lib/forecasting/forecast-access";
+import { isFullDocumentLoad } from "@/lib/dashboard-security";
 import { DashboardLeaveGuard } from "@/components/dashboard/security/dashboard-leave-guard";
 import { DashboardSecurityGate } from "@/components/dashboard/security/dashboard-security-gate";
 import { getCurrentSessionUser } from "@/lib/server/auth";
@@ -50,8 +51,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   await requireModulePage("dashboard");
   // Dashboard security (SUPER_ADMIN switch): while a password must be created / renewed / entered, render the gate
   // and NOTHING else - no dashboard data is read. Off = this block does nothing.
-  // A full document request (no RSC header: address bar, reload, new tab) is a NEW visit and asks the password again.
-  const newVisit = !(await headers()).get("rsc");
+  // A real full page load (Sec-Fetch-Dest: document: address bar, reload, new tab) is a NEW visit and asks the password
+  // again. router.refresh(), in-app navigations and prefetches are not. (Next hides the `rsc` header from headers().)
+  const newVisit = isFullDocumentLoad(await headers());
   const access = await resolveDashboardAccess(await requireOrganizationUser([...DASHBOARD_VIEW_ROLES]), { newVisit });
   if (access.status === "gate") return <DashboardSecurityGate gate={access.gate} />;
   const params = await searchParams;
